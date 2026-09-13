@@ -3,7 +3,7 @@ use crate::error::AppError;
 use crate::provider::{Provider, ProviderMeta};
 use indexmap::IndexMap;
 use rusqlite::{params, OptionalExtension};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 type OmoProviderRow = (
     String,
@@ -71,37 +71,6 @@ impl Database {
         for provider_res in provider_iter {
             let (id, mut provider) = provider_res.map_err(|e| AppError::Database(e.to_string()))?;
             provider.id = id.clone();
-
-            let mut stmt_endpoints = conn.prepare(
-                "SELECT url, added_at FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2 ORDER BY added_at ASC, url ASC"
-            ).map_err(|e| AppError::Database(e.to_string()))?;
-
-            let endpoints_iter = stmt_endpoints
-                .query_map(params![id, app_type], |row| {
-                    let url: String = row.get(0)?;
-                    let added_at: Option<i64> = row.get(1)?;
-                    Ok((
-                        url,
-                        crate::settings::CustomEndpoint {
-                            url: "".to_string(),
-                            added_at: added_at.unwrap_or(0),
-                            last_used: None,
-                        },
-                    ))
-                })
-                .map_err(|e| AppError::Database(e.to_string()))?;
-
-            let mut custom_endpoints = HashMap::new();
-            for ep_res in endpoints_iter {
-                let (url, mut ep) = ep_res.map_err(|e| AppError::Database(e.to_string()))?;
-                ep.url = url.clone();
-                custom_endpoints.insert(url, ep);
-            }
-
-            if let Some(meta) = &mut provider.meta {
-                meta.custom_endpoints = custom_endpoints;
-            }
-
             providers.insert(id, provider);
         }
 
@@ -183,8 +152,7 @@ impl Database {
             .transaction()
             .map_err(|e| AppError::Database(e.to_string()))?;
 
-        let mut meta_clone = provider.meta.clone().unwrap_or_default();
-        let endpoints = std::mem::take(&mut meta_clone.custom_endpoints);
+        let meta_clone = provider.meta.clone().unwrap_or_default();
 
         let existing: Option<(bool, bool)> = tx
             .query_row(
@@ -262,15 +230,6 @@ impl Database {
                 ],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
-
-            for (url, endpoint) in endpoints {
-                tx.execute(
-                    "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
-                     VALUES (?1, ?2, ?3, ?4)",
-                    params![provider.id, app_type, url, endpoint.added_at],
-                )
-                .map_err(|e| AppError::Database(e.to_string()))?;
-            }
         }
 
         tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
@@ -325,8 +284,7 @@ impl Database {
             )));
         }
 
-        let mut meta = provider.meta.clone().unwrap_or_default();
-        meta.custom_endpoints.clear();
+        let meta = provider.meta.clone().unwrap_or_default();
         tx.execute(
             "INSERT INTO providers (
                 id, app_type, name, settings_config, website_url, category,
@@ -356,11 +314,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        tx.execute(
-            "UPDATE provider_endpoints SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
-            params![provider.id, original_id, app_type],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
         tx.execute(
             "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
             params![provider.id, original_id, app_type],
@@ -424,36 +377,6 @@ impl Database {
                 provider_id,
                 app_type
             ],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn add_custom_endpoint(
-        &self,
-        app_type: &str,
-        provider_id: &str,
-        url: &str,
-    ) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        let added_at = chrono::Utc::now().timestamp_millis();
-        conn.execute(
-            "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at) VALUES (?1, ?2, ?3, ?4)",
-            params![provider_id, app_type, url, added_at],
-        ).map_err(|e| AppError::Database(e.to_string()))?;
-        Ok(())
-    }
-
-    pub fn remove_custom_endpoint(
-        &self,
-        app_type: &str,
-        provider_id: &str,
-        url: &str,
-    ) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        conn.execute(
-            "DELETE FROM provider_endpoints WHERE provider_id = ?1 AND app_type = ?2 AND url = ?3",
-            params![provider_id, app_type, url],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())

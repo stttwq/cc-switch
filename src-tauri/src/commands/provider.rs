@@ -1,5 +1,5 @@
 use indexmap::IndexMap;
-use tauri::{Emitter, Manager, State};
+use tauri::{Manager, State};
 
 use crate::app_config::AppType;
 use crate::error::AppError;
@@ -178,53 +178,6 @@ pub fn read_live_provider_settings(app: String) -> Result<serde_json::Value, Str
 }
 
 #[tauri::command]
-pub fn get_custom_endpoints(
-    state: State<'_, AppState>,
-    app: String,
-    #[allow(non_snake_case)] providerId: String,
-) -> Result<Vec<crate::settings::CustomEndpoint>, String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::get_custom_endpoints(state.inner(), app_type, &providerId)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn add_custom_endpoint(
-    state: State<'_, AppState>,
-    app: String,
-    #[allow(non_snake_case)] providerId: String,
-    url: String,
-) -> Result<(), String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::add_custom_endpoint(state.inner(), app_type, &providerId, url)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn remove_custom_endpoint(
-    state: State<'_, AppState>,
-    app: String,
-    #[allow(non_snake_case)] providerId: String,
-    url: String,
-) -> Result<(), String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::remove_custom_endpoint(state.inner(), app_type, &providerId, url)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn update_endpoint_last_used(
-    state: State<'_, AppState>,
-    app: String,
-    #[allow(non_snake_case)] providerId: String,
-    url: String,
-) -> Result<(), String> {
-    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::update_endpoint_last_used(state.inner(), app_type, &providerId, url)
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
 pub fn update_providers_sort_order(
     state: State<'_, AppState>,
     app: String,
@@ -234,80 +187,3 @@ pub fn update_providers_sort_order(
     ProviderService::update_sort_order(state.inner(), app_type, updates).map_err(|e| e.to_string())
 }
 
-use crate::provider::UniversalProvider;
-use std::collections::HashMap;
-use tauri::AppHandle;
-
-#[derive(Clone, serde::Serialize)]
-pub struct UniversalProviderSyncedEvent {
-    pub action: String,
-    pub id: String,
-}
-
-fn emit_universal_provider_synced(app: &AppHandle, action: &str, id: &str) {
-    let _ = app.emit(
-        "universal-provider-synced",
-        UniversalProviderSyncedEvent {
-            action: action.to_string(),
-            id: id.to_string(),
-        },
-    );
-}
-
-#[tauri::command]
-pub fn get_universal_providers(
-    state: State<'_, AppState>,
-) -> Result<HashMap<String, UniversalProvider>, String> {
-    ProviderService::list_universal(state.inner()).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn get_universal_provider(
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<Option<UniversalProvider>, String> {
-    ProviderService::get_universal(state.inner(), &id).map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn upsert_universal_provider(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    provider: UniversalProvider,
-) -> Result<bool, String> {
-    let id = provider.id.clone();
-    let result =
-        ProviderService::upsert_universal(state.inner(), provider).map_err(|e| e.to_string())?;
-
-    emit_universal_provider_synced(&app, "upsert", &id);
-
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn delete_universal_provider(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<bool, String> {
-    let result =
-        ProviderService::delete_universal(state.inner(), &id).map_err(|e| e.to_string())?;
-
-    emit_universal_provider_synced(&app, "delete", &id);
-
-    Ok(result)
-}
-
-#[tauri::command]
-pub fn sync_universal_provider(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    id: String,
-) -> Result<bool, String> {
-    let result =
-        ProviderService::sync_universal_to_apps(state.inner(), &id).map_err(|e| e.to_string())?;
-
-    emit_universal_provider_synced(&app, "sync", &id);
-
-    Ok(result)
-}

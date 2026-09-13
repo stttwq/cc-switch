@@ -2,7 +2,6 @@
 //!
 //! Handles provider CRUD operations, switching, and configuration management.
 
-mod endpoints;
 mod live;
 mod pi;
 
@@ -14,7 +13,6 @@ use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
 use crate::services::mcp::McpService;
-use crate::settings::CustomEndpoint;
 use crate::store::AppState;
 
 // Re-export sub-module functions for external access
@@ -948,45 +946,6 @@ impl ProviderService {
         read_live_settings(app_type)
     }
 
-    /// Get custom endpoints list (re-export)
-    pub fn get_custom_endpoints(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-    ) -> Result<Vec<CustomEndpoint>, AppError> {
-        endpoints::get_custom_endpoints(state, app_type, provider_id)
-    }
-
-    /// Add custom endpoint (re-export)
-    pub fn add_custom_endpoint(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        endpoints::add_custom_endpoint(state, app_type, provider_id, url)
-    }
-
-    /// Remove custom endpoint (re-export)
-    pub fn remove_custom_endpoint(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        endpoints::remove_custom_endpoint(state, app_type, provider_id, url)
-    }
-
-    /// Update endpoint last used timestamp (re-export)
-    pub fn update_endpoint_last_used(
-        state: &AppState,
-        app_type: AppType,
-        provider_id: &str,
-        url: String,
-    ) -> Result<(), AppError> {
-        endpoints::update_endpoint_last_used(state, app_type, provider_id, url)
-    }
-
     /// Update provider sort order
     pub fn update_sort_order(
         state: &AppState,
@@ -1146,187 +1105,3 @@ pub struct ProviderSortUpdate {
     pub sort_index: usize,
 }
 
-// ============================================================================
-// 统一供应商（Universal Provider）服务方法
-// ============================================================================
-
-use crate::provider::UniversalProvider;
-use std::collections::HashMap;
-
-impl ProviderService {
-    /// 获取所有统一供应商
-    pub fn list_universal(
-        state: &AppState,
-    ) -> Result<HashMap<String, UniversalProvider>, AppError> {
-        state.db.get_all_universal_providers()
-    }
-
-    /// 获取单个统一供应商
-    pub fn get_universal(
-        state: &AppState,
-        id: &str,
-    ) -> Result<Option<UniversalProvider>, AppError> {
-        state.db.get_universal_provider(id)
-    }
-
-    /// 添加或更新统一供应商（不自动同步，需手动调用 sync_universal_to_apps）
-    pub fn upsert_universal(
-        state: &AppState,
-        provider: UniversalProvider,
-    ) -> Result<bool, AppError> {
-        // 保存统一供应商
-        state.db.save_universal_provider(&provider)?;
-
-        Ok(true)
-    }
-
-    /// 删除统一供应商
-    pub fn delete_universal(state: &AppState, id: &str) -> Result<bool, AppError> {
-        // 获取统一供应商（用于删除生成的子供应商）
-        let provider = state.db.get_universal_provider(id)?;
-
-        // 删除统一供应商
-        state.db.delete_universal_provider(id)?;
-
-        // 删除生成的子供应商
-        if let Some(p) = provider {
-            if p.apps.claude {
-                let claude_id = format!("universal-claude-{id}");
-                let _ = state.db.delete_provider("claude", &claude_id);
-            }
-            if p.apps.codex {
-                let codex_id = format!("universal-codex-{id}");
-                let _ = state.db.delete_provider("codex", &codex_id);
-            }
-        }
-
-        Ok(true)
-    }
-
-    /// 同步统一供应商到各应用
-    pub fn sync_universal_to_apps(state: &AppState, id: &str) -> Result<bool, AppError> {
-        let provider = state
-            .db
-            .get_universal_provider(id)?
-            .ok_or_else(|| AppError::Message(format!("统一供应商 {id} 不存在")))?;
-
-        // Keep DB and live projections in sync independently per application:
-        // one broken config file must not prevent the other two apps from being
-        // updated, but it must still be reported instead of returning success.
-        let mut live_failures = Vec::new();
-
-        // 同步到 Claude
-        if let Some(mut claude_provider) = provider.to_claude_provider() {
-            // 合并已有配置
-            if let Some(existing) = state.db.get_provider_by_id(&claude_provider.id, "claude")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &claude_provider.settings_config);
-                claude_provider.settings_config = merged;
-                // 已有子供应商的应用专属配置与排序不属于统一供应商管理的字段。
-                claude_provider.meta = existing.meta;
-                claude_provider.created_at = existing.created_at;
-                claude_provider.sort_index = existing.sort_index;
-            }
-            state.db.save_provider("claude", &claude_provider)?;
-            Self::project_universal_child_to_live(
-                state,
-                AppType::Claude,
-                &claude_provider.id,
-                &mut live_failures,
-            );
-        } else {
-            // 如果禁用了 Claude，删除对应的子供应商
-            let claude_id = format!("universal-claude-{id}");
-            let _ = state.db.delete_provider("claude", &claude_id);
-        }
-
-        // 同步到 Codex
-        if let Some(mut codex_provider) = provider.to_codex_provider() {
-            // 合并已有配置
-            if let Some(existing) = state.db.get_provider_by_id(&codex_provider.id, "codex")? {
-                let mut merged = existing.settings_config.clone();
-                Self::merge_json(&mut merged, &codex_provider.settings_config);
-                codex_provider.settings_config = merged;
-                // 已有子供应商的应用专属配置与排序不属于统一供应商管理的字段。
-                codex_provider.meta = existing.meta;
-                codex_provider.created_at = existing.created_at;
-                codex_provider.sort_index = existing.sort_index;
-            }
-            state.db.save_provider("codex", &codex_provider)?;
-            Self::project_universal_child_to_live(
-                state,
-                AppType::Codex,
-                &codex_provider.id,
-                &mut live_failures,
-            );
-        } else {
-            let codex_id = format!("universal-codex-{id}");
-            let _ = state.db.delete_provider("codex", &codex_id);
-        }
-
-        if live_failures.is_empty() {
-            Ok(true)
-        } else {
-            Err(AppError::Message(format!(
-                "统一供应商已保存到数据库，但以下应用的配置文件未能写入，仍是旧内容：{}。请重试同步，或切换一次该应用的供应商。",
-                live_failures.join("、")
-            )))
-        }
-    }
-
-    /// Re-project a generated universal child only when it is the effective
-    /// current provider for that app. Failures are collected by the caller so
-    /// the other applications can continue syncing.
-    fn project_universal_child_to_live(
-        state: &AppState,
-        app_type: AppType,
-        child_id: &str,
-        failures: &mut Vec<String>,
-    ) {
-        let is_current = match crate::settings::get_effective_current_provider(&state.db, &app_type)
-        {
-            Ok(current) => current.as_deref() == Some(child_id),
-            Err(err) => {
-                log::warn!(
-                    "读取 {} 当前供应商失败，跳过统一供应商的 live 重投影: {err}",
-                    app_type.as_str()
-                );
-                failures.push(app_type.as_str().to_string());
-                return;
-            }
-        };
-        if !is_current {
-            return;
-        }
-
-        if let Err(err) = Self::sync_current_provider_for_app(state, app_type.clone()) {
-            log::warn!(
-                "统一供应商同步后重写 {} live 配置失败: {err}",
-                app_type.as_str()
-            );
-            failures.push(app_type.as_str().to_string());
-        }
-    }
-
-    /// 递归合并 JSON：base 为底，patch 覆盖同名字段
-    fn merge_json(base: &mut serde_json::Value, patch: &serde_json::Value) {
-        use serde_json::Value;
-
-        match (base, patch) {
-            (Value::Object(base_map), Value::Object(patch_map)) => {
-                for (k, v_patch) in patch_map {
-                    match base_map.get_mut(k) {
-                        Some(v_base) => Self::merge_json(v_base, v_patch),
-                        None => {
-                            base_map.insert(k.clone(), v_patch.clone());
-                        }
-                    }
-                }
-            }
-            // 其它类型：直接覆盖
-            (base_val, patch_val) => {
-                *base_val = patch_val.clone();
-            }
-        }
-    }
-}

@@ -308,7 +308,7 @@ const SKILL_BACKUP_RETAIN_COUNT: usize = 20;
 
 /// 仓库归档解压上限：条目数与解压后总字节数。
 ///
-/// 归档字节由第三方完全控制（仓库可经 deeplink 添加，且 branch 可把下载落点
+/// 归档字节由第三方完全控制（仓库 URL 由用户添加，且 branch 可把下载落点
 /// 改写到攻击者自传的 release asset），没有上限时一个几 MB 的压缩炸弹就能塞满磁盘。
 /// 取值对齐 `webdav_sync/archive.rs` 里同款保护的量级。
 const MAX_ARCHIVE_ENTRIES: usize = 10_000;
@@ -3214,7 +3214,7 @@ impl SkillService {
             )));
         };
 
-        // 归档字节完全由第三方控制（仓库可经 deeplink 添加），所以解压必须限量，
+        // 归档字节完全由第三方控制（仓库 URL 由用户添加），所以解压必须限量，
         // 否则一个几 MB 的压缩炸弹就能塞满磁盘。webdav_sync/archive.rs 早有同款
         // 双重上限，这条下载路径一直没有。
         if archive.len() > MAX_ARCHIVE_ENTRIES {
@@ -3234,7 +3234,7 @@ impl SkillService {
         for i in 0..archive.len() {
             let mut file = archive.by_index(i)?;
             // 第一道：enclosed_name() 拒绝绝对路径、盘符前缀，以及净深度为负
-            // （即逃出归档自身根目录）的条目。skill 仓库可由 deeplink 添加，
+            // （即逃出归档自身根目录）的条目。skill 仓库 URL 由用户添加，
             // 压缩包内容属第三方可控输入。
             let Some(safe_path) = file.enclosed_name() else {
                 log::warn!("跳过不安全的压缩包条目: {}", file.name());
@@ -5742,7 +5742,7 @@ mod tests {
     }
 
     #[test]
-    // serial：与 backup/s3_sync/deeplink 等同样读写进程级 CC_SWITCH_TEST_HOME 的测试互斥，
+    // serial：与 backup/s3_sync 等同样读写进程级 CC_SWITCH_TEST_HOME 的测试互斥，
     // EnvGuard 只负责恢复不提供互斥。
     #[serial_test::serial]
     fn get_app_skills_dir_honors_test_home_override() {

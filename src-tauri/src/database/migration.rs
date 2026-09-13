@@ -76,9 +76,8 @@ impl Database {
             for (id, provider) in &manager.providers {
                 let is_current = if id == current_id { 1 } else { 0 };
 
-                // 处理 meta 和 endpoints
-                let mut meta_clone = provider.meta.clone().unwrap_or_default();
-                let endpoints = std::mem::take(&mut meta_clone.custom_endpoints);
+                // 处理 meta
+                let meta_clone = provider.meta.clone().unwrap_or_default();
 
                 tx.execute(
                     "INSERT OR REPLACE INTO providers (
@@ -102,16 +101,6 @@ impl Database {
                     ],
                 )
                 .map_err(|e| AppError::Database(format!("Migrate provider failed: {e}")))?;
-
-                // 迁移 Endpoints
-                for (url, endpoint) in endpoints {
-                    tx.execute(
-                        "INSERT INTO provider_endpoints (provider_id, app_type, url, added_at)
-                         VALUES (?1, ?2, ?3, ?4)",
-                        params![id, app_type, url, endpoint.added_at],
-                    )
-                    .map_err(|e| AppError::Database(format!("Migrate endpoint failed: {e}")))?;
-                }
             }
         }
         Ok(())

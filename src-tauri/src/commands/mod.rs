@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 mod config;
-mod deeplink;
 mod env;
 mod global_proxy;
 mod import_export;
@@ -23,7 +22,6 @@ mod s3_sync;
 mod webdav_sync;
 
 pub use config::*;
-pub use deeplink::*;
 pub use env::*;
 pub use global_proxy::*;
 pub use import_export::*;

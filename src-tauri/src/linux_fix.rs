@@ -13,8 +13,7 @@
 //! 本模块导出 [`nudge_main_window`]，它通过「显式 set_focus + 无视觉
 //! 版本的 ±1px 伪 resize」精确模拟用户手动最大化再还原的 workaround，
 //! 但肉眼无法察觉。所有"让主窗口出现在用户面前"的路径（正常启动、
-//! deeplink 唤起、single_instance 回调、托盘 show_main、lightweight
-//! 退出）都应在现有 `set_focus()` 之后追加一次调用。
+//! single_instance 回调、托盘 show_main、lightweight 退出）都应在现有 `set_focus()` 之后追加一次调用。
 
 use std::time::Duration;
 
