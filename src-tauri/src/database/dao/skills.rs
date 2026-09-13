@@ -42,10 +42,6 @@ impl Database {
                     apps: SkillApps {
                         claude: row.get(8)?,
                         codex: row.get(9)?,
-                        gemini: row.get(10)?,
-                        grokbuild: row.get(11)?,
-                        opencode: row.get(12)?,
-                        hermes: row.get(13)?,
                         pi: false,
                     },
                     installed_at: row.get(14)?,
@@ -88,10 +84,6 @@ impl Database {
                 apps: SkillApps {
                     claude: row.get(8)?,
                     codex: row.get(9)?,
-                    gemini: row.get(10)?,
-                    grokbuild: row.get(11)?,
-                    opencode: row.get(12)?,
-                    hermes: row.get(13)?,
                     pi: false,
                 },
                 installed_at: row.get(14)?,
@@ -127,10 +119,10 @@ impl Database {
                 skill.readme_url,
                 skill.apps.claude,
                 skill.apps.codex,
-                skill.apps.gemini,
-                skill.apps.grokbuild,
-                skill.apps.opencode,
-                skill.apps.hermes,
+                false,
+                false,
+                false,
+                false,
                 skill.installed_at,
                 skill.content_hash,
                 skill.updated_at,
@@ -203,7 +195,7 @@ impl Database {
         let affected = conn
             .execute(
                 "UPDATE skills SET enabled_claude = ?1, enabled_codex = ?2, enabled_gemini = ?3, enabled_grokbuild = ?4, enabled_opencode = ?5, enabled_hermes = ?6 WHERE id = ?7",
-                params![apps.claude, apps.codex, apps.gemini, apps.grokbuild, apps.opencode, apps.hermes, id],
+                params![apps.claude, apps.codex, false, false, false, false, id],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(affected > 0)
@@ -386,7 +378,7 @@ mod tests {
         let mut reinstalled = skill(
             &stale_update.id,
             "reinstalled",
-            SkillApps::only(&AppType::Gemini),
+            SkillApps::only(&AppType::Codex),
         );
         reinstalled.installed_at = stale_update.installed_at + 1;
         db.save_skill(&reinstalled).expect("seed reinstalled skill");

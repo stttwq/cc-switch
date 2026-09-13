@@ -32,10 +32,7 @@ mod schema;
 mod tests;
 
 // DAO 类型导出供外部使用
-pub(crate) use dao::providers_seed::{
-    is_official_seed_id, CLAUDE_DESKTOP_OFFICIAL_PROVIDER_ID, CODEX_OFFICIAL_PROVIDER_ID,
-    GROKBUILD_OFFICIAL_PROVIDER_ID,
-};
+pub(crate) use dao::providers_seed::{is_official_seed_id, CODEX_OFFICIAL_PROVIDER_ID};
 pub use dao::Profile;
 
 use crate::config::get_app_config_dir;

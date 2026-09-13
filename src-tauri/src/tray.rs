@@ -123,7 +123,7 @@ pub struct TrayAppSection {
 
 pub const TRAY_ID: &str = "cc-switch";
 
-pub const TRAY_SECTIONS: [TrayAppSection; 4] = [
+pub const TRAY_SECTIONS: [TrayAppSection; 2] = [
     TrayAppSection {
         app_type: AppType::Claude,
         prefix: "claude_",
@@ -137,20 +137,6 @@ pub const TRAY_SECTIONS: [TrayAppSection; 4] = [
         empty_id: "codex_empty",
         header_label: "Codex",
         log_name: "Codex",
-    },
-    TrayAppSection {
-        app_type: AppType::Gemini,
-        prefix: "gemini_",
-        empty_id: "gemini_empty",
-        header_label: "Gemini",
-        log_name: "Gemini",
-    },
-    TrayAppSection {
-        app_type: AppType::GrokBuild,
-        prefix: "grokbuild_",
-        empty_id: "grokbuild_empty",
-        header_label: "Grok Build",
-        log_name: "Grok Build",
     },
 ];
 
@@ -428,7 +414,6 @@ pub fn create_tray_menu(
             // 分组标签用产品名，不进 i18n
             let scope_label = match scope {
                 ProfileScope::Claude => "Claude Code",
-                ProfileScope::ClaudeDesktop => "Claude Desktop",
                 ProfileScope::Codex => "Codex",
             };
             let mut scope_builder = SubmenuBuilder::with_id(

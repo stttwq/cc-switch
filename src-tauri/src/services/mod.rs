@@ -4,7 +4,6 @@ pub mod env_manager;
 pub mod http_client;
 pub mod mcp;
 pub mod model_fetch;
-pub mod omo;
 pub mod pi_prompt_files;
 pub(crate) mod pi_state;
 pub mod profile;
@@ -22,7 +21,6 @@ pub mod webdav_sync;
 
 pub use config::ConfigService;
 pub use mcp::McpService;
-pub use omo::OmoService;
 pub use prompt::PromptService;
 pub use provider::{ProviderService, ProviderSortUpdate, SwitchResult};
 pub use skill::SkillService;

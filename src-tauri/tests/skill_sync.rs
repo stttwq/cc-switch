@@ -18,13 +18,23 @@ fn write_skill(dir: &std::path::Path, name: &str) {
 }
 
 #[cfg(unix)]
-fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) {
+fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) -> bool {
     std::os::unix::fs::symlink(src, dest).expect("create symlink");
+    true
 }
 
+/// Windows 创建目录符号链接需要 SeCreateSymbolicLinkPrivilege（管理员或开发者模式）。
+/// 普通用户下返回 false，调用方跳过测试，避免环境限制伪装成回归。
 #[cfg(windows)]
-fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) {
-    std::os::windows::fs::symlink_dir(src, dest).expect("create symlink");
+fn symlink_dir(src: &std::path::Path, dest: &std::path::Path) -> bool {
+    match std::os::windows::fs::symlink_dir(src, dest) {
+        Ok(()) => true,
+        Err(err) if err.raw_os_error() == Some(1314) => {
+            eprintln!("skipping: Windows symlink privilege unavailable");
+            false
+        }
+        Err(err) => panic!("create symlink: {err:?}"),
+    }
 }
 
 #[test]
@@ -53,7 +63,7 @@ fn import_from_apps_respects_explicit_app_selection() {
         vec![ImportSkillSelection {
             directory: "shared-skill".to_string(),
             apps: SkillApps {
-                opencode: true,
+                codex: true,
                 ..Default::default()
             },
         }],
@@ -63,11 +73,11 @@ fn import_from_apps_respects_explicit_app_selection() {
     assert_eq!(imported.len(), 1, "expected exactly one imported skill");
     let skill = imported.first().expect("imported skill");
     assert!(
-        skill.apps.opencode,
-        "explicitly selected OpenCode app should remain enabled"
+        skill.apps.codex,
+        "explicitly selected Codex app should remain enabled"
     );
     assert!(
-        !skill.apps.claude && !skill.apps.codex && !skill.apps.gemini,
+        !skill.apps.claude && !skill.apps.pi,
         "import should no longer infer apps from every matching source path"
     );
 }
@@ -131,10 +141,13 @@ fn sync_to_app_removes_disabled_and_orphaned_ssot_symlinks() {
     write_skill(&disabled_skill, "Disabled");
     write_skill(&orphan_skill, "Orphan");
 
-    let opencode_skills_dir = home.join(".config").join("opencode").join("skills");
-    fs::create_dir_all(&opencode_skills_dir).expect("create opencode skills dir");
-    symlink_dir(&disabled_skill, &opencode_skills_dir.join("disabled-skill"));
-    symlink_dir(&orphan_skill, &opencode_skills_dir.join("orphan-skill"));
+    let claude_skills_dir = home.join(".claude").join("skills");
+    fs::create_dir_all(&claude_skills_dir).expect("create claude skills dir");
+    if !symlink_dir(&disabled_skill, &claude_skills_dir.join("disabled-skill"))
+        || !symlink_dir(&orphan_skill, &claude_skills_dir.join("orphan-skill"))
+    {
+        return;
+    }
 
     let state = create_test_state().expect("create test state");
     state
@@ -155,14 +168,14 @@ fn sync_to_app_removes_disabled_and_orphaned_ssot_symlinks() {
         })
         .expect("save disabled skill");
 
-    SkillService::sync_to_app(&state.db, &AppType::OpenCode).expect("reconcile skills");
+    SkillService::sync_to_app(&state.db, &AppType::Claude).expect("reconcile skills");
 
     assert!(
-        !opencode_skills_dir.join("disabled-skill").exists(),
-        "DB-known disabled skill should be removed from OpenCode live dir"
+        !claude_skills_dir.join("disabled-skill").exists(),
+        "DB-known disabled skill should be removed from Claude live dir"
     );
     assert!(
-        !opencode_skills_dir.join("orphan-skill").exists(),
+        !claude_skills_dir.join("orphan-skill").exists(),
         "orphaned symlink into SSOT should be cleaned up"
     );
 }
@@ -285,7 +298,7 @@ fn restore_skill_backup_restores_files_to_ssot_and_current_app() {
     assert_eq!(restored.directory, "restore-skill");
     assert!(restored.apps.claude, "restored skill should enable Claude");
     assert!(
-        !restored.apps.codex && !restored.apps.gemini && !restored.apps.opencode,
+        !restored.apps.codex && !restored.apps.pi,
         "restore should only enable the selected app"
     );
     assert!(
@@ -421,7 +434,7 @@ fn migration_snapshot_overrides_multi_source_directory_inference() {
         "legacy snapshot should preserve Claude enablement"
     );
     assert!(
-        !migrated.apps.opencode,
-        "migration should no longer infer OpenCode enablement from a duplicate directory alone"
+        !migrated.apps.pi,
+        "migration should no longer infer app enablement from a duplicate directory alone"
     );
 }
