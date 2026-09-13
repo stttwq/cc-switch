@@ -37,7 +37,7 @@ pub use dao::Profile;
 
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
-use rusqlite::{hooks::Action, Connection};
+use rusqlite::{hooks::Action, Connection, OptionalExtension};
 use serde::Serialize;
 use std::sync::Mutex;
 
@@ -45,7 +45,7 @@ use std::sync::Mutex;
 
 /// 当前 Schema 版本号
 /// 每次修改表结构时递增，并在 schema.rs 中添加相应的迁移逻辑
-pub(crate) const SCHEMA_VERSION: i32 = 18;
+pub(crate) const SCHEMA_VERSION: i32 = 19;
 
 /// 安全地序列化 JSON，避免 unwrap panic
 pub(crate) fn to_json_string<T: Serialize>(value: &T) -> Result<String, AppError> {
@@ -125,13 +125,24 @@ impl Database {
                 log::info!(
                     "Creating pre-migration database backup (v{version} → v{SCHEMA_VERSION})"
                 );
-                if let Err(e) = db.backup_database_file() {
-                    log::warn!("Pre-migration backup failed, continuing migration: {e}");
+                // v18→v19 is the secrets migration, use special naming
+                if version == 18 {
+                    if let Err(e) = db.backup_database_file_for_secrets_migration() {
+                        log::warn!("Pre-secrets-migration backup failed, continuing migration: {e}");
+                    }
+                } else {
+                    if let Err(e) = db.backup_database_file() {
+                        log::warn!("Pre-migration backup failed, continuing migration: {e}");
+                    }
                 }
             }
         }
 
         db.apply_schema_migrations()?;
+
+        // Execute credential migration if pending
+        db.execute_credential_migration_if_pending()?;
+
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
         }
@@ -144,6 +155,64 @@ impl Database {
         }
 
         Ok(db)
+    }
+
+    /// 如果存在 `secrets_migration_pending` 标志，执行凭据迁移
+    fn execute_credential_migration_if_pending(&self) -> Result<(), AppError> {
+        let pending: Option<String> = {
+            let conn = lock_conn!(self.conn);
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = 'secrets_migration_pending'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(format!("检查凭据迁移标志失败: {e}")))?
+        };
+
+        if pending.as_deref() != Some("1") {
+            return Ok(());
+        }
+
+        log::info!("检测到 secrets_migration_pending=1，开始执行凭据迁移");
+
+        let store = crate::secrets::WindowsSecretStore::new()?;
+        let migrator = crate::secrets::migration::CredentialMigrator::new(self, &store);
+
+        let runtime = tokio::runtime::Runtime::new()
+            .map_err(|e| AppError::Config(format!("创建 tokio runtime 失败: {e}")))?;
+
+        match runtime.block_on(migrator.run_migration()) {
+            Ok(report) => {
+                log::info!("凭据迁移完成: {:?}", report);
+
+                // Store migration report
+                let report_json = serde_json::to_string(&report)
+                    .map_err(|e| AppError::Config(format!("序列化迁移报告失败: {e}")))?;
+
+                let conn = lock_conn!(self.conn);
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('secrets_migration_report', ?1)",
+                    [&report_json],
+                )
+                .map_err(|e| AppError::Database(format!("保存迁移报告失败: {e}")))?;
+
+                // Clear migration pending flag
+                conn.execute(
+                    "DELETE FROM settings WHERE key = 'secrets_migration_pending'",
+                    [],
+                )
+                .map_err(|e| AppError::Database(format!("清除迁移标志失败: {e}")))?;
+
+                log::info!("凭据迁移标志已清除");
+                Ok(())
+            }
+            Err(e) => {
+                log::error!("凭据迁移失败: {e}");
+                // Keep the pending flag so migration will retry on next startup
+                Err(e)
+            }
+        }
     }
 
     /// 读取磁盘上数据库的 `user_version`；仅当它比应用支持的 [`SCHEMA_VERSION`]

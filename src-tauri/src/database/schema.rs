@@ -549,6 +549,11 @@ impl Database {
                         Self::migrate_v17_to_v18(conn)?;
                         Self::set_user_version(conn, 18)?;
                     }
+                    18 => {
+                        log::info!("迁移数据库从 v18 到 v19（触发凭据迁移）");
+                        Self::migrate_v18_to_v19(conn)?;
+                        Self::set_user_version(conn, 19)?;
+                    }
                     _ => {
                         return Err(AppError::Database(format!(
                             "未知的数据库版本 {version}，无法迁移到 {SCHEMA_VERSION}"
@@ -1653,6 +1658,27 @@ impl Database {
                 "INTEGER",
             )?;
         }
+        Ok(())
+    }
+
+    /// v18 -> v19 迁移：触发凭据迁移
+    fn migrate_v18_to_v19(conn: &Connection) -> Result<(), AppError> {
+        // 确保 settings 表存在（某些测试场景可能不完整）
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 settings 表失败: {e}")))?;
+
+        // 设置凭据迁移触发器（只设置标志位，不剥离密钥）
+        // 实际迁移在启动流程中执行，因为需要访问凭据管理器
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('secrets_migration_pending', '1')",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("设置凭据迁移触发器失败: {e}")))?;
+
+        log::info!("v18→v19: 已设置 secrets_migration_pending=1，启动时将执行凭据迁移");
         Ok(())
     }
 
@@ -3849,6 +3875,24 @@ mod tests {
         )?;
         assert_eq!(byte_offset, None, "存量行的字节游标必须为 NULL");
         assert_eq!(fingerprint, None, "存量行的尾部指纹必须为 NULL");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v18_to_v19_sets_secrets_migration_pending() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::create_tables_on_conn(&conn)?;
+        Database::set_user_version(&conn, 18)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+        let pending: String = conn.query_row(
+            "SELECT value FROM settings WHERE key = 'secrets_migration_pending'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(pending, "1", "应设置凭据迁移待执行标志");
         Ok(())
     }
 }

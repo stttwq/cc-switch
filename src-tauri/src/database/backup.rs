@@ -231,7 +231,7 @@ impl Database {
         let backup_path = {
             let mut main_conn = lock_conn!(self.conn);
             let backup_path =
-                Self::backup_database_file_from_conn(&backup_file_guard, &main_conn, &[])?;
+                Self::backup_database_file_from_conn(&backup_file_guard, &main_conn, &[], None)?;
             if !preserve_tables.is_empty() {
                 Self::restore_tables(&main_conn, &temp_conn, preserve_tables)?;
             }
@@ -416,7 +416,7 @@ impl Database {
             let backup_file_guard = lock_backup_file_operations()?;
             let backup_dir = get_app_config_dir().join("backups");
             if !backup_dir.exists() {
-                self.backup_database_file_locked(&backup_file_guard)?;
+                self.backup_database_file_locked(&backup_file_guard, None)?;
             } else {
                 let latest = fs::read_dir(&backup_dir).ok().and_then(|entries| {
                     entries
@@ -439,7 +439,7 @@ impl Database {
                     log::info!(
                         "Periodic backup: latest backup is older than {interval_hours} hours, creating new backup"
                     );
-                    self.backup_database_file_locked(&backup_file_guard)?;
+                    self.backup_database_file_locked(&backup_file_guard, None)?;
                 }
             }
         }
@@ -450,15 +450,24 @@ impl Database {
     /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
     pub(crate) fn backup_database_file(&self) -> Result<Option<PathBuf>, AppError> {
         let backup_file_guard = lock_backup_file_operations()?;
-        self.backup_database_file_locked(&backup_file_guard)
+        self.backup_database_file_locked(&backup_file_guard, None)
+    }
+
+    /// 生成凭据迁移前的特殊备份，使用 `pre-secrets-migration-*` 命名
+    pub(crate) fn backup_database_file_for_secrets_migration(
+        &self,
+    ) -> Result<Option<PathBuf>, AppError> {
+        let backup_file_guard = lock_backup_file_operations()?;
+        self.backup_database_file_locked(&backup_file_guard, Some("pre-secrets-migration"))
     }
 
     fn backup_database_file_locked(
         &self,
         backup_file_guard: &BackupFileOperationGuard,
+        base_prefix: Option<&str>,
     ) -> Result<Option<PathBuf>, AppError> {
         let conn = lock_conn!(self.conn);
-        Self::backup_database_file_from_conn(backup_file_guard, &conn, &[])
+        Self::backup_database_file_from_conn(backup_file_guard, &conn, &[], base_prefix)
     }
 
     /// Create a safety backup from a connection whose caller already owns both
@@ -467,11 +476,13 @@ impl Database {
         backup_file_guard: &BackupFileOperationGuard,
         source_conn: &Connection,
         protected_paths: &[&Path],
+        base_prefix: Option<&str>,
     ) -> Result<Option<PathBuf>, AppError> {
         Self::backup_database_file_from_conn_with_hook(
             backup_file_guard,
             source_conn,
             protected_paths,
+            base_prefix,
             |_, _| Ok(()),
         )
     }
@@ -480,6 +491,7 @@ impl Database {
         _backup_file_guard: &BackupFileOperationGuard,
         source_conn: &Connection,
         protected_paths: &[&Path],
+        base_prefix: Option<&str>,
         before_publish: F,
     ) -> Result<Option<PathBuf>, AppError>
     where
@@ -497,7 +509,11 @@ impl Database {
 
         fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
 
-        let base_id = format!("db_backup_{}", Local::now().format("%Y%m%d_%H%M%S"));
+        let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+        let base_id = match base_prefix {
+            Some(prefix) => format!("{prefix}_{timestamp}"),
+            None => format!("db_backup_{timestamp}"),
+        };
         let mut next_suffix = 0;
         let mut backup_path =
             Self::next_available_backup_path(&backup_dir, &base_id, &mut next_suffix);
@@ -1047,6 +1063,7 @@ impl Database {
                 &backup_file_guard,
                 &main_conn,
                 &[backup_path.as_path()],
+                None,
             )?;
             before_replace(safety_backup.as_deref())?;
             let backup = Backup::new(&staging_conn, &mut main_conn)
@@ -1160,6 +1177,7 @@ mod tests {
     use crate::settings::{get_settings, update_settings, AppSettings};
     use rusqlite::Connection;
     use serial_test::serial;
+    use std::path::Path;
 
     struct TestHomeGuard {
         previous_test_home: Option<std::ffi::OsString>,
@@ -2313,7 +2331,8 @@ mod tests {
                 &backup_file_guard,
                 &conn,
                 &[],
-                |temp_path, target_path| {
+                None,
+                |temp_path: &Path, target_path: &Path| {
                     assert!(
                         temp_path.exists(),
                         "completed backup should exist before publish"
@@ -2364,7 +2383,8 @@ mod tests {
                 &backup_file_guard,
                 &conn,
                 &[],
-                |_, target_path| {
+                None,
+                |_: &Path, target_path: &Path| {
                     claimed_path = Some(target_path.to_path_buf());
                     std::fs::write(target_path, b"claimed by another process")
                         .map_err(|e| AppError::io(target_path, e))?;

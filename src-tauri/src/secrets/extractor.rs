@@ -34,35 +34,44 @@ impl<'a> SecretExtractor<'a> {
         let mut secrets = ProviderSecrets::new();
 
         if let Value::Object(map) = config {
-            // Extract api_key
-            if let Some(Value::String(api_key)) = map.get("api_key") {
-                if !api_key.is_empty() && !api_key.starts_with("literal:") {
-                    let target =
-                        SecretTarget::provider_api_key(self.app.clone(), provider_id.to_string());
-                    self.store.store(&target, api_key).await?;
-                    secrets = secrets.with_api_key(api_key.clone());
+            // Scan all top-level fields for sensitive keys
+            for (key, value) in map {
+                if let Value::String(val) = value {
+                    if !val.is_empty() && !val.starts_with("literal:") && is_sensitive_config_key(key) {
+                        // Determine the appropriate target based on the field name
+                        let target = if key == "api_key" || key.to_lowercase().contains("apikey") {
+                            SecretTarget::provider_api_key(self.app.clone(), provider_id.to_string())
+                        } else if key == "base_url" || key == "baseUrl" {
+                            // Only store base_url as secret if it contains credentials
+                            if val.contains('@') || val.contains("token=") {
+                                SecretTarget::provider_base_url(self.app.clone(), provider_id.to_string())
+                            } else {
+                                continue; // Skip non-credential base URLs
+                            }
+                        } else {
+                            // Other sensitive fields go into extra_env
+                            SecretTarget::provider_env(
+                                self.app.clone(),
+                                provider_id.to_string(),
+                                key.clone(),
+                            )
+                        };
 
-                    // Replace with marker
-                    if let Value::Object(obj) = &mut sanitized {
-                        obj.insert("api_key".to_string(), Value::String("literal:***".to_string()));
-                    }
-                }
-            }
+                        self.store.store(&target, val).await?;
 
-            // Extract base_url if it contains credentials
-            if let Some(Value::String(base_url)) = map.get("base_url") {
-                if base_url.contains('@') || base_url.contains("token=") {
-                    let target =
-                        SecretTarget::provider_base_url(self.app.clone(), provider_id.to_string());
-                    self.store.store(&target, base_url).await?;
-                    secrets = secrets.with_base_url(base_url.clone());
+                        // Record in secrets
+                        if key == "api_key" || key.to_lowercase().contains("apikey") {
+                            secrets = secrets.with_api_key(val.clone());
+                        } else if key == "base_url" || key == "baseUrl" {
+                            secrets = secrets.with_base_url(val.clone());
+                        } else {
+                            secrets = secrets.with_extra_env(key.clone(), val.clone());
+                        }
 
-                    // Replace with marker
-                    if let Value::Object(obj) = &mut sanitized {
-                        obj.insert(
-                            "base_url".to_string(),
-                            Value::String("literal:***".to_string()),
-                        );
+                        // Replace with marker
+                        if let Value::Object(obj) = &mut sanitized {
+                            obj.insert(key.clone(), Value::String("literal:***".to_string()));
+                        }
                     }
                 }
             }
