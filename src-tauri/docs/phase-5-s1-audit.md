@@ -540,9 +540,10 @@ These files contain ~49 additional commands related to profiles, prompts, sessio
 
 ### Recommended Next Steps for Phase 5 S2
 
-1. **Fix proxy credential leaks** (HIGH priority)
-   - Modify `get_global_proxy_url` to return masked URL
-   - Modify `get_upstream_proxy_status` to return masked URL
+1. ✅ **Fix proxy credential leaks** (HIGH priority) — **COMPLETED**
+   - ✅ Modified `get_global_proxy_url` to return masked URL (commit 3f05d53)
+   - ✅ Modified `get_upstream_proxy_status` to return masked URL (commit 3f05d53)
+   - Both now apply `http_client::mask_url()` before returning to frontend
    
 2. **Review MCP config return** (MEDIUM priority)
    - Verify if MCP env vars should be sanitized
@@ -556,3 +557,43 @@ These files contain ~49 additional commands related to profiles, prompts, sessio
 4. **Complete remaining 75 commands** (OPTIONAL)
    - Low priority - no sensitive keywords detected in grep scan
    - Focus on utility commands for completeness
+
+---
+
+## Phase 5 S1 Fix Summary (Commit 3f05d53)
+
+### Fixed Commands
+
+#### get_global_proxy_url (global_proxy.rs:15)
+**Before**:
+```rust
+Ok(result)  // 返回原始 URL: http://user:pass@host:port
+```
+
+**After**:
+```rust
+Ok(result.map(|url| http_client::mask_url(&url)))  // 返回脱敏 URL: http://***:***@host:port
+```
+
+#### get_upstream_proxy_status (global_proxy.rs:164)
+**Before**:
+```rust
+UpstreamProxyStatus {
+    enabled: url.is_some(),
+    proxy_url: url,  // 返回原始 URL
+}
+```
+
+**After**:
+```rust
+UpstreamProxyStatus {
+    enabled: url.is_some(),
+    proxy_url: url.map(|u| http_client::mask_url(&u)),  // 返回脱敏 URL
+}
+```
+
+### Verification
+- ✅ Code compiles successfully
+- ✅ Uses existing `http_client::mask_url()` helper
+- ✅ Consistent with logging behavior (which already used masking)
+- ✅ No breaking changes to return type signatures
