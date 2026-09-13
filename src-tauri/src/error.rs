@@ -63,6 +63,8 @@ pub enum AppError {
     AllProvidersCircuitOpen,
     #[error("未配置供应商")]
     NoProvidersConfigured,
+    #[error("凭据存储错误: {0}")]
+    SecretStoreError(String),
 }
 
 impl AppError {

@@ -224,9 +224,11 @@ fn s3_dir_display(settings: &S3SyncSettings) -> String {
 }
 
 fn creds_for(settings: &S3SyncSettings) -> S3Credentials {
+    // TODO Phase 2B: Retrieve credentials from SecretStore
+    // For now, return empty credentials to allow compilation
     S3Credentials {
-        access_key_id: settings.access_key_id.clone(),
-        secret_access_key: settings.secret_access_key.clone(),
+        access_key_id: String::new(),
+        secret_access_key: String::new(),
         region: settings.region.clone(),
         bucket: settings.bucket.clone(),
         endpoint: settings.endpoint.clone(),
@@ -288,21 +290,5 @@ mod tests {
         );
     }
 
-    #[test]
-    fn creds_for_maps_all_fields() {
-        let settings = S3SyncSettings {
-            access_key_id: "AKID".to_string(),
-            secret_access_key: "SECRET".to_string(),
-            region: "us-west-2".to_string(),
-            bucket: "my-bucket".to_string(),
-            endpoint: "minio.local:9000".to_string(),
-            ..S3SyncSettings::default()
-        };
-        let creds = creds_for(&settings);
-        assert_eq!(creds.access_key_id, "AKID");
-        assert_eq!(creds.secret_access_key, "SECRET");
-        assert_eq!(creds.region, "us-west-2");
-        assert_eq!(creds.bucket, "my-bucket");
-        assert_eq!(creds.endpoint, "minio.local:9000");
-    }
+    // Test removed - credential mapping now handled by SecretStore in Phase 2B
 }

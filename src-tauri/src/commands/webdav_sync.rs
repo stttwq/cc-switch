@@ -43,16 +43,13 @@ fn require_enabled_webdav_settings() -> Result<WebDavSyncSettings, String> {
     Ok(settings)
 }
 
+// Password resolution removed - credentials now managed by SecretStore
+// This function is now a no-op passthrough for Phase 2A transition
 fn resolve_password_for_request(
-    mut incoming: WebDavSyncSettings,
-    existing: Option<WebDavSyncSettings>,
-    preserve_empty_password: bool,
+    incoming: WebDavSyncSettings,
+    _existing: Option<WebDavSyncSettings>,
+    _preserve_empty_password: bool,
 ) -> WebDavSyncSettings {
-    if let Some(existing_settings) = existing {
-        if preserve_empty_password && incoming.password.is_empty() {
-            incoming.password = existing_settings.password;
-        }
-    }
     incoming
 }
 
@@ -305,35 +302,16 @@ mod tests {
     }
 
     #[test]
-    fn resolve_password_for_request_preserves_existing_when_requested() {
+    fn resolve_password_for_request_is_now_passthrough() {
         let incoming = WebDavSyncSettings {
             base_url: "https://dav.example.com".to_string(),
             username: "alice".to_string(),
-            password: String::new(),
             ..WebDavSyncSettings::default()
         };
-        let existing = Some(WebDavSyncSettings {
-            password: "secret".to_string(),
-            ..WebDavSyncSettings::default()
-        });
-        let resolved = resolve_password_for_request(incoming, existing, true);
-        assert_eq!(resolved.password, "secret");
-    }
-
-    #[test]
-    fn resolve_password_for_request_allows_explicit_empty_password() {
-        let incoming = WebDavSyncSettings {
-            base_url: "https://dav.example.com".to_string(),
-            username: "alice".to_string(),
-            password: String::new(),
-            ..WebDavSyncSettings::default()
-        };
-        let existing = Some(WebDavSyncSettings {
-            password: "secret".to_string(),
-            ..WebDavSyncSettings::default()
-        });
-        let resolved = resolve_password_for_request(incoming, existing, false);
-        assert!(resolved.password.is_empty());
+        let existing = Some(WebDavSyncSettings::default());
+        let resolved = resolve_password_for_request(incoming.clone(), existing, true);
+        assert_eq!(resolved.base_url, incoming.base_url);
+        assert_eq!(resolved.username, incoming.username);
     }
 
     #[test]
@@ -349,7 +327,6 @@ mod tests {
             enabled: true,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),
-            password: "secret".to_string(),
             remote_root: "cc-switch-sync".to_string(),
             profile: "default".to_string(),
             ..WebDavSyncSettings::default()
@@ -366,7 +343,6 @@ mod tests {
         let after = crate::settings::get_webdav_sync_settings().expect("read webdav settings");
         assert_eq!(after.base_url, "https://dav.example.com/dav/");
         assert_eq!(after.username, "alice");
-        assert_eq!(after.password, "secret");
         assert_eq!(after.remote_root, "cc-switch-sync");
         assert_eq!(after.profile, "default");
         assert!(
@@ -394,7 +370,6 @@ mod tests {
             enabled: false,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),
-            password: "secret".to_string(),
             ..WebDavSyncSettings::default()
         }))
         .expect("seed disabled webdav settings");
@@ -419,7 +394,6 @@ mod tests {
             enabled: true,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),
-            password: "secret".to_string(),
             ..WebDavSyncSettings::default()
         }))
         .expect("seed enabled webdav settings");

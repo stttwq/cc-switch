@@ -20,6 +20,7 @@ mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;
+mod secrets;
 mod services;
 mod session_manager;
 mod settings;

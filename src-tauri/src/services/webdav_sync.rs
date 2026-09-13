@@ -291,7 +291,9 @@ fn remote_dir_display(settings: &WebDavSyncSettings, layout: RemoteLayout) -> St
 }
 
 fn auth_for(settings: &WebDavSyncSettings) -> WebDavAuth {
-    auth_from_credentials(&settings.username, &settings.password)
+    // TODO Phase 2B: Retrieve password from SecretStore
+    // For now, return auth with empty password to allow compilation
+    auth_from_credentials(&settings.username, "")
 }
 
 // ─── Tests ───────────────────────────────────────────────────

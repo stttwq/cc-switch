@@ -129,8 +129,7 @@ pub struct WebDavSyncSettings {
     pub base_url: String,
     #[serde(default)]
     pub username: String,
-    #[serde(default)]
-    pub password: String,
+    // password moved to SecretStore: SecretTarget::app("webdav", "password")
     #[serde(default = "default_remote_root")]
     pub remote_root: String,
     #[serde(default = "default_profile")]
@@ -146,7 +145,6 @@ impl Default for WebDavSyncSettings {
             auto_sync: false,
             base_url: String::new(),
             username: String::new(),
-            password: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
             status: WebDavSyncStatus::default(),
@@ -188,7 +186,7 @@ impl WebDavSyncSettings {
 
     /// Returns true if all credential fields are blank (no config to persist).
     fn is_empty(&self) -> bool {
-        self.base_url.is_empty() && self.username.is_empty() && self.password.is_empty()
+        self.base_url.is_empty() && self.username.is_empty()
     }
 }
 
@@ -204,10 +202,9 @@ pub struct S3SyncSettings {
     pub region: String,
     #[serde(default)]
     pub bucket: String,
-    #[serde(default)]
-    pub access_key_id: String,
-    #[serde(default)]
-    pub secret_access_key: String,
+    // access_key_id and secret_access_key moved to SecretStore:
+    // SecretTarget::app("s3", "access_key_id")
+    // SecretTarget::app("s3", "secret_access_key")
     #[serde(default)]
     pub endpoint: String,
     #[serde(default = "default_remote_root")]
@@ -225,8 +222,6 @@ impl Default for S3SyncSettings {
             auto_sync: false,
             region: String::new(),
             bucket: String::new(),
-            access_key_id: String::new(),
-            secret_access_key: String::new(),
             endpoint: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
@@ -251,27 +246,14 @@ impl S3SyncSettings {
                 "S3 region is required.",
             ));
         }
-        if self.access_key_id.trim().is_empty() {
-            return Err(crate::error::AppError::localized(
-                "s3.access_key_id.required",
-                "S3 Access Key ID 不能为空",
-                "S3 Access Key ID is required.",
-            ));
-        }
-        if self.secret_access_key.trim().is_empty() {
-            return Err(crate::error::AppError::localized(
-                "s3.secret_access_key.required",
-                "S3 Secret Access Key 不能为空",
-                "S3 Secret Access Key is required.",
-            ));
-        }
+        // Note: access_key_id and secret_access_key validation removed
+        // as they are now stored in SecretStore, not in this struct
         Ok(())
     }
 
     pub fn normalize(&mut self) {
         self.region = self.region.trim().to_string();
         self.bucket = self.bucket.trim().to_string();
-        self.access_key_id = self.access_key_id.trim().to_string();
         self.endpoint = self.endpoint.trim().to_string();
         self.remote_root = self.remote_root.trim().to_string();
         self.profile = self.profile.trim().to_string();
@@ -285,10 +267,7 @@ impl S3SyncSettings {
 
     /// Returns true if all credential fields are blank (no config to persist).
     fn is_empty(&self) -> bool {
-        self.bucket.is_empty()
-            && self.region.is_empty()
-            && self.access_key_id.is_empty()
-            && self.secret_access_key.is_empty()
+        self.bucket.is_empty() && self.region.is_empty()
     }
 }
 
@@ -373,51 +352,12 @@ pub struct AppSettings {
     /// 静默启动（程序启动时不显示主窗口，仅托盘运行）
     #[serde(default)]
     pub silent_startup: bool,
-    /// 是否在主页面启用本地代理功能（默认关闭）
-    #[serde(default)]
-    pub enable_local_proxy: bool,
-    /// User has confirmed the local proxy first-run notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub proxy_confirmed: Option<bool>,
-    /// User has confirmed the usage query first-run notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_confirmed: Option<bool>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_dashboard_refresh_interval_ms: Option<u32>,
-    /// 会话用量自动扫描开关（默认开启=自动模式）。关闭后停止后台定时扫描
-    /// 各客户端会话日志，仅在用户点击"立即同步"时手动扫描；只管扫描时机，
-    /// 代理接管记账与启动费用回填（不读会话文件）不受此开关影响。
-    #[serde(default = "default_session_auto_sync_enabled")]
-    pub session_auto_sync_enabled: bool,
-    /// Whether to show the failover toggle independently on the main page
-    #[serde(default)]
-    pub enable_failover_toggle: bool,
-    /// Whether to show the project profile switcher on the main page header
-    #[serde(default = "default_show_profile_switcher")]
-    pub show_profile_switcher: bool,
-    /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
-    /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
-    #[serde(default)]
-    pub preserve_codex_official_auth_on_switch: bool,
-    /// Run official Codex providers under the shared "custom" model_provider id
-    /// so official sessions share one resume-history bucket with third-party
-    /// providers. Opt-in: defaults to false.
-    #[serde(default)]
-    pub unify_codex_session_history: bool,
-    /// User opted in (via the enable dialog checkbox) to migrate existing
-    /// official sessions ("openai" bucket) into the shared bucket. Persisted so
-    /// a failed migration retries at startup; cleared when the toggle turns off.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unify_codex_migrate_existing: Option<bool>,
-    /// User has confirmed the failover toggle first-run notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub failover_confirmed: Option<bool>,
-    /// User has confirmed the first-run welcome notice
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub first_run_notice_confirmed: Option<bool>,
     /// User has confirmed the common config first-run notice
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub common_config_confirmed: Option<bool>,
+    /// User has confirmed the first-run welcome notice
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub first_run_notice_confirmed: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub language: Option<String>,
 
@@ -457,10 +397,6 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub s3_sync: Option<S3SyncSettings>,
 
-    // ===== WebDAV 备份设置（旧版，保留向后兼容）=====
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub webdav_backup: Option<serde_json::Value>,
-
     // ===== 备份策略设置 =====
     /// Auto-backup interval in hours (default 24, 0 = disabled)
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -480,6 +416,25 @@ pub struct AppSettings {
     // ===== 本机自动迁移状态 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
+
+    // ===== Codex session history unification (Phase 2A preserves existing fields) =====
+    /// Run official Codex providers under the shared "custom" model_provider id
+    /// so official sessions share one resume-history bucket with third-party
+    /// providers. Opt-in: defaults to false.
+    #[serde(default)]
+    pub unify_codex_session_history: bool,
+    /// User opted in (via the enable dialog checkbox) to migrate existing
+    /// official sessions ("openai" bucket) into the shared bucket. Persisted so
+    /// a failed migration retries at startup; cleared when the toggle turns off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unify_codex_migrate_existing: Option<bool>,
+    /// Whether to show the project profile switcher on the main page header
+    #[serde(default = "default_show_profile_switcher")]
+    pub show_profile_switcher: bool,
+    /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
+    /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
+    #[serde(default)]
+    pub preserve_codex_official_auth_on_switch: bool,
 }
 
 fn default_show_in_tray() -> bool {
@@ -494,10 +449,6 @@ fn default_show_profile_switcher() -> bool {
     true
 }
 
-fn default_session_auto_sync_enabled() -> bool {
-    true
-}
-
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -508,17 +459,10 @@ impl Default for AppSettings {
             skip_claude_onboarding: false,
             launch_on_startup: false,
             silent_startup: false,
-            enable_local_proxy: false,
-            proxy_confirmed: None,
-            usage_confirmed: None,
-            usage_dashboard_refresh_interval_ms: None,
-            session_auto_sync_enabled: true,
-            enable_failover_toggle: false,
             show_profile_switcher: true,
             preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
-            failover_confirmed: None,
             first_run_notice_confirmed: None,
             common_config_confirmed: None,
             language: None,
@@ -532,7 +476,6 @@ impl Default for AppSettings {
             skill_storage_location: SkillStorageLocation::default(),
             webdav_sync: None,
             s3_sync: None,
-            webdav_backup: None,
             backup_interval_hours: None,
             backup_retain_count: None,
             preferred_terminal: None,
@@ -700,15 +643,8 @@ pub fn get_settings() -> AppSettings {
 }
 
 pub fn get_settings_for_frontend() -> AppSettings {
-    let mut settings = get_settings();
-    if let Some(sync) = &mut settings.webdav_sync {
-        sync.password.clear();
-    }
-    if let Some(s3) = &mut settings.s3_sync {
-        s3.secret_access_key.clear();
-    }
-    settings.webdav_backup = None;
-    settings
+    // All secrets now stored in SecretStore, no need to sanitize
+    get_settings()
 }
 
 pub fn update_settings(mut new_settings: AppSettings) -> Result<(), AppError> {

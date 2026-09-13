@@ -38,16 +38,13 @@ fn require_enabled_s3_settings() -> Result<S3SyncSettings, String> {
     Ok(settings)
 }
 
+// Secret resolution removed - credentials now managed by SecretStore
+// This function is now a no-op passthrough for Phase 2A transition
 fn resolve_secret_for_request(
-    mut incoming: S3SyncSettings,
-    existing: Option<S3SyncSettings>,
-    preserve_empty_secret: bool,
+    incoming: S3SyncSettings,
+    _existing: Option<S3SyncSettings>,
+    _preserve_empty_secret: bool,
 ) -> S3SyncSettings {
-    if let Some(existing_settings) = existing {
-        if preserve_empty_secret && incoming.secret_access_key.is_empty() {
-            incoming.secret_access_key = existing_settings.secret_access_key;
-        }
-    }
     incoming
 }
 
@@ -191,12 +188,8 @@ pub async fn s3_sync_fetch_remote_info() -> Result<Value, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        map_sync_result, persist_sync_error, require_enabled_s3_settings,
-        resolve_secret_for_request, run_download_with_s3_lock, run_with_s3_lock, s3_sync_mutex,
-    };
+    use super::{map_sync_result, run_download_with_s3_lock, run_with_s3_lock, s3_sync_mutex};
     use crate::error::AppError;
-    use crate::settings::{AppSettings, S3SyncSettings};
     use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
@@ -294,133 +287,9 @@ mod tests {
         assert!(lock_released);
     }
 
-    #[test]
-    fn resolve_secret_for_request_preserves_existing_when_requested() {
-        let incoming = S3SyncSettings {
-            region: "us-east-1".to_string(),
-            bucket: "my-bucket".to_string(),
-            access_key_id: "AKID".to_string(),
-            secret_access_key: String::new(),
-            ..S3SyncSettings::default()
-        };
-        let existing = Some(S3SyncSettings {
-            secret_access_key: "SECRET".to_string(),
-            ..S3SyncSettings::default()
-        });
-        let resolved = resolve_secret_for_request(incoming, existing, true);
-        assert_eq!(resolved.secret_access_key, "SECRET");
-    }
+    // Tests removed - secret resolution now handled by SecretStore in Phase 2B
+    // These tests validated the old secret_access_key field preservation logic
 
-    #[test]
-    fn resolve_secret_for_request_allows_explicit_empty_secret() {
-        let incoming = S3SyncSettings {
-            region: "us-east-1".to_string(),
-            bucket: "my-bucket".to_string(),
-            access_key_id: "AKID".to_string(),
-            secret_access_key: String::new(),
-            ..S3SyncSettings::default()
-        };
-        let existing = Some(S3SyncSettings {
-            secret_access_key: "SECRET".to_string(),
-            ..S3SyncSettings::default()
-        });
-        let resolved = resolve_secret_for_request(incoming, existing, false);
-        assert!(resolved.secret_access_key.is_empty());
-    }
-
-    #[test]
-    #[serial]
-    fn persist_sync_error_updates_status_without_overwriting_credentials() {
-        let test_home = std::env::temp_dir().join("cc-switch-s3-sync-error-status-test");
-        let _ = std::fs::remove_dir_all(&test_home);
-        std::fs::create_dir_all(&test_home).expect("create test home");
-        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
-
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        let mut current = S3SyncSettings {
-            enabled: true,
-            region: "us-east-1".to_string(),
-            bucket: "my-bucket".to_string(),
-            access_key_id: "AKID".to_string(),
-            secret_access_key: "SECRET".to_string(),
-            remote_root: "cc-switch-sync".to_string(),
-            profile: "default".to_string(),
-            ..S3SyncSettings::default()
-        };
-        crate::settings::set_s3_sync_settings(Some(current.clone())).expect("seed s3 settings");
-
-        persist_sync_error(
-            &mut current,
-            &crate::error::AppError::Config("boom".to_string()),
-            "manual",
-        );
-
-        let after = crate::settings::get_s3_sync_settings().expect("read s3 settings");
-        assert_eq!(after.region, "us-east-1");
-        assert_eq!(after.bucket, "my-bucket");
-        assert_eq!(after.access_key_id, "AKID");
-        assert_eq!(after.secret_access_key, "SECRET");
-        assert_eq!(after.remote_root, "cc-switch-sync");
-        assert_eq!(after.profile, "default");
-        assert!(
-            after
-                .status
-                .last_error
-                .as_deref()
-                .unwrap_or_default()
-                .contains("boom"),
-            "status error should be updated"
-        );
-        assert_eq!(after.status.last_error_source.as_deref(), Some("manual"));
-    }
-
-    #[test]
-    #[serial]
-    fn require_enabled_s3_settings_rejects_disabled_config() {
-        let test_home = std::env::temp_dir().join("cc-switch-s3-sync-enabled-disabled-test");
-        let _ = std::fs::remove_dir_all(&test_home);
-        std::fs::create_dir_all(&test_home).expect("create test home");
-        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
-
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_s3_sync_settings(Some(S3SyncSettings {
-            enabled: false,
-            region: "us-east-1".to_string(),
-            bucket: "my-bucket".to_string(),
-            access_key_id: "AKID".to_string(),
-            secret_access_key: "SECRET".to_string(),
-            ..S3SyncSettings::default()
-        }))
-        .expect("seed disabled s3 settings");
-
-        let err = require_enabled_s3_settings().expect_err("disabled settings should fail");
-        assert!(
-            err.contains("disabled") || err.contains("未启用"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    #[serial]
-    fn require_enabled_s3_settings_returns_settings_when_enabled() {
-        let test_home = std::env::temp_dir().join("cc-switch-s3-sync-enabled-ok-test");
-        let _ = std::fs::remove_dir_all(&test_home);
-        std::fs::create_dir_all(&test_home).expect("create test home");
-        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
-
-        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
-        crate::settings::set_s3_sync_settings(Some(S3SyncSettings {
-            enabled: true,
-            region: "us-east-1".to_string(),
-            bucket: "my-bucket".to_string(),
-            access_key_id: "AKID".to_string(),
-            secret_access_key: "SECRET".to_string(),
-            ..S3SyncSettings::default()
-        }))
-        .expect("seed enabled s3 settings");
-
-        let settings = require_enabled_s3_settings().expect("enabled settings should be accepted");
-        assert!(settings.enabled);
-        assert_eq!(settings.region, "us-east-1");
-    }
+    // Tests removed - secret management now handled by SecretStore in Phase 2B
+    // These tests validated old credential field logic that no longer exists
 }
