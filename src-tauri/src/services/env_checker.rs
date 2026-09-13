@@ -2,13 +2,52 @@ use serde::{Deserialize, Serialize};
 #[cfg(not(target_os = "windows"))]
 use std::fs;
 
+/// Environment variable conflict information returned to frontend
+/// Phase 5 S11: Only expose masked value (last 4 chars) to prevent secret leakage via IPC
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvConflict {
     pub var_name: String,
-    pub var_value: String,
+    /// Masked value showing only last 4 characters (e.g., "***xyz")
+    pub masked_value: String,
     pub source_type: String, // "system" | "file"
     pub source_path: String, // Registry path or file path
+    /// Full value - only available internally for restore operations, never sent to frontend
+    #[serde(skip)]
+    pub(crate) var_value: String,
+}
+
+/// Internal struct for processing - contains full value before masking
+#[derive(Debug, Clone)]
+struct EnvConflictInternal {
+    var_name: String,
+    var_value: String,
+    source_type: String,
+    source_path: String,
+}
+
+impl EnvConflictInternal {
+    /// Convert to frontend-safe struct with masked value
+    fn to_public(self) -> EnvConflict {
+        let masked_value = mask_secret(&self.var_value);
+        EnvConflict {
+            var_name: self.var_name,
+            masked_value,
+            source_type: self.source_type,
+            source_path: self.source_path,
+            var_value: self.var_value, // Keep for restore operations
+        }
+    }
+}
+
+/// Mask a secret value by showing only the last 4 characters
+fn mask_secret(value: &str) -> String {
+    if value.len() <= 4 {
+        "***".to_string()
+    } else {
+        let suffix = &value[value.len() - 4..];
+        format!("***{}", suffix)
+    }
 }
 
 #[cfg(target_os = "windows")]
@@ -71,12 +110,12 @@ fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String>
     if let Ok(hkcu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
         for (name, value) in hkcu.enum_values().filter_map(Result::ok) {
             if matches_env_keyword(&name, keywords) {
-                conflicts.push(EnvConflict {
+                conflicts.push(EnvConflictInternal {
                     var_name: name.clone(),
                     var_value: value.to_string(),
                     source_type: "system".to_string(),
                     source_path: "HKEY_CURRENT_USER\\Environment".to_string(),
-                });
+                }.to_public());
             }
         }
     }
@@ -87,12 +126,12 @@ fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String>
     {
         for (name, value) in hklm.enum_values().filter_map(Result::ok) {
             if matches_env_keyword(&name, keywords) {
-                conflicts.push(EnvConflict {
+                conflicts.push(EnvConflictInternal {
                     var_name: name.clone(),
                     var_value: value.to_string(),
                     source_type: "system".to_string(),
                     source_path: "HKEY_LOCAL_MACHINE\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment".to_string(),
-                });
+                }.to_public());
             }
         }
     }
@@ -107,12 +146,12 @@ fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String>
     // Check current process environment
     for (key, value) in std::env::vars() {
         if matches_env_keyword(&key, keywords) {
-            conflicts.push(EnvConflict {
+            conflicts.push(EnvConflictInternal {
                 var_name: key,
                 var_value: value,
                 source_type: "system".to_string(),
                 source_path: "Process Environment".to_string(),
-            });
+            }.to_public());
         }
     }
 
@@ -153,7 +192,7 @@ fn check_shell_configs(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, Stri
 
                         // Check if variable name contains any keyword
                         if matches_env_keyword(var_name, keywords) {
-                            conflicts.push(EnvConflict {
+                            conflicts.push(EnvConflictInternal {
                                 var_name: var_name.to_string(),
                                 var_value: var_value
                                     .trim_matches('"')
@@ -161,7 +200,7 @@ fn check_shell_configs(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, Stri
                                     .to_string(),
                                 source_type: "file".to_string(),
                                 source_path: format!("{}:{}", file_path, line_num + 1),
-                            });
+                            }.to_public());
                         }
                     }
                 }

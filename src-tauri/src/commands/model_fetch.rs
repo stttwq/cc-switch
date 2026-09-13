@@ -19,10 +19,16 @@ pub async fn fetch_models_for_config(
     api_format: Option<String>,
     request_headers: Option<BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
-    // 与转发 / 检测路径共用 parse_custom_user_agent：非法 UA 静默忽略（不阻断取模型）。
-    let user_agent = crate::provider::parse_custom_user_agent(custom_user_agent.as_deref())
-        .ok()
-        .flatten();
+    // Parse custom user agent - invalid UA is silently ignored (doesn't block model fetch)
+    let user_agent = custom_user_agent
+        .as_deref()
+        .and_then(|ua| {
+            if ua.trim().is_empty() {
+                None
+            } else {
+                reqwest::header::HeaderValue::from_str(ua).ok()
+            }
+        });
     model_fetch::fetch_models(
         &base_url,
         &api_key,

@@ -645,12 +645,10 @@ impl Database {
                     AppError::Database(format!("Seed JSON parse failed for {}: {e}", seed.id))
                 })?;
 
-            let mut provider = Provider::with_id(
-                seed.id.to_string(),
-                seed.name.to_string(),
-                settings_config,
-                Some(seed.website_url.to_string()),
-            );
+            let mut provider = Provider::with_id(seed.id.to_string());
+            provider.name = seed.name.to_string();
+            provider.settings_config = settings_config;
+            provider.website_url = Some(seed.website_url.to_string());
             provider.category = Some("official".to_string());
             provider.icon = Some(seed.icon.to_string());
             provider.icon_color = Some(seed.icon_color.to_string());
@@ -711,12 +709,10 @@ impl Database {
         let next_sort_index = self.next_sort_index_for_app(app_type_str)?;
         let now_ms = chrono::Utc::now().timestamp_millis();
 
-        let mut provider = Provider::with_id(
-            seed.id.to_string(),
-            seed.name.to_string(),
-            settings_config,
-            Some(seed.website_url.to_string()),
-        );
+        let mut provider = Provider::with_id(seed.id.to_string());
+        provider.name = seed.name.to_string();
+        provider.settings_config = settings_config;
+        provider.website_url = Some(seed.website_url.to_string());
         provider.category = Some("official".to_string());
         provider.icon = Some(seed.icon.to_string());
         provider.icon_color = Some(seed.icon_color.to_string());

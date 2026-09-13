@@ -1175,11 +1175,30 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
     }
 }
 
-/// Read current live settings for an app type
+/// Read current live settings for an app type (sanitized for frontend)
+/// Phase 5 S1: Strips sensitive fields before returning to IPC
 pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
     match app_type {
         AppType::Codex => {
             let mut result = crate::codex_config::read_codex_live_settings()?;
+
+            // Sanitize auth object - remove bearer tokens
+            if let Some(obj) = result.as_object_mut() {
+                if let Some(auth) = obj.get_mut("auth").and_then(|v| v.as_object_mut()) {
+                    // Remove experimental_bearer_token if present
+                    auth.remove("experimental_bearer_token");
+                    auth.remove("bearer_token");
+                    auth.remove("api_key");
+                }
+
+                // Sanitize config text - remove bearer tokens and api keys
+                if let Some(config_text) = obj.get("config").and_then(|v| v.as_str()) {
+                    if let Ok(sanitized) = sanitize_codex_config_text(config_text) {
+                        obj.insert("config".to_string(), Value::String(sanitized));
+                    }
+                }
+            }
+
             // `modelCatalog` is a cc-switch private field that lives only in
             // the DB SSOT plus the `cc-switch-model-catalog.json` projection
             // file — it is never inlined into `auth.json` or `config.toml`.
@@ -1203,12 +1222,32 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
                     "Claude settings file is missing",
                 ));
             }
-            read_json_file(&path)
+            let mut settings: serde_json::Value = read_json_file(&path)?;
+
+            // Sanitize Claude settings - remove API keys and auth tokens
+            if let Some(obj) = settings.as_object_mut() {
+                if let Some(env) = obj.get_mut("env").and_then(|v| v.as_object_mut()) {
+                    env.remove("ANTHROPIC_API_KEY");
+                    env.remove("ANTHROPIC_AUTH_TOKEN");
+                    env.remove("ANTHROPIC_BASE_URL");
+                }
+            }
+
+            Ok(settings)
         }
         AppType::Pi => Err(AppError::InvalidInput(
             "Pi providers are read from Pi's native models file".to_string(),
         )),
     }
+}
+
+/// Sanitize Codex config.toml text by removing bearer tokens
+fn sanitize_codex_config_text(config_text: &str) -> Result<String, AppError> {
+    use crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write;
+
+    // Reuse Phase 4 sanitizer which already removes experimental_bearer_token
+    // and injects env_key references
+    sanitize_codex_config_for_live_write(config_text)
 }
 
 /// Import default configuration from live files
@@ -1250,12 +1289,9 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         }
     };
 
-    let mut provider = Provider::with_id(
-        "default".to_string(),
-        "default".to_string(),
-        settings_config,
-        None,
-    );
+    let mut provider = Provider::with_id("default".to_string());
+    provider.name = "default".to_string();
+    provider.settings_config = settings_config;
     provider.category = Some(
         if matches!(app_type, AppType::Codex) {
             let config_text = provider

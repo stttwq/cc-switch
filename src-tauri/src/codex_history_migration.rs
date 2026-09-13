@@ -1367,10 +1367,10 @@ base_url = "https://aihubmix.example/v1"
 
         let db = Database::memory().expect("memory db");
         let providers = [
-            Provider::with_id(
-                "rightcode".to_string(),
-                "RightCode".to_string(),
-                serde_json::json!({
+            {
+                let mut p = Provider::with_id("rightcode".to_string());
+                p.name = "RightCode".to_string();
+                p.settings_config = serde_json::json!({
                     "auth": {},
                     "config": r#"model_provider = "aihubmix"
 
@@ -1378,13 +1378,13 @@ base_url = "https://aihubmix.example/v1"
 name = "AIHubMix"
 base_url = "https://aihubmix.example/v1"
 "#
-                }),
-                None,
-            ),
-            Provider::with_id(
-                "legacy-ccswitch".to_string(),
-                "Legacy CC Switch".to_string(),
-                serde_json::json!({
+                });
+                p
+            },
+            {
+                let mut p = Provider::with_id("legacy-ccswitch".to_string());
+                p.name = "Legacy CC Switch".to_string();
+                p.settings_config = serde_json::json!({
                     "auth": {},
                     "config": r#"model_provider = "ccswitch"
 
@@ -1392,13 +1392,13 @@ base_url = "https://aihubmix.example/v1"
 name = "AIHubMix"
 base_url = "https://aihubmix.example/v1"
 "#
-                }),
-                None,
-            ),
-            Provider::with_id(
-                "normalized-aihubmix".to_string(),
-                "Already Normalized".to_string(),
-                serde_json::json!({
+                });
+                p
+            },
+            {
+                let mut p = Provider::with_id("normalized-aihubmix".to_string());
+                p.name = "Already Normalized".to_string();
+                p.settings_config = serde_json::json!({
                     "auth": {},
                     "config": r#"model_provider = "custom"
 
@@ -1406,13 +1406,13 @@ base_url = "https://aihubmix.example/v1"
 name = "AIHubMix"
 base_url = "https://aihubmix.example/v1"
 "#
-                }),
-                None,
-            ),
-            Provider::with_id(
-                "manual-relay".to_string(),
-                "Manual Relay".to_string(),
-                serde_json::json!({
+                });
+                p
+            },
+            {
+                let mut p = Provider::with_id("manual-relay".to_string());
+                p.name = "Manual Relay".to_string();
+                p.settings_config = serde_json::json!({
                     "auth": {},
                     "config": r#"model_provider = "my-private-relay"
 
@@ -1420,13 +1420,13 @@ base_url = "https://aihubmix.example/v1"
 name = "Manual Relay"
 base_url = "http://localhost:8080/v1"
 "#
-                }),
-                None,
-            ),
-            Provider::with_id(
-                "custom-openai".to_string(),
-                "Custom OpenAI".to_string(),
-                serde_json::json!({
+                });
+                p
+            },
+            {
+                let mut p = Provider::with_id("custom-openai".to_string());
+                p.name = "Custom OpenAI".to_string();
+                p.settings_config = serde_json::json!({
                     "auth": {},
                     "config": r#"model_provider = "openai"
 
@@ -1434,20 +1434,17 @@ base_url = "http://localhost:8080/v1"
 name = "Custom OpenAI"
 base_url = "https://proxy.example/v1"
 "#
-                }),
-                None,
-            ),
+                });
+                p
+            },
         ];
         for provider in providers {
             db.save_provider("codex", &provider).expect("save provider");
         }
 
-        let mut official = Provider::with_id(
-            "codex-official".to_string(),
-            "OpenAI Official".to_string(),
-            serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""}),
-            None,
-        );
+        let mut official = Provider::with_id("codex-official".to_string());
+        official.name = "OpenAI Official".to_string();
+        official.settings_config = serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
         official.category = Some("official".to_string());
         db.save_provider("codex", &official).expect("save official");
 
@@ -2154,21 +2151,16 @@ base_url = "https://proxy.example/v1"
     #[test]
     fn collects_third_party_provider_ids_from_codex_providers() {
         let db = Database::memory().expect("memory db");
-        let third_party = Provider::with_id(
-            "rightcode".to_string(),
-            "RightCode".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"aihubmix\"\n\n[model_providers.aihubmix]\nname = \"AIHubMix\"\nbase_url = \"https://example.com/v1\""
-            }),
-            None,
-        );
-        let mut official = Provider::with_id(
-            "codex-official".to_string(),
-            "OpenAI Official".to_string(),
-            serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""}),
-            None,
-        );
+        let mut third_party = Provider::with_id("rightcode".to_string());
+        third_party.name = "RightCode".to_string();
+        third_party.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"aihubmix\"\n\n[model_providers.aihubmix]\nname = \"AIHubMix\"\nbase_url = \"https://example.com/v1\""
+        });
+
+        let mut official = Provider::with_id("codex-official".to_string());
+        official.name = "OpenAI Official".to_string();
+        official.settings_config = serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
         official.category = Some("official".to_string());
 
         db.save_provider("codex", &third_party)
@@ -2185,15 +2177,12 @@ base_url = "https://proxy.example/v1"
     #[test]
     fn skips_unknown_provider_model_provider_id_from_existing_config() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "manual-aggregator".to_string(),
-            "Manual Aggregator".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"my-private-relay\"\n\n[model_providers.my-private-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("manual-aggregator".to_string());
+        provider.name = "Manual Aggregator".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"my-private-relay\"\n\n[model_providers.my-private-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
+        });
         provider.category = Some("aggregator".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");
@@ -2205,15 +2194,12 @@ base_url = "https://proxy.example/v1"
     #[test]
     fn skips_undefined_provider_model_provider_id_from_existing_config() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "manual-aggregator".to_string(),
-            "Manual Aggregator".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"my-private-relay\"\n"
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("manual-aggregator".to_string());
+        provider.name = "Manual Aggregator".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"my-private-relay\"\n"
+        });
         provider.category = Some("aggregator".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");
@@ -2225,12 +2211,11 @@ base_url = "https://proxy.example/v1"
     #[test]
     fn skips_unknown_profile_model_provider_id_from_existing_config() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "manual-aggregator".to_string(),
-            "Manual Aggregator".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"profile = "work"
+        let mut provider = Provider::with_id("manual-aggregator".to_string());
+        provider.name = "Manual Aggregator".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"profile = "work"
 
 [model_providers.my-private-relay]
 name = "Manual Relay"
@@ -2239,9 +2224,7 @@ base_url = "http://localhost:8080/v1"
 [profiles.work]
 model_provider = "my-private-relay"
 "#
-            }),
-            None,
-        );
+        });
         provider.category = Some("aggregator".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");
@@ -2253,15 +2236,12 @@ model_provider = "my-private-relay"
     #[test]
     fn collects_known_legacy_provider_id_from_normalized_preset_config() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "generated-uuid".to_string(),
-            "AIHubMix".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"AIHubMix\"\nbase_url = \"https://aihubmix.example/v1\""
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("generated-uuid".to_string());
+        provider.name = "AIHubMix".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"custom\"\n\n[model_providers.custom]\nname = \"AIHubMix\"\nbase_url = \"https://aihubmix.example/v1\""
+        });
         provider.category = Some("aggregator".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");
@@ -2274,15 +2254,12 @@ model_provider = "my-private-relay"
     #[test]
     fn collects_legacy_ccswitch_provider_id_from_stored_config() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "generated-uuid".to_string(),
-            "Legacy Stable".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"ccswitch\"\n\n[model_providers.ccswitch]\nname = \"AIHubMix\"\nbase_url = \"https://aihubmix.example/v1\""
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("generated-uuid".to_string());
+        provider.name = "Legacy Stable".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"ccswitch\"\n\n[model_providers.ccswitch]\nname = \"AIHubMix\"\nbase_url = \"https://aihubmix.example/v1\""
+        });
         provider.category = Some("aggregator".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");
@@ -2296,12 +2273,11 @@ model_provider = "my-private-relay"
     #[test]
     fn migrates_stored_provider_template_to_custom() {
         let db = Database::memory().expect("memory db");
-        let provider = Provider::with_id(
-            "legacy".to_string(),
-            "Legacy Stable".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"model_provider = "aihubmix"
+        let mut provider = Provider::with_id("legacy".to_string());
+        provider.name = "Legacy Stable".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"model_provider = "aihubmix"
 model = "gpt-5.4"
 profile = "work"
 
@@ -2314,9 +2290,7 @@ wire_api = "responses"
 model_provider = "aihubmix"
 model = "gpt-5.4"
 "#
-            }),
-            None,
-        );
+        });
         db.save_provider("codex", &provider).expect("save provider");
 
         let (outcome, backup_dir) = migrate_provider_templates_for_test(&db);
@@ -2376,20 +2350,17 @@ model = "gpt-5.4"
     #[test]
     fn migrates_legacy_ccswitch_provider_template_to_custom() {
         let db = Database::memory().expect("memory db");
-        let provider = Provider::with_id(
-            "legacy-ccswitch".to_string(),
-            "Legacy CC Switch".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"model_provider = "ccswitch"
+        let mut provider = Provider::with_id("legacy-ccswitch".to_string());
+        provider.name = "Legacy CC Switch".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"model_provider = "ccswitch"
 
 [model_providers.ccswitch]
 name = "AIHubMix"
 base_url = "https://aihubmix.example/v1"
 "#
-            }),
-            None,
-        );
+        });
         db.save_provider("codex", &provider).expect("save provider");
 
         let (outcome, _backup_dir) = migrate_provider_templates_for_test(&db);
@@ -2432,20 +2403,17 @@ base_url = "https://aihubmix.example/v1"
     #[test]
     fn skips_unknown_stored_provider_template() {
         let db = Database::memory().expect("memory db");
-        let provider = Provider::with_id(
-            "manual".to_string(),
-            "Manual Relay".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"model_provider = "my-private-relay"
+        let mut provider = Provider::with_id("manual".to_string());
+        provider.name = "Manual Relay".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"model_provider = "my-private-relay"
 
 [model_providers.my-private-relay]
 name = "Manual Relay"
 base_url = "http://localhost:8080/v1"
 "#
-            }),
-            None,
-        );
+        });
         db.save_provider("codex", &provider).expect("save provider");
 
         let (outcome, _backup_dir) = migrate_provider_templates_for_test(&db);
@@ -2481,20 +2449,17 @@ base_url = "http://localhost:8080/v1"
     #[test]
     fn skips_reserved_key_in_non_official_stored_provider_template() {
         let db = Database::memory().expect("memory db");
-        let provider = Provider::with_id(
-            "custom-openai".to_string(),
-            "Custom OpenAI".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"model_provider = "openai"
+        let mut provider = Provider::with_id("custom-openai".to_string());
+        provider.name = "Custom OpenAI".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"model_provider = "openai"
 
 [model_providers.openai]
 name = "Custom OpenAI"
 base_url = "https://proxy.example/v1"
 "#
-            }),
-            None,
-        );
+        });
         db.save_provider("codex", &provider).expect("save provider");
 
         let (outcome, _backup_dir) = migrate_provider_templates_for_test(&db);
@@ -2530,12 +2495,11 @@ base_url = "https://proxy.example/v1"
     #[test]
     fn migrates_profile_model_provider_refs_to_custom_when_top_level_is_already_custom() {
         let db = Database::memory().expect("memory db");
-        let provider = Provider::with_id(
-            "profiled".to_string(),
-            "Profiled Relay".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": r#"model_provider = "custom"
+        let mut provider = Provider::with_id("profiled".to_string());
+        provider.name = "Profiled Relay".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": r#"model_provider = "custom"
 profile = "work"
 
 [model_providers.custom]
@@ -2549,9 +2513,7 @@ base_url = "https://aihubmix.example/v1"
 [profiles.work]
 model_provider = "aihubmix"
 "#
-            }),
-            None,
-        );
+        });
         db.save_provider("codex", &provider).expect("save provider");
 
         let (outcome, _backup_dir) = migrate_provider_templates_for_test(&db);
@@ -2589,15 +2551,12 @@ model_provider = "aihubmix"
     #[test]
     fn skips_custom_category_unknown_provider_when_created_by_cc_switch() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "generated-uuid".to_string(),
-            "Manual Relay".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"my-private-relay\"\n\n[model_providers.my-private-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("generated-uuid".to_string());
+        provider.name = "Manual Relay".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"my-private-relay\"\n\n[model_providers.my-private-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
+        });
         provider.category = Some("custom".to_string());
         provider.created_at = Some(1);
 
@@ -2611,15 +2570,12 @@ model_provider = "aihubmix"
     #[test]
     fn skips_custom_category_unknown_provider_model_provider_id() {
         let db = Database::memory().expect("memory db");
-        let mut provider = Provider::with_id(
-            "manual".to_string(),
-            "Manual Relay".to_string(),
-            serde_json::json!({
-                "auth": {},
-                "config": "model_provider = \"my-local-relay\"\n\n[model_providers.my-local-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
-            }),
-            None,
-        );
+        let mut provider = Provider::with_id("manual".to_string());
+        provider.name = "Manual Relay".to_string();
+        provider.settings_config = serde_json::json!({
+            "auth": {},
+            "config": "model_provider = \"my-local-relay\"\n\n[model_providers.my-local-relay]\nname = \"Manual Relay\"\nbase_url = \"http://localhost:8080/v1\""
+        });
         provider.category = Some("custom".to_string());
 
         db.save_provider("codex", &provider).expect("save provider");

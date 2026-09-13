@@ -197,7 +197,9 @@ fn sync_native_locked(
     for (id, config) in native {
         let mut provider = saved.get(id).cloned().unwrap_or_else(|| {
             let name = native_provider_name(config).unwrap_or(id).to_string();
-            let mut imported = Provider::with_id(id.clone(), name, config.clone(), None);
+            let mut imported = Provider::with_id(id.clone());
+            imported.name = name;
+            imported.settings_config = config.clone();
             imported.category = Some("custom".to_string());
             imported.icon = Some("pi".to_string());
             imported
@@ -243,13 +245,6 @@ fn align_native_display_name(provider: &mut Provider) {
 
 fn strip_unsupported_pi_metadata(provider: &mut Provider) {
     provider.in_failover_queue = false;
-    let Some(meta) = provider.meta.take() else {
-        return;
-    };
-    provider.meta = Some(ProviderMeta {
-        usage_script: meta.usage_script,
-        is_partner: meta.is_partner,
-        partner_promotion_key: meta.partner_promotion_key,
-        ..ProviderMeta::default()
-    });
+    // Pi doesn't support most metadata fields, so clear them
+    provider.meta = None;
 }

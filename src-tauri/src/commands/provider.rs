@@ -3,19 +3,28 @@ use tauri::{Manager, State};
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::provider::Provider;
+use crate::provider::{Provider, ProviderForFrontend};
 use crate::services::{ProviderService, ProviderSortUpdate, SwitchResult};
 use crate::store::AppState;
 use std::str::FromStr;
 
-/// 获取所有供应商
+/// 获取所有供应商（前端安全版本，不包含 settings_config）
+/// Phase 5 S1: IPC 零密钥 - 防止 settings_config 中的敏感字段泄漏到前端
 #[tauri::command]
 pub fn get_providers(
     state: State<'_, AppState>,
     app: String,
-) -> Result<IndexMap<String, Provider>, String> {
+) -> Result<IndexMap<String, ProviderForFrontend>, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::list(state.inner(), app_type).map_err(|e| e.to_string())
+    let providers = ProviderService::list(state.inner(), app_type).map_err(|e| e.to_string())?;
+
+    // Strip settings_config from all providers before returning to frontend
+    let sanitized = providers
+        .into_iter()
+        .map(|(id, provider)| (id, provider.to_frontend()))
+        .collect();
+
+    Ok(sanitized)
 }
 
 #[tauri::command]
