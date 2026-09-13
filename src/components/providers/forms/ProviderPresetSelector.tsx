@@ -15,11 +15,6 @@ import {
 } from "lucide-react";
 import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
-import type { GeminiProviderPreset } from "@/config/geminiProviderPresets";
-import type { ClaudeDesktopProviderPreset } from "@/config/claudeDesktopProviderPresets";
-import type { OpenCodeProviderPreset } from "@/config/opencodeProviderPresets";
-import type { OpenClawProviderPreset } from "@/config/openclawProviderPresets";
-import type { HermesProviderPreset } from "@/config/hermesProviderPresets";
 import type { PiProviderPreset } from "@/config/piProviderPresets";
 import type { ProviderCategory } from "@/types";
 import {
@@ -38,15 +33,7 @@ export const PresetSortMode = {
 export type PresetSortMode =
   (typeof PresetSortMode)[keyof typeof PresetSortMode];
 
-export type AnyPreset =
-  | ProviderPreset
-  | CodexProviderPreset
-  | GeminiProviderPreset
-  | ClaudeDesktopProviderPreset
-  | OpenCodeProviderPreset
-  | OpenClawProviderPreset
-  | HermesProviderPreset
-  | PiProviderPreset;
+export type AnyPreset = ProviderPreset | CodexProviderPreset | PiProviderPreset;
 
 export type PresetEntry = {
   id: string;

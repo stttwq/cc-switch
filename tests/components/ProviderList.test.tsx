@@ -20,14 +20,7 @@ vi.mock("@/hooks/useDragSort", () => ({
 vi.mock("@/components/providers/ProviderCard", () => ({
   ProviderCard: (props: any) => {
     providerCardRenderSpy(props);
-    const {
-      provider,
-      onSwitch,
-      onEdit,
-      onDelete,
-      onDuplicate,
-      onConfigureUsage,
-    } = props;
+    const { provider, onSwitch, onEdit, onDelete, onDuplicate } = props;
 
     return (
       <div data-testid={`provider-card-${provider.id}`}>
@@ -48,12 +41,6 @@ vi.mock("@/components/providers/ProviderCard", () => ({
           onClick={() => onDuplicate(provider)}
         >
           duplicate
-        </button>
-        <button
-          data-testid={`usage-${provider.id}`}
-          onClick={() => onConfigureUsage(provider)}
-        >
-          usage
         </button>
         <button
           data-testid={`delete-${provider.id}`}
@@ -205,7 +192,6 @@ describe("ProviderList Component", () => {
     const handleEdit = vi.fn();
     const handleDelete = vi.fn();
     const handleDuplicate = vi.fn();
-    const handleUsage = vi.fn();
     const handleOpenWebsite = vi.fn();
 
     useDragSortMock.mockReturnValue({
@@ -223,7 +209,6 @@ describe("ProviderList Component", () => {
         onEdit={handleEdit}
         onDelete={handleDelete}
         onDuplicate={handleDuplicate}
-        onConfigureUsage={handleUsage}
         onOpenWebsite={handleOpenWebsite}
       />,
     );
@@ -252,13 +237,11 @@ describe("ProviderList Component", () => {
     fireEvent.click(screen.getByTestId("switch-b"));
     fireEvent.click(screen.getByTestId("edit-b"));
     fireEvent.click(screen.getByTestId("duplicate-b"));
-    fireEvent.click(screen.getByTestId("usage-b"));
     fireEvent.click(screen.getByTestId("delete-a"));
 
     expect(handleSwitch).toHaveBeenCalledWith(providerB);
     expect(handleEdit).toHaveBeenCalledWith(providerB);
     expect(handleDuplicate).toHaveBeenCalledWith(providerB);
-    expect(handleUsage).toHaveBeenCalledWith(providerB);
     expect(handleDelete).toHaveBeenCalledWith(providerA);
 
     // Verify useDragSort call parameters
@@ -339,74 +322,6 @@ describe("ProviderList Component", () => {
     expect(
       screen.queryByRole("button", { name: "provider.addProvider" }),
     ).not.toBeInTheDocument();
-  });
-
-  it("does not expose proxy or failover actions on Pi provider cards", async () => {
-    const currentProvider = createProvider({
-      id: "current-pi",
-      name: "Current Pi",
-    });
-    const inactiveProvider = createProvider({
-      id: "inactive-pi",
-      name: "Inactive Pi",
-    });
-    useDragSortMock.mockReturnValue({
-      sortedProviders: [currentProvider, inactiveProvider],
-      sensors: [],
-      handleDragEnd: vi.fn(),
-    });
-    server.use(
-      http.post(`${TAURI_ENDPOINT}/get_pi_current_state`, () =>
-        HttpResponse.json({
-          enabledProviderIds: ["current-pi", "inactive-pi"],
-        }),
-      ),
-    );
-
-    renderWithQueryClient(
-      <ProviderList
-        providers={{
-          [currentProvider.id]: currentProvider,
-          [inactiveProvider.id]: inactiveProvider,
-        }}
-        currentProviderId="current-pi"
-        appId="pi"
-        isProxyRunning
-        isProxyTakeover
-        activeProviderId="current-pi"
-        onSwitch={vi.fn()}
-        onEdit={vi.fn()}
-        onDelete={vi.fn()}
-        onDuplicate={vi.fn()}
-        onOpenWebsite={vi.fn()}
-      />,
-    );
-
-    await waitFor(() => {
-      const currentCards = providerCardRenderSpy.mock.calls
-        .map(([props]) => props)
-        .filter((props) => props.provider.id === "current-pi");
-      const inactiveCards = providerCardRenderSpy.mock.calls
-        .map(([props]) => props)
-        .filter((props) => props.provider.id === "inactive-pi");
-      expect(currentCards).not.toHaveLength(0);
-      expect(inactiveCards).not.toHaveLength(0);
-      expect(currentCards.at(-1)).toMatchObject({
-        isCurrent: false,
-        isRemovalProtected: false,
-        isProxyRunning: false,
-        isProxyTakeover: false,
-        isAutoFailoverEnabled: false,
-        activeProviderId: undefined,
-        onToggleFailover: undefined,
-      });
-      expect(inactiveCards.at(-1)).toMatchObject({
-        isCurrent: false,
-        isProxyRunning: false,
-        isProxyTakeover: false,
-      });
-      expect(currentCards.at(-1)).not.toHaveProperty("piCurrentRoute");
-    });
   });
 
   it("derives Pi membership only from the native provider ID list", async () => {

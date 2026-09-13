@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -25,35 +25,17 @@ import {
   Wand2,
 } from "lucide-react";
 import EndpointSpeedTest from "./EndpointSpeedTest";
+import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import {
-  ApiKeySection,
-  EndpointField,
-  ModelDropdown,
-  ModelInputWithFetch,
-} from "./shared";
-import { CopilotAuthSection } from "./CopilotAuthSection";
-import { CodexOAuthSection } from "./CodexOAuthSection";
-import { XaiOAuthSection } from "./XaiOAuthSection";
-import {
-  copilotGetModels,
-  copilotGetModelsForAccount,
-} from "@/lib/api/copilot";
-import type { CopilotModel } from "@/lib/api/copilot";
-import {
-  fetchCodexOauthModels,
-  fetchXaiOauthModels,
   fetchModelsForConfig,
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
-import { CustomUserAgentField } from "./CustomUserAgentField";
-import { LocalProxyRequestOverridesField } from "./LocalProxyRequestOverridesField";
 import type {
   ProviderCategory,
   ClaudeApiFormat,
   ClaudeApiKeyField,
 } from "@/types";
-import type { ManagedAuthProvider } from "@/lib/api";
 import {
   hasClaudeOneMMarker,
   setClaudeOneMMarker,
@@ -81,30 +63,8 @@ interface ClaudeFormFieldsProps {
   isPartner?: boolean;
   partnerPromotionKey?: string;
 
-  // GitHub Copilot OAuth
-  isCopilotPreset?: boolean;
+  // OAuth 预设
   usesOAuth?: boolean;
-  isCopilotAuthenticated?: boolean;
-  /** 当前选中的 GitHub 账号 ID（多账号支持） */
-  selectedGitHubAccountId?: string | null;
-  /** GitHub 账号选择回调（多账号支持） */
-  onGitHubAccountSelect?: (accountId: string | null) => void;
-  /** 打开托管账号管理入口 */
-  onManageAuthAccounts?: (target: ManagedAuthProvider) => void;
-
-  // Codex OAuth (ChatGPT Plus/Pro)
-  isCodexOauthPreset?: boolean;
-  isCodexOauthAuthenticated?: boolean;
-  selectedCodexAccountId?: string | null;
-  onCodexAccountSelect?: (accountId: string | null) => void;
-  codexFastMode?: boolean;
-  onCodexFastModeChange?: (enabled: boolean) => void;
-
-  // xAI OAuth
-  isXaiOauthPreset?: boolean;
-  isXaiOauthAuthenticated?: boolean;
-  selectedXaiAccountId?: string | null;
-  onXaiAccountSelect?: (accountId: string | null) => void;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -151,14 +111,6 @@ interface ClaudeFormFieldsProps {
   // Full URL mode
   isFullUrl: boolean;
   onFullUrlChange: (value: boolean) => void;
-
-  // Local proxy User-Agent override
-  customUserAgent: string;
-  onCustomUserAgentChange: (value: string) => void;
-  localProxyHeadersOverride: string;
-  onLocalProxyHeadersOverrideChange: (value: string) => void;
-  localProxyBodyOverride: string;
-  onLocalProxyBodyOverrideChange: (value: string) => void;
 }
 
 export function ClaudeFormFields({
@@ -171,22 +123,7 @@ export function ClaudeFormFields({
   websiteUrl,
   isPartner,
   partnerPromotionKey,
-  isCopilotPreset,
   usesOAuth,
-  isCopilotAuthenticated,
-  selectedGitHubAccountId,
-  onGitHubAccountSelect,
-  onManageAuthAccounts,
-  isCodexOauthPreset,
-  isCodexOauthAuthenticated,
-  selectedCodexAccountId,
-  onCodexAccountSelect,
-  codexFastMode,
-  onCodexFastModeChange,
-  isXaiOauthPreset,
-  isXaiOauthAuthenticated,
-  selectedXaiAccountId,
-  onXaiAccountSelect,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -219,17 +156,8 @@ export function ClaudeFormFields({
   onApiKeyFieldChange,
   isFullUrl,
   onFullUrlChange,
-  customUserAgent,
-  onCustomUserAgentChange,
-  localProxyHeadersOverride,
-  onLocalProxyHeadersOverrideChange,
-  localProxyBodyOverride,
-  onLocalProxyBodyOverrideChange,
 }: ClaudeFormFieldsProps) {
   const { t } = useTranslation();
-  const hasRequestOverrides = Boolean(
-    localProxyHeadersOverride.trim() || localProxyBodyOverride.trim(),
-  );
   const hasAnyAdvancedValue = !!(
     claudeModel ||
     defaultHaikuModel ||
@@ -237,37 +165,18 @@ export function ClaudeFormFields({
     defaultOpusModel ||
     defaultFableModel ||
     subagentModel ||
-    (!isXaiOauthPreset && apiFormat !== "anthropic") ||
-    apiKeyField !== "ANTHROPIC_AUTH_TOKEN" ||
-    customUserAgent ||
-    hasRequestOverrides
+    apiFormat !== "anthropic" ||
+    apiKeyField !== "ANTHROPIC_AUTH_TOKEN"
   );
-  const [advancedExpanded, setAdvancedExpanded] = useState(
-    isXaiOauthPreset ? false : hasAnyAdvancedValue,
-  );
+  const [advancedExpanded, setAdvancedExpanded] = useState(hasAnyAdvancedValue);
 
   // 预设填充高级值后自动展开（仅从折叠→展开，不会自动折叠）
   useEffect(() => {
-    if (isXaiOauthPreset) {
-      setAdvancedExpanded(false);
-    } else if (hasAnyAdvancedValue) {
+    if (hasAnyAdvancedValue) {
       setAdvancedExpanded(true);
     }
-  }, [hasAnyAdvancedValue, isXaiOauthPreset]);
+  }, [hasAnyAdvancedValue]);
 
-  // Copilot 可用模型列表
-  const [copilotModels, setCopilotModels] = useState<CopilotModel[]>([]);
-  const [modelsLoading, setModelsLoading] = useState(false);
-  const copilotModelsRequestRef = useRef(0);
-
-  // Codex OAuth 可用模型列表
-  const [codexOauthModels, setCodexOauthModels] = useState<FetchedModel[]>([]);
-  const [codexOauthModelsLoading, setCodexOauthModelsLoading] = useState(false);
-  const codexOauthModelsRequestRef = useRef(0);
-
-  const [xaiOauthModels, setXaiOauthModels] = useState<FetchedModel[]>([]);
-  const [xaiOauthModelsLoading, setXaiOauthModelsLoading] = useState(false);
-  const xaiOauthModelsRequestRef = useRef(0);
   const fallbackUsesOneM = hasClaudeOneMMarker(claudeModel);
 
   // 通用模型获取（非 Copilot 供应商）
@@ -302,7 +211,7 @@ export function ClaudeFormFields({
     const modelsUrl = matchedPreset?.modelsUrl;
 
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl, customUserAgent)
+    fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl)
       .then((models) => {
         setFetchedModels(models);
         showModelFetchResult(models.length);
@@ -312,151 +221,10 @@ export function ClaudeFormFields({
         showFetchModelsError(err, t);
       })
       .finally(() => setIsFetchingModels(false));
-  }, [baseUrl, apiKey, isFullUrl, customUserAgent, showModelFetchResult, t]);
+  }, [baseUrl, apiKey, isFullUrl, showModelFetchResult, t]);
 
-  const handleFetchCopilotModels = useCallback(() => {
-    if (!isCopilotAuthenticated) {
-      toast.error(
-        t("copilot.loginRequired", {
-          defaultValue: "请先登录 GitHub Copilot",
-        }),
-      );
-      return;
-    }
-
-    const requestId = copilotModelsRequestRef.current + 1;
-    copilotModelsRequestRef.current = requestId;
-    setModelsLoading(true);
-    const fetchModels = selectedGitHubAccountId
-      ? copilotGetModelsForAccount(selectedGitHubAccountId)
-      : copilotGetModels();
-
-    fetchModels
-      .then((models) => {
-        if (copilotModelsRequestRef.current !== requestId) return;
-        setCopilotModels(models);
-        showModelFetchResult(models.length);
-      })
-      .catch((err) => {
-        if (copilotModelsRequestRef.current !== requestId) return;
-        console.warn("[Copilot] Failed to fetch models:", err);
-        toast.error(
-          t("copilot.loadModelsFailed", {
-            defaultValue: "加载 Copilot 模型列表失败",
-          }),
-        );
-      })
-      .finally(() => {
-        if (copilotModelsRequestRef.current === requestId) {
-          setModelsLoading(false);
-        }
-      });
-  }, [
-    isCopilotAuthenticated,
-    selectedGitHubAccountId,
-    showModelFetchResult,
-    t,
-  ]);
-
-  const handleFetchCodexOauthModels = useCallback(() => {
-    if (!isCodexOauthAuthenticated) {
-      toast.error(
-        t("codexOauth.loginRequired", {
-          defaultValue: "请先登录 ChatGPT 账号",
-        }),
-      );
-      return;
-    }
-
-    const requestId = codexOauthModelsRequestRef.current + 1;
-    codexOauthModelsRequestRef.current = requestId;
-    setCodexOauthModelsLoading(true);
-    fetchCodexOauthModels(selectedCodexAccountId)
-      .then((models) => {
-        if (codexOauthModelsRequestRef.current !== requestId) return;
-        setCodexOauthModels(models);
-        showModelFetchResult(models.length);
-      })
-      .catch((err) => {
-        if (codexOauthModelsRequestRef.current !== requestId) return;
-        console.warn("[CodexOAuth] Failed to fetch models:", err);
-        showFetchModelsError(err, t);
-      })
-      .finally(() => {
-        if (codexOauthModelsRequestRef.current === requestId) {
-          setCodexOauthModelsLoading(false);
-        }
-      });
-  }, [
-    isCodexOauthAuthenticated,
-    selectedCodexAccountId,
-    showModelFetchResult,
-    t,
-  ]);
-
-  const handleFetchXaiOauthModels = useCallback(() => {
-    if (!isXaiOauthAuthenticated) {
-      toast.error(
-        t("xaiOauth.loginRequired", {
-          defaultValue: "请先登录 xAI 账号",
-        }),
-      );
-      return;
-    }
-
-    const requestId = xaiOauthModelsRequestRef.current + 1;
-    xaiOauthModelsRequestRef.current = requestId;
-    setXaiOauthModelsLoading(true);
-    fetchXaiOauthModels(selectedXaiAccountId)
-      .then((models) => {
-        if (xaiOauthModelsRequestRef.current !== requestId) return;
-        setXaiOauthModels(models);
-        showModelFetchResult(models.length);
-      })
-      .catch((err) => {
-        if (xaiOauthModelsRequestRef.current !== requestId) return;
-        console.warn("[XaiOAuth] Failed to fetch models:", err);
-        showFetchModelsError(err, t);
-      })
-      .finally(() => {
-        if (xaiOauthModelsRequestRef.current === requestId) {
-          setXaiOauthModelsLoading(false);
-        }
-      });
-  }, [isXaiOauthAuthenticated, selectedXaiAccountId, showModelFetchResult, t]);
-
-  useEffect(() => {
-    copilotModelsRequestRef.current += 1;
-    setCopilotModels([]);
-    setModelsLoading(false);
-  }, [isCopilotPreset, isCopilotAuthenticated, selectedGitHubAccountId]);
-
-  useEffect(() => {
-    codexOauthModelsRequestRef.current += 1;
-    setCodexOauthModels([]);
-    setCodexOauthModelsLoading(false);
-  }, [isCodexOauthPreset, isCodexOauthAuthenticated, selectedCodexAccountId]);
-
-  useEffect(() => {
-    xaiOauthModelsRequestRef.current += 1;
-    setXaiOauthModels([]);
-    setXaiOauthModelsLoading(false);
-  }, [isXaiOauthPreset, isXaiOauthAuthenticated, selectedXaiAccountId]);
-
-  const modelFetchLoading = isCopilotPreset
-    ? modelsLoading
-    : isCodexOauthPreset
-      ? codexOauthModelsLoading
-      : isXaiOauthPreset
-        ? xaiOauthModelsLoading
-        : isFetchingModels;
-  const handleModelFetchClick = isCopilotPreset
-    ? handleFetchCopilotModels
-    : isCodexOauthPreset
-      ? handleFetchCodexOauthModels
-      : isXaiOauthPreset
-        ? handleFetchXaiOauthModels
-        : handleFetchModels;
+  const modelFetchLoading = isFetchingModels;
+  const handleModelFetchClick = handleFetchModels;
 
   // 模型输入框：支持手动输入 + 下拉选择
   const renderModelInput = (
@@ -468,87 +236,6 @@ export function ClaudeFormFields({
   ) => {
     const updateValue =
       onValueChange ?? ((next: string) => onModelChange(field, next));
-
-    if (isCodexOauthPreset) {
-      return (
-        <ModelInputWithFetch
-          id={id}
-          value={value}
-          onChange={updateValue}
-          placeholder={placeholder}
-          fetchedModels={codexOauthModels}
-          isLoading={codexOauthModelsLoading}
-        />
-      );
-    }
-
-    if (isXaiOauthPreset) {
-      return (
-        <ModelInputWithFetch
-          id={id}
-          value={value}
-          onChange={updateValue}
-          placeholder={placeholder}
-          fetchedModels={xaiOauthModels}
-          isLoading={xaiOauthModelsLoading}
-        />
-      );
-    }
-
-    if (isCopilotPreset && copilotModels.length > 0) {
-      // Reuse the searchable dropdown by mapping Copilot models to FetchedModel.
-      const copilotFetchedModels: FetchedModel[] = copilotModels.map((m) => ({
-        id: m.id,
-        ownedBy: m.vendor || null,
-      }));
-
-      return (
-        <div className="flex gap-1">
-          <Input
-            id={id}
-            type="text"
-            value={value}
-            onChange={(e) => updateValue(e.target.value)}
-            placeholder={placeholder}
-            autoComplete="off"
-            className="flex-1"
-          />
-          <ModelDropdown models={copilotFetchedModels} onSelect={updateValue} />
-        </div>
-      );
-    }
-
-    if (isCopilotPreset && modelsLoading) {
-      return (
-        <div className="flex gap-1">
-          <Input
-            id={id}
-            type="text"
-            value={value}
-            onChange={(e) => updateValue(e.target.value)}
-            placeholder={placeholder}
-            autoComplete="off"
-            className="flex-1"
-          />
-          <Button variant="outline" size="icon" className="shrink-0" disabled>
-            <Loader2 className="h-4 w-4 animate-spin" />
-          </Button>
-        </div>
-      );
-    }
-
-    if (isCopilotPreset) {
-      return (
-        <Input
-          id={id}
-          type="text"
-          value={value}
-          onChange={(e) => updateValue(e.target.value)}
-          placeholder={placeholder}
-          autoComplete="off"
-        />
-      );
-    }
 
     // 普通供应商: 使用 ModelInputWithFetch（获取按钮在 section 标题旁）
     return (
@@ -648,43 +335,6 @@ export function ClaudeFormFields({
 
   return (
     <>
-      {/* GitHub Copilot OAuth 认证 */}
-      {isCopilotPreset && (
-        <CopilotAuthSection
-          mode="select"
-          selectedAccountId={selectedGitHubAccountId}
-          onAccountSelect={onGitHubAccountSelect}
-          onManageAccounts={
-            onManageAuthAccounts
-              ? () => onManageAuthAccounts("github_copilot")
-              : undefined
-          }
-        />
-      )}
-
-      {/* Codex OAuth 认证 (ChatGPT Plus/Pro) */}
-      {isCodexOauthPreset && (
-        <CodexOAuthSection
-          mode="select"
-          selectedAccountId={selectedCodexAccountId}
-          onAccountSelect={onCodexAccountSelect}
-          onManageAccounts={
-            onManageAuthAccounts
-              ? () => onManageAuthAccounts("codex_oauth")
-              : undefined
-          }
-          fastModeEnabled={codexFastMode}
-          onFastModeChange={onCodexFastModeChange}
-        />
-      )}
-
-      {isXaiOauthPreset && (
-        <XaiOAuthSection
-          selectedAccountId={selectedXaiAccountId}
-          onAccountSelect={onXaiAccountSelect}
-        />
-      )}
-
       {/* API Key 输入框（非 OAuth 预设时显示） */}
       {shouldShowApiKey && !usesOAuth && (
         <ApiKeySection
@@ -759,7 +409,7 @@ export function ClaudeFormFields({
           onManageClick={
             showEndpointTools ? () => onEndpointModalToggle(true) : undefined
           }
-          showFullUrlToggle={showEndpointTools && !isXaiOauthPreset}
+          showFullUrlToggle={showEndpointTools}
           isFullUrl={isFullUrl}
           onFullUrlChange={onFullUrlChange}
         />
@@ -809,7 +459,7 @@ export function ClaudeFormFields({
           )}
           <CollapsibleContent className="space-y-4 pt-2">
             {/* 上游格式选择（仅非云服务商显示） */}
-            {category !== "cloud_provider" && !isXaiOauthPreset && (
+            {category !== "cloud_provider" && (
               <div className="space-y-2">
                 <FormLabel htmlFor="apiFormat">
                   {t("providerForm.apiFormat", { defaultValue: "上游格式" })}
@@ -1093,21 +743,6 @@ export function ClaudeFormFields({
                     "用于未明确落到 Sonnet、Opus、Fable、Haiku 角色的请求。使用第三方/中转端点时建议填写：否则这些请求（含 Haiku 后台子任务）会以原始 Claude 模型名透传给上游，可能因上游无此模型而报错。官方端点可留空。",
                 })}
               </p>
-            </div>
-
-            <CustomUserAgentField
-              id="claude-custom-user-agent"
-              value={customUserAgent}
-              onChange={onCustomUserAgentChange}
-            />
-
-            <div className="border-t border-border-default pt-3">
-              <LocalProxyRequestOverridesField
-                headersJson={localProxyHeadersOverride}
-                bodyJson={localProxyBodyOverride}
-                onHeadersJsonChange={onLocalProxyHeadersOverrideChange}
-                onBodyJsonChange={onLocalProxyBodyOverrideChange}
-              />
             </div>
           </CollapsibleContent>
         </Collapsible>

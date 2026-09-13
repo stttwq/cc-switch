@@ -391,35 +391,6 @@ describe("EditProviderDialog", () => {
     ).toEqual(provider.settingsConfig);
   });
 
-  it("clears the nested auth panel before the dialog reopens", async () => {
-    const provider: Provider = {
-      id: "official",
-      name: "OpenAI Official",
-      settingsConfig: { auth: {}, config: "" },
-    };
-    const props = {
-      provider,
-      onOpenChange: vi.fn(),
-      onSubmit: vi.fn(),
-      appId: "codex" as const,
-    };
-    const { rerender } = render(<EditProviderDialog open {...props} />);
-
-    fireEvent.click(screen.getByRole("button", { name: "manage-auth" }));
-    expect(screen.getByTestId("auth-settings-panel")).toHaveTextContent(
-      "codex_oauth",
-    );
-
-    rerender(<EditProviderDialog open={false} {...props} />);
-    rerender(<EditProviderDialog open {...props} />);
-
-    await waitFor(() => {
-      expect(
-        screen.queryByTestId("auth-settings-panel"),
-      ).not.toBeInTheDocument();
-    });
-  });
-
   it("keeps an unbound Codex Official provider ID unchanged", async () => {
     apiMocks.getCurrent.mockResolvedValue(null);
     const onSubmit = vi.fn();

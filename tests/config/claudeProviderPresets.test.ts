@@ -1,7 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { providerPresets } from "@/config/claudeProviderPresets";
-import type { Provider } from "@/types";
-import { providerNeedsRouting } from "@/utils/providerCapabilities";
 
 describe("Kimi For Coding Provider Preset", () => {
   const kimiForCoding = providerPresets.find(
@@ -69,21 +67,6 @@ describe("OpenCode Go Provider Preset", () => {
     // 原生 anthropic 直连的预设不写 apiFormat（缺省即免路由）
     expect(openCodeGo!.apiFormat).toBeUndefined();
     expect(openCodeGo!.apiKeyField).toBe("ANTHROPIC_API_KEY");
-  });
-
-  it("should not require local routing in Claude Code", () => {
-    const provider: Provider = {
-      id: "opencode-go",
-      name: openCodeGo!.name,
-      category: openCodeGo!.category,
-      settingsConfig: openCodeGo!.settingsConfig as Record<string, any>,
-      meta: {
-        apiFormat: openCodeGo!.apiFormat,
-        apiKeyField: openCodeGo!.apiKeyField,
-      },
-    };
-
-    expect(providerNeedsRouting("claude", provider)).toBe(false);
   });
 });
 

@@ -282,13 +282,6 @@ export const getLiveProviderIds = (
   appType: "opencode" | "openclaw" | "hermes",
 ) => [...liveProviderIds[appType]];
 
-export const setLiveProviderIds = (
-  appType: "opencode" | "openclaw" | "hermes",
-  ids: string[],
-) => {
-  liveProviderIds[appType] = [...ids];
-};
-
 export const setCurrentProviderId = (appType: AppId, providerId: string) => {
   current[appType] = providerId;
 };
