@@ -3430,10 +3430,18 @@ pub fn write_codex_live_for_provider(
         config_text,
         crate::settings::preserve_codex_official_auth_on_switch(),
     )?;
+
+    // Phase 4: Sanitize config.toml to inject env_key reference
+    let sanitized_config = if let Some(ref config) = plan.config_text {
+        Some(crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write(config)?)
+    } else {
+        None
+    };
+
     if plan.write_full_auth {
-        return write_codex_live_atomic(auth, plan.config_text.as_deref());
+        return write_codex_live_atomic(auth, sanitized_config.as_deref());
     }
-    write_codex_live_config_atomic(plan.config_text.as_deref())?;
+    write_codex_live_config_atomic(sanitized_config.as_deref())?;
     // Config is already committed at this point, so a cleanup failure
     // degrades to a warning instead of reporting an unswitched state.
     if plan.remove_auth_file {

@@ -3,6 +3,9 @@
 //! Handles provider CRUD operations, switching, and configuration management.
 
 mod live;
+mod live_sanitizer;
+pub(crate) mod codex_sanitizer;
+pub(crate) mod pi_sanitizer;
 mod pi;
 
 use indexmap::IndexMap;
@@ -599,15 +602,15 @@ impl ProviderService {
                 }
             }
             AppType::Pi => {
-                // Pi uses multiple variables for different services
+                // Pi uses provider-specific variable names: CC_SWITCH_PI_<ID>_API_KEY
                 let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
                 if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
-                    let var_name = "CC_SWITCH_PI_DEFAULT_API_KEY";
-                    if let Err(e) = sink.set(var_name, &api_key) {
+                    let var_name = format!("CC_SWITCH_PI_{}_API_KEY", provider.id.to_uppercase());
+                    if let Err(e) = sink.set(&var_name, &api_key) {
                         log::warn!("Failed to set {}: {}", var_name, e);
                         result.warnings.push(format!("env_delivery_failed:{}", var_name));
                     } else {
-                        managed.register(var_name, app_type.as_str(), &provider.id);
+                        managed.register(&var_name, app_type.as_str(), &provider.id);
                     }
                 }
             }

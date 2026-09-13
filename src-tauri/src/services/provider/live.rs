@@ -159,15 +159,25 @@ fn apply_kimi_for_coding_context_defaults(settings: &mut Value, provider: &Provi
 }
 
 pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
-    let mut v = settings.clone();
-    if let Some(obj) = v.as_object_mut() {
-        // Internal-only fields - never write to Claude Code settings.json
-        obj.remove("api_format");
-        obj.remove("apiFormat");
-        obj.remove("openrouter_compat_mode");
-        obj.remove("openrouterCompatMode");
+    // Delegate to the new sanitizer with safety checks
+    // This function is kept for backward compatibility but now enforces security
+    match super::live_sanitizer::sanitize_claude_settings_for_live_write(settings) {
+        Ok(sanitized) => sanitized,
+        Err(e) => {
+            log::error!("Failed to sanitize Claude settings for live write: {}", e);
+            // Fallback: return a minimal safe config
+            let mut v = settings.clone();
+            if let Some(obj) = v.as_object_mut() {
+                // Remove all potentially sensitive fields
+                obj.remove("api_format");
+                obj.remove("apiFormat");
+                obj.remove("openrouter_compat_mode");
+                obj.remove("openrouterCompatMode");
+                obj.remove("env");
+            }
+            v
+        }
     }
-    v
 }
 
 pub(crate) fn provider_exists_in_live_config(
@@ -1006,11 +1016,19 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
             // the proxy router (apiFormat meta/settings + TOML wire_api).
             let profile = crate::codex_config::resolve_codex_catalog_tool_profile(provider);
 
+            // Phase 4: Sanitize config.toml to use env_key instead of plaintext tokens
+            let sanitized_config = if let Some(config_text) = config_str {
+                let sanitized = super::codex_sanitizer::sanitize_codex_config_for_live_write(config_text)?;
+                Some(sanitized)
+            } else {
+                None
+            };
+
             crate::codex_config::write_codex_provider_live_with_catalog(
                 &provider.settings_config,
                 provider.category.as_deref(),
                 auth,
-                config_str,
+                sanitized_config.as_deref().or(config_str),
                 profile,
             )?;
             if let Some(account_id) = provider

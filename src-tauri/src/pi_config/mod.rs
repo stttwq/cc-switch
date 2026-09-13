@@ -120,13 +120,20 @@ pub(crate) fn pi_provider_exists(provider_key: &str) -> Result<bool, AppError> {
 
 pub(crate) fn insert_pi_provider(provider_key: &str, config: &Value) -> Result<bool, AppError> {
     validate_provider_node(provider_key, config)?;
+
+    // Phase 4: Sanitize config to use environment variable references
+    let sanitized_config = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+        provider_key,
+        config,
+    )?;
+
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
     let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
     let providers = providers_mut(&mut document, &path)?;
 
     match providers.get(provider_key) {
-        Some(current) if current == config => return Ok(false),
+        Some(current) if current == &sanitized_config => return Ok(false),
         Some(_) => {
             return Err(AppError::InvalidInput(format!(
                 "Pi provider key '{provider_key}' already exists in models.json"
@@ -135,7 +142,7 @@ pub(crate) fn insert_pi_provider(provider_key: &str, config: &Value) -> Result<b
         None => {}
     }
 
-    providers.insert(provider_key.to_string(), config.clone());
+    providers.insert(provider_key.to_string(), sanitized_config);
     write_models_document(&path, &document, &expected_revision)?;
     Ok(true)
 }
@@ -146,6 +153,13 @@ pub(crate) fn replace_pi_provider(
     replacement: &Value,
 ) -> Result<(), AppError> {
     validate_provider_node(provider_key, replacement)?;
+
+    // Phase 4: Sanitize replacement config to use environment variable references
+    let sanitized_replacement = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+        provider_key,
+        replacement,
+    )?;
+
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
     let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
@@ -160,10 +174,10 @@ pub(crate) fn replace_pi_provider(
             "Pi provider '{provider_key}' changed outside CC Switch"
         )));
     }
-    if current == replacement {
+    if current == &sanitized_replacement {
         return Ok(());
     }
-    providers.insert(provider_key.to_string(), replacement.clone());
+    providers.insert(provider_key.to_string(), sanitized_replacement);
     write_models_document(&path, &document, &expected_revision)
 }
 
@@ -172,6 +186,13 @@ pub(crate) fn replace_pi_provider_if_present(
     replacement: &Value,
 ) -> Result<Option<Value>, AppError> {
     validate_provider_node(provider_key, replacement)?;
+
+    // Phase 4: Sanitize replacement config to use environment variable references
+    let sanitized_replacement = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+        provider_key,
+        replacement,
+    )?;
+
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
     let (mut document, expected_revision) = read_models_document_with_revision(&path)?;
@@ -179,10 +200,10 @@ pub(crate) fn replace_pi_provider_if_present(
     let Some(current) = providers.get(provider_key).cloned() else {
         return Ok(None);
     };
-    if current == *replacement {
+    if current == sanitized_replacement {
         return Ok(Some(current));
     }
-    providers.insert(provider_key.to_string(), replacement.clone());
+    providers.insert(provider_key.to_string(), sanitized_replacement);
     write_models_document(&path, &document, &expected_revision)?;
     Ok(Some(current))
 }
