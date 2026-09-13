@@ -1556,9 +1556,66 @@ impl Database {
     /// v15 -> v16: remove Codex session rows and cursors so startup sync can
     /// rebuild them with fork-history alignment. Must stay connection-level:
     /// schema migration already owns the Database connection mutex.
+    ///
+    /// Inlined from the removed `services::session_usage_codex` module during
+    /// the local-router/usage teardown; the touched tables are dropped outright
+    /// by the v19 migration, so only the session-cursor prune survives here.
     fn migrate_v15_to_v16(conn: &Connection) -> Result<(), AppError> {
         let codex_dir = crate::codex_config::get_codex_config_dir();
-        crate::services::session_usage_codex::reset_codex_usage_on_conn(conn, &codex_dir)
+        if Self::table_exists(conn, "proxy_request_logs")?
+            && Self::has_column(conn, "proxy_request_logs", "data_source")?
+        {
+            conn.execute(
+                "DELETE FROM proxy_request_logs WHERE data_source = 'codex_session'",
+                [],
+            )
+            .map_err(|error| AppError::Database(format!("清理 Codex 会话明细失败: {error}")))?;
+        }
+        if Self::table_exists(conn, "usage_daily_rollups")?
+            && Self::has_column(conn, "usage_daily_rollups", "provider_id")?
+        {
+            conn.execute(
+                "DELETE FROM usage_daily_rollups WHERE provider_id = '_codex_session'",
+                [],
+            )
+            .map_err(|error| AppError::Database(format!("清理 Codex 用量汇总失败: {error}")))?;
+        }
+        if Self::table_exists(conn, "session_log_sync")?
+            && Self::has_column(conn, "session_log_sync", "file_path")?
+        {
+            let mut statement = conn
+                .prepare("SELECT file_path FROM session_log_sync")
+                .map_err(|error| {
+                    AppError::Database(format!("读取会话同步 cursor 失败: {error}"))
+                })?;
+            let paths = statement
+                .query_map([], |row| row.get::<_, String>(0))
+                .map_err(|error| AppError::Database(format!("查询会话同步 cursor 失败: {error}")))?
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    AppError::Database(format!("解析会话同步 cursor 失败: {error}"))
+                })?;
+            for file_path in paths {
+                let is_codex_cursor = std::path::Path::new(&file_path)
+                    .starts_with(codex_dir.join("sessions"))
+                    || std::path::Path::new(&file_path)
+                        .starts_with(codex_dir.join("archived_sessions"))
+                    || file_path
+                        .replace('\\', "/")
+                        .split('/')
+                        .any(|segment| matches!(segment, "sessions" | "archived_sessions"));
+                if is_codex_cursor {
+                    conn.execute(
+                        "DELETE FROM session_log_sync WHERE file_path = ?1",
+                        [file_path],
+                    )
+                    .map_err(|error| {
+                        AppError::Database(format!("清理 Codex 同步 cursor 失败: {error}"))
+                    })?;
+                }
+            }
+        }
+        Ok(())
     }
 
     /// v16 -> v17: preserve session request identities after detail rollup.
@@ -3508,7 +3565,6 @@ impl Database {
 
     pub(crate) fn table_exists(conn: &Connection, table: &str) -> Result<bool, AppError> {
         Self::validate_identifier(table, "表名")?;
-
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type='table'")
             .map_err(|e| AppError::Database(format!("读取表名失败: {e}")))?;

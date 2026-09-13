@@ -1,0 +1,204 @@
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\codex_config.rs:330:
+     normalized
+ }
+ 
+[31m-
+[0m fn codex_is_anthropic_wire_api(value: &str) -> bool {
+     matches!(
+         value.trim().to_ascii_lowercase().as_str(),
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\codex_config.rs:580:
+         });
+     CodexCatalogToolProfile::from_api_format(api_format)
+ }
+[31m-
+[0m 
+ /// 获取 Codex 配置目录路径
+ pub fn get_codex_config_dir() -> PathBuf {
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\commands\provider.rs:8:
+ use crate::store::AppState;
+ use std::str::FromStr;
+ 
+[31m-
+[0m /// 获取所有供应商
+ #[tauri::command]
+ pub fn get_providers(
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\database\schema.rs:1567:
+         {
+             let mut statement = conn
+                 .prepare("SELECT file_path FROM session_log_sync")
+[31m-                .map_err(|error| AppError::Database(format!("读取会话同步 cursor 失败: {error}")))?;
+[0m[32m+                .map_err(|error| {
+[0m[32m+                    AppError::Database(format!("读取会话同步 cursor 失败: {error}"))
+[0m[32m+                })?;
+[0m             let paths = statement
+                 .query_map([], |row| row.get::<_, String>(0))
+                 .map_err(|error| AppError::Database(format!("查询会话同步 cursor 失败: {error}")))?
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\database\schema.rs:1574:
+                 .collect::<Result<Vec<_>, _>>()
+[31m-                .map_err(|error| AppError::Database(format!("解析会话同步 cursor 失败: {error}")))?;
+[0m[32m+                .map_err(|error| {
+[0m[32m+                    AppError::Database(format!("解析会话同步 cursor 失败: {error}"))
+[0m[32m+                })?;
+[0m             for file_path in paths {
+                 let is_codex_cursor = std::path::Path::new(&file_path)
+                     .starts_with(codex_dir.join("sessions"))
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\live.rs:1315:
+     Ok(())
+ }
+ 
+[31m-fn sync_current_provider_for_app(
+[0m[31m-    state: &AppState,
+[0m[31m-    app_type: &AppType,
+[0m[31m-) -> Result<(), AppError> {
+[0m[32m+fn sync_current_provider_for_app(state: &AppState, app_type: &AppType) -> Result<(), AppError> {
+[0m     let current_id = match crate::settings::get_effective_current_provider(&state.db, app_type)? {
+         Some(id) => id,
+         None => return Ok(()),
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\mod.rs:34:
+ // Internal re-exports (pub(crate))
+ pub(crate) use live::sanitize_claude_settings_for_live;
+ pub(crate) use live::{
+[31m-    normalize_provider_common_config_for_storage,
+[0m[31m-    provider_exists_in_live_config, strip_common_config_from_live_settings,
+[0m[31m-    sync_current_provider_for_app_to_live, write_live_with_common_config_for_state,
+[0m[32m+    normalize_provider_common_config_for_storage, provider_exists_in_live_config,
+[0m[32m+    strip_common_config_from_live_settings, sync_current_provider_for_app_to_live,
+[0m[32m+    write_live_with_common_config_for_state,
+[0m };
+ 
+ // Internal re-exports
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\pi.rs:35:
+     add_to_live: bool,
+ ) -> Result<bool, AppError> {
+     let app_type = AppType::Pi;
+[31m-    let _guard =
+[0m[31m-        futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m[32m+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m     strip_unsupported_pi_metadata(&mut provider);
+     ProviderService::validate_provider_settings(&app_type, &provider)?;
+     align_native_display_name(&mut provider);
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\pi.rs:87:
+     mut provider: Provider,
+ ) -> Result<bool, AppError> {
+     let app_type = AppType::Pi;
+[31m-    let _guard =
+[0m[31m-        futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m[32m+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m     let original_id = original_id.unwrap_or(&provider.id).to_string();
+     if original_id != provider.id {
+         return Err(AppError::InvalidInput(
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\pi.rs:124:
+ 
+ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
+     let app_type = AppType::Pi;
+[31m-    let _guard =
+[0m[31m-        futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m[32m+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m     let Some(_) = state.db.get_provider_by_id(id, app_type.as_str())? else {
+         return Ok(());
+     };
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\pi.rs:149:
+ 
+ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
+     let app_type = AppType::Pi;
+[31m-    let _guard =
+[0m[31m-        futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m[32m+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m     let provider = state
+         .db
+         .get_provider_by_id(id, app_type.as_str())?
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\services\provider\pi.rs:173:
+ 
+ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppError> {
+     let app_type = AppType::Pi;
+[31m-    let _guard =
+[0m[31m-        futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m[32m+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+[0m     let provider = state
+         .db
+         .get_provider_by_id(id, app_type.as_str())?
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\settings.rs:65:
+     "info".to_string()
+ }
+ 
+[31m-
+[0m fn default_true() -> bool {
+     true
+ }
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\tray.rs:254:
+ pub fn handle_provider_tray_event(app: &tauri::AppHandle, event_id: &str) -> bool {
+     for section in TRAY_SECTIONS.iter() {
+         if let Some(suffix) = event_id.strip_prefix(section.prefix) {
+[31m-
+[0m             log::info!("切换到{}供应商: {suffix}", section.log_name);
+             let app_handle = app.clone();
+             let provider_id = suffix.to_string();
+Diff in \\?\D:\LS\DM\ccs\src-tauri\src\tray.rs:269:
+     }
+     false
+ }
+[31m-
+[0m 
+ fn handle_provider_click(
+     app: &tauri::AppHandle,
+Diff in \\?\D:\LS\DM\ccs\src-tauri\tests\fixture_v18.rs:63:
+         .join("v18-home")
+ }
+ 
+[31m-fn provider(
+[0m[31m-    id: &str,
+[0m[31m-    name: &str,
+[0m[31m-    settings_config: Value,
+[0m[31m-    meta: Option<ProviderMeta>,
+[0m[31m-) -> Provider {
+[0m[32m+fn provider(id: &str, name: &str, settings_config: Value, meta: Option<ProviderMeta>) -> Provider {
+[0m     let mut p = Provider::with_id(id.to_string(), name.to_string(), settings_config, None);
+     p.meta = meta;
+     p
+Diff in \\?\D:\LS\DM\ccs\src-tauri\tests\fixture_v18.rs:86:
+ 
+     // SAFETY: fixture generation runs standalone (#[ignore]) and restores HOME vars on drop.
+     let prev_vars: Vec<(&'static str, Option<std::ffi::OsString>)> = vec![
+[31m-        ("CC_SWITCH_TEST_HOME", std::env::var_os("CC_SWITCH_TEST_HOME")),
+[0m[32m+        (
+[0m[32m+            "CC_SWITCH_TEST_HOME",
+[0m[32m+            std::env::var_os("CC_SWITCH_TEST_HOME"),
+[0m[32m+        ),
+[0m         ("HOME", std::env::var_os("HOME")),
+         ("USERPROFILE", std::env::var_os("USERPROFILE")),
+     ];
+Diff in \\?\D:\LS\DM\ccs\src-tauri\tests\fixture_v18.rs:145:
+     .unwrap();
+ 
+     let mut meta_extra_env = ProviderMeta::default();
+[31m-    meta_extra_env.usage_script = Some(serde_json::from_value(json!({
+[0m[31m-        "enabled": true,
+[0m[31m-        "language": "javascript",
+[0m[31m-        "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
+[0m[31m-        "apiKey": USAGE_SCRIPT_KEY,
+[0m[31m-        "baseUrl": "https://fixture-usage.example.com"
+[0m[31m-    }))
+[0m[31m-    .unwrap());
+[0m[32m+    meta_extra_env.usage_script = Some(
+[0m[32m+        serde_json::from_value(json!({
+[0m[32m+            "enabled": true,
+[0m[32m+            "language": "javascript",
+[0m[32m+            "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
+[0m[32m+            "apiKey": USAGE_SCRIPT_KEY,
+[0m[32m+            "baseUrl": "https://fixture-usage.example.com"
+[0m[32m+        }))
+[0m[32m+        .unwrap(),
+[0m[32m+    );
+[0m     db.save_provider(
+         "claude",
+         &provider(
+Diff in \\?\D:\LS\DM\ccs\src-tauri\tests\fixture_v18.rs:241:
+         .unwrap();
+     db.set_current_provider("codex", "fixture-codex-3rd")
+         .unwrap();
+[31m-    db.set_current_provider("pi", "fixture-pi-one")
+[0m[31m-        .unwrap();
+[0m[32m+    db.set_current_provider("pi", "fixture-pi-one").unwrap();
+[0m 
+     // --- ~/.cc-switch/settings.json (WebDAV password) ---
+     fs::write(

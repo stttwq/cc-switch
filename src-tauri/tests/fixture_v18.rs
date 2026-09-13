@@ -63,12 +63,7 @@ fn fixture_root() -> PathBuf {
         .join("v18-home")
 }
 
-fn provider(
-    id: &str,
-    name: &str,
-    settings_config: Value,
-    meta: Option<ProviderMeta>,
-) -> Provider {
+fn provider(id: &str, name: &str, settings_config: Value, meta: Option<ProviderMeta>) -> Provider {
     let mut p = Provider::with_id(id.to_string(), name.to_string(), settings_config, None);
     p.meta = meta;
     p
@@ -85,9 +80,14 @@ fn generate_v18_plaintext_fixture() {
     fs::create_dir_all(home.join(".cc-switch")).unwrap();
 
     // SAFETY: fixture generation runs standalone (#[ignore]) and restores HOME vars on drop.
-    let prev_cc_home = std::env::var_os("CC_SWITCH_TEST_HOME");
-    let prev_home = std::env::var_os("HOME");
-    let prev_profile = std::env::var_os("USERPROFILE");
+    let prev_vars: Vec<(&'static str, Option<std::ffi::OsString>)> = vec![
+        (
+            "CC_SWITCH_TEST_HOME",
+            std::env::var_os("CC_SWITCH_TEST_HOME"),
+        ),
+        ("HOME", std::env::var_os("HOME")),
+        ("USERPROFILE", std::env::var_os("USERPROFILE")),
+    ];
     std::env::set_var("CC_SWITCH_TEST_HOME", &home);
     std::env::set_var("HOME", &home);
     std::env::set_var("USERPROFILE", &home);
@@ -102,11 +102,7 @@ fn generate_v18_plaintext_fixture() {
             }
         }
     }
-    let _restore = Restore(vec![
-        ("CC_SWITCH_TEST_HOME", prev_cc_home),
-        ("HOME", prev_home),
-        ("USERPROFILE", prev_profile),
-    ]);
+    let _restore = Restore(prev_vars);
 
     let db = Database::init().expect("Database::init should create a fresh v18 database");
 
@@ -128,8 +124,10 @@ fn generate_v18_plaintext_fixture() {
     )
     .unwrap();
 
-    let mut meta_api_key_field = ProviderMeta::default();
-    meta_api_key_field.api_key_field = Some("ANTHROPIC_API_KEY".to_string());
+    let meta_api_key_field = ProviderMeta {
+        api_key_field: Some("ANTHROPIC_API_KEY".to_string()),
+        ..Default::default()
+    };
     db.save_provider(
         "claude",
         &provider(
@@ -146,15 +144,19 @@ fn generate_v18_plaintext_fixture() {
     )
     .unwrap();
 
-    let mut meta_extra_env = ProviderMeta::default();
-    meta_extra_env.usage_script = Some(serde_json::from_value(json!({
-        "enabled": true,
-        "language": "javascript",
-        "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
-        "apiKey": USAGE_SCRIPT_KEY,
-        "baseUrl": "https://fixture-usage.example.com"
-    }))
-    .unwrap());
+    let meta_extra_env = ProviderMeta {
+        usage_script: Some(
+            serde_json::from_value(json!({
+                "enabled": true,
+                "language": "javascript",
+                "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
+                "apiKey": USAGE_SCRIPT_KEY,
+                "baseUrl": "https://fixture-usage.example.com"
+            }))
+            .unwrap(),
+        ),
+        ..Default::default()
+    };
     db.save_provider(
         "claude",
         &provider(
@@ -243,8 +245,7 @@ fn generate_v18_plaintext_fixture() {
         .unwrap();
     db.set_current_provider("codex", "fixture-codex-3rd")
         .unwrap();
-    db.set_current_provider("pi", "fixture-pi-one")
-        .unwrap();
+    db.set_current_provider("pi", "fixture-pi-one").unwrap();
 
     // --- ~/.cc-switch/settings.json (WebDAV password) ---
     fs::write(

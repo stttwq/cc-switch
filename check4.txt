@@ -1,0 +1,4 @@
+src\lib.rs:1350:23: error[E0433]: cannot find `__cmd__test_api_endpoints` in `commands`: could not find `__cmd__test_api_endpoints` in `commands`
+src\lib.rs:1081:42: error[E0425]: cannot find function `refresh_all_usage_in_tray` in module `crate::tray`: not found in `crate::tray`
+src\commands\pi.rs:19:22: error[E0599]: no function or associated item named `update_pi_usage_script` found for struct `ProviderService` in the current scope: function or associated item not found in `ProviderService`
+error: could not compile `cc-switch` (lib) due to 3 previous errors; 4 warnings emitted

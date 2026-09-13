@@ -1,0 +1,23 @@
+test result: ok. 782 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 2.87s
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s
+test result: ok. 0 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.59s
+test result: ok. 23 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.47s
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.85s
+test import_refuses_live_config_under_proxy_takeover ... FAILED
+test grokbuild_import_and_switch_write_live_config ... FAILED
+test switch_provider_codex_missing_auth_returns_error_and_keeps_state ... FAILED
+test switch_provider_missing_provider_returns_error ... FAILED
+test switch_provider_updates_claude_live_and_state ... FAILED
+test switch_provider_updates_codex_live_and_state ... FAILED
+thread 'import_refuses_live_config_under_proxy_takeover' (19216) panicked at tests\provider_commands.rs:683:10:
+thread 'grokbuild_import_and_switch_write_live_config' (17072) panicked at tests\provider_commands.rs:40:38:
+thread 'switch_provider_codex_missing_auth_returns_error_and_keeps_state' (20220) panicked at tests\provider_commands.rs:621:38:
+thread 'switch_provider_missing_provider_returns_error' (6172) panicked at tests\provider_commands.rs:466:38:
+thread 'switch_provider_updates_claude_live_and_state' (9400) panicked at tests\provider_commands.rs:491:38:
+thread 'switch_provider_updates_codex_live_and_state' (504) panicked at tests\provider_commands.rs:315:38:
+test result: FAILED. 4 passed; 6 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.52s

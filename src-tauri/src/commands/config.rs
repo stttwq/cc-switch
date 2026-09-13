@@ -70,11 +70,8 @@ pub async fn get_config_status(
     match AppType::from_str(&app).map_err(|e| e.to_string())? {
         AppType::Claude => Ok(config::get_claude_config_status()),
         AppType::ClaudeDesktop => {
-            let status = crate::claude_desktop_config::get_status(
-                state.db.as_ref(),
-                state.proxy_service.is_running().await,
-            )
-            .map_err(|e| e.to_string())?;
+            let status = crate::claude_desktop_config::get_status(state.db.as_ref(), false)
+                .map_err(|e| e.to_string())?;
             Ok(ConfigStatus {
                 exists: status.configured,
                 path: status.config_library_path.unwrap_or_default(),

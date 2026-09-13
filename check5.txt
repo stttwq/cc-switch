@@ -1,0 +1,2 @@
+src\lib.rs:115:1: error: unexpected closing delimiter: `}`: unexpected closing delimiter
+error: could not compile `cc-switch` (lib) due to 1 previous error

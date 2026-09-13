@@ -1,7 +1,7 @@
 use serde_json::{json, Value};
 
 use crate::error::AppError;
-use crate::services::{model_pricing, PromptService, ProviderService};
+use crate::services::{PromptService, ProviderService};
 use crate::settings;
 use crate::store::AppState;
 
@@ -14,9 +14,6 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
     if let Err(error) = PromptService::sync_all_to_live(app_state) {
         failures.push(format!("prompts: {error}"));
     }
-    if let Err(error) = model_pricing::sync_local_model_pricing(&app_state.db) {
-        failures.push(format!("model pricing: {error}"));
-    }
     if let Err(error) = settings::reload_settings() {
         failures.push(format!("settings cache: {error}"));
     }
@@ -28,7 +25,6 @@ pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError>
             failures.push(format!("runtime log level: {error}"));
         }
     }
-    app_state.usage_cache.invalidate_all();
 
     if failures.is_empty() {
         Ok(())

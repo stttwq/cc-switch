@@ -317,40 +317,6 @@ pub struct UsageScript {
     pub team_project_id: Option<String>,
 }
 
-/// 用量数据
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageData {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "planName")]
-    pub plan_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub extra: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "isValid")]
-    pub is_valid: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "invalidMessage")]
-    pub invalid_message: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub used: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub remaining: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
-}
-
-/// 用量查询结果（支持多套餐）
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct UsageResult {
-    pub success: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub data: Option<Vec<UsageData>>, // 支持返回多个套餐
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub error: Option<String>,
-}
-
 /// 认证绑定来源
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]

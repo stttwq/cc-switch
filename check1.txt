@@ -1,0 +1,108 @@
+src\commands\provider.rs:10:5: error[E0432]: unresolved imports `crate::services::EndpointLatency`, `crate::services::SpeedtestService`: no `EndpointLatency` in `services`, no `SpeedtestService` in `services`
+src\commands\sync_support.rs:4:23: error[E0432]: unresolved import `crate::services::model_pricing`: no `model_pricing` in `services`
+src\database\mod.rs:39:21: error[E0432]: unresolved import `dao::proxy`: could not find `proxy` in `dao`
+src\database\mod.rs:43:9: error[E0432]: unresolved import `dao::FailoverQueueItem`: no `FailoverQueueItem` in `database::dao`
+src\store.rs:3:23: error[E0432]: unresolved imports `crate::services::ProxyService`, `crate::services::UsageCache`: no `ProxyService` in `services`, no `UsageCache` in `services`
+src\tray.rs:12:22: error[E0432]: unresolved import `crate::services::usage_cache`: could not find `usage_cache` in `services`
+src\commands\global_proxy.rs:5:12: error[E0432]: unresolved import `crate::proxy`: could not find `proxy` in the crate root
+src\commands\provider.rs:5:22: error[E0432]: unresolved import `crate::commands::copilot`: could not find `copilot` in `commands`
+src\services\provider\live.rs:17:12: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\provider.rs:6:22: error[E0432]: unresolved import `crate::commands::xai_oauth`: could not find `xai_oauth` in `commands`
+src\services\provider\usage.rs:10:5: error[E0432]: unresolved import `crate::usage_script`: no `usage_script` in the root
+src\services\s3.rs:12:12: error[E0432]: unresolved import `crate::proxy`: could not find `proxy` in the crate root
+src\store.rs:2:12: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\webdav.rs:10:12: error[E0432]: unresolved import `crate::proxy`: could not find `proxy` in the crate root
+src\tray.rs:1136:9: error[E0432]: unresolved import `crate::commands::CopilotAuthState`: no `CopilotAuthState` in `commands`
+src\commands\provider.rs:615:38: error[E0433]: cannot find `coding_plan` in `services`: could not find `coding_plan` in `services`
+src\commands\provider.rs:701:33: error[E0433]: cannot find `balance` in `services`: could not find `balance` in `services`
+src\commands\provider.rs:723:30: error[E0433]: cannot find `xai_oauth` in `commands`: could not find `xai_oauth` in `commands`
+src\commands\provider.rs:725:30: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\commands\settings.rs:633:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:641:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:654:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:662:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:675:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:686:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:699:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:707:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:244:57: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:248:31: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:255:25: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:267:57: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:271:31: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:278:25: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:292:24: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:296:31: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:303:25: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:313:51: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\dao\settings.rs:322:50: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\database\schema.rs:1561:26: error[E0433]: cannot find `session_usage_codex` in `services`: could not find `session_usage_codex` in `services`
+src\database\mod.rs:147:42: error[E0433]: cannot find `model_pricing` in `services`: could not find `model_pricing` in `services`
+src\services\config.rs:168:30: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\live.rs:815:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\live.rs:1104:19: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\live.rs:1305:34: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:58:19: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:75:20: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:4335:41: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:5459:27: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:5482:24: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\tray.rs:16:50: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:18:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:19:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:20:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:21:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:24:54: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:29:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:30:22: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:33:56: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:34:59: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:35:61: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:37:24: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:209:30: error[E0433]: cannot find `subscription` in `services`: could not find `subscription` in `services`
+src\tray.rs:312:15: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\tray.rs:574:32: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\tray.rs:593:24: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\tray.rs:609:36: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\codex_config.rs:592:55: error[E0425]: cannot find type `Provider` in this scope: not found in this scope
+src\codex_config.rs:635:46: error[E0425]: cannot find type `Provider` in this scope: not found in this scope
+src\codex_config.rs:681:49: error[E0425]: cannot find type `Provider` in this scope: not found in this scope
+src\codex_config.rs:752:54: error[E0425]: cannot find type `Provider` in this scope: not found in this scope
+src\commands\misc.rs:763:25: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\commands\settings.rs:186:16: error[E0425]: cannot find function `cleanup_before_exit` in the crate root: not found in the crate root
+src\commands\settings.rs:241:16: error[E0425]: cannot find function `cleanup_before_exit` in the crate root: not found in the crate root
+src\database\dao\settings.rs:317:31: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\model_fetch.rs:70:25: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\skill.rs:3124:29: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\skill.rs:3947:29: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\tray.rs:1199:58: error[E0425]: cannot find type `XaiOAuthState` in module `crate::commands`: not found in `crate::commands`
+src\tray.rs:1205:72: error[E0425]: cannot find type `CodexOAuthState` in module `crate::commands`: not found in `crate::commands`
+src\tray.rs:1206:42: error[E0425]: cannot find function `get_codex_oauth_quota` in module `crate::commands`: not found in `crate::commands`
+src\services\provider\mod.rs:6235:40: error[E0599]: no method named `get_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\mod.rs:6242:26: error[E0599]: no method named `save_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\skill.rs:3989:39: error[E0599]: no method named `clone` found for type `str` in the current scope
+src\services\skill.rs:3990:37: error[E0599]: no method named `clone` found for type `str` in the current scope
+src\services\skill.rs:3993:74: error[E0277]: the size for values of type `str` cannot be known at compilation time: doesn't have a size known at compile-time
+src\claude_desktop_config.rs:923:49: error[E0599]: no method named `get_proxy_config` found for reference `&Database` in the current scope
+src\codex_config.rs:707:15: error[E0277]: the size for values of type `str` cannot be known at compilation time: doesn't have a size known at compile-time
+src\codex_config.rs:771:12: error[E0277]: the size for values of type `str` cannot be known at compilation time: doesn't have a size known at compile-time
+src\commands\profile.rs:71:63: error[E0599]: no method named `get_proxy_flags_sync` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\database\backup.rs:449:20: error[E0599]: no method named `cleanup_old_stream_check_logs` found for reference `&Database` in the current scope: method not found in `&Database`
+src\database\backup.rs:457:20: error[E0599]: no method named `rollup_and_prune` found for reference `&Database` in the current scope: method not found in `&Database`
+src\database\mod.rs:152:28: error[E0599]: no method named `cleanup_old_stream_check_logs` found for struct `Database` in the current scope: method not found in `Database`
+src\database\mod.rs:155:28: error[E0599]: no method named `rollup_and_prune` found for struct `Database` in the current scope: method not found in `Database`
+src\services\profile.rs:462:43: error[E0599]: no method named `is_live_takeover_active_sync` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\live.rs:1524:52: error[E0599]: no method named `get_proxy_config_for_app` found for struct `Arc<Database>` in the current scope
+src\services\provider\live.rs:1563:52: error[E0599]: no method named `get_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\mod.rs:4350:22: error[E0599]: no method named `save_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\mod.rs:4353:54: error[E0599]: no method named `delete_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\mod.rs:4893:54: error[E0599]: no method named `get_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\services\provider\mod.rs:5228:50: error[E0599]: no method named `get_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:568:14: error[E0599]: no method named `get_failover_queue` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:600:18: error[E0599]: no method named `add_to_failover_queue` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:603:18: error[E0599]: no method named `get_failover_queue` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:648:14: error[E0599]: no method named `set_proxy_flags_sync` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:695:47: error[E0599]: no method named `get_proxy_flags_sync` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:698:14: error[E0599]: no method named `set_proxy_flags_sync` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+src\tray.rs:810:62: error[E0599]: no method named `get_live_backup` found for struct `Arc<Database>` in the current scope: method not found in `Arc<Database>`
+error: could not compile `cc-switch` (lib) due to 107 previous errors; 2 warnings emitted

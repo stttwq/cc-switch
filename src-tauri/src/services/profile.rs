@@ -323,15 +323,11 @@ impl ProfileService {
     /// 继续，不阻塞切换。
     ///
     /// 应用指定项目的快照到当前分组内的所有应用。
-    ///
-    /// 返回 `(warnings, should_stop_proxy)`：当当前分组内所有接管都被关闭、且
-    /// 其它应用也没有接管时，建议调用者停止代理服务，以便 Claude Desktop 的
-    /// "本地路由"总开关同步显示为关闭。
     pub fn apply(
         state: &AppState,
         profile_id: &str,
         scope: ProfileScope,
-    ) -> Result<(Vec<String>, bool), AppError> {
+    ) -> Result<Vec<String>, AppError> {
         let mut warnings = Vec::new();
 
         // 自动保存旧项目当前状态（仅当前分组），失败不阻塞切换
@@ -362,16 +358,7 @@ impl ProfileService {
         for app in scope.apps().iter() {
             let app_str = app.as_str();
 
-            // 1. 切换项目前无条件关闭当前应用的代理接管。
-            // 接管态下 live 文件属于代理；用户希望切换工作目录时总是退出当前
-            // 代理环境，再按快照写入真实供应商配置。
-            if let Err(e) = state.proxy_service.disable_takeover_for_app_sync(app) {
-                warnings.push(format!(
-                    "[{app_str}] auto-disable proxy takeover before profile switch failed: {e}"
-                ));
-            }
-
-            // 2. 供应商
+            // 1. 供应商
             if let Some(Some(target_pid)) = payload.providers.get(app) {
                 let providers = state.db.get_all_providers(app_str)?;
                 if !providers.contains_key(target_pid) {
@@ -458,10 +445,7 @@ impl ProfileService {
             .db
             .set_current_profile_id(scope.as_str(), Some(profile_id))?;
 
-        // 当前分组内所有接管已关闭；若其它应用也无接管，可停止代理服务。
-        let should_stop_proxy = !state.db.is_live_takeover_active_sync();
-
-        Ok((warnings, should_stop_proxy))
+        Ok(warnings)
     }
 }
 

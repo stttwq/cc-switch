@@ -1,0 +1,22 @@
+error[E0425]: cannot find value `INPUT_TOKEN_SEMANTICS_TOTAL` in this scope
+error[E0425]: cannot find value `INPUT_TOKEN_SEMANTICS_FRESH` in this scope
+warning: unused import: `once_cell::sync::OnceCell`
+warning: unused import: `super::*`
+error[E0425]: cannot find function `get_or_load_codex_model_catalog_template` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `fresh_input_sql` in this scope
+error[E0425]: cannot find function `session_files_from_resolution` in this scope
+939 |             session_files_from_resolution(unavailable).expect_err("discovery error"),
+error[E0425]: cannot find function `session_files_from_resolution` in this scope
+warning: variable `backfill_completed` is assigned to, but never used
+warning: value assigned to `backfill_completed` is never read
+For more information about this error, try `rustc --explain E0425`.
+warning: `cc-switch` (lib) generated 2 warnings
+error: could not compile `cc-switch` (lib) due to 1 previous error; 2 warnings emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `cc-switch` (lib test) generated 4 warnings (2 duplicates)
+error: could not compile `cc-switch` (lib test) due to 10 previous errors; 4 warnings emitted

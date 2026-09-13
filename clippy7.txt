@@ -1,0 +1,11 @@
+warning: this `else` branch is empty
+   --> src\services\provider\mod.rs:619:31
+619 |   ...                   } else {
+    = help: for further information visit https://rust-lang.github.io/rust-clippy/rust-1.95.0/index.html#needless_else
+    = note: `#[warn(clippy::needless_else)]` on by default
+warning: constant `DEFAULT_CREATED_AT` is never used
+  --> src\claude_desktop_config.rs:21:78
+warning: constant `MIMO_TOOL_CALL_THINKING_PLACEHOLDER` is never used
+  --> src\claude_desktop_config.rs:21:134
+warning: function `session_files_from_resolution` is never used
+   --> src\session_manager\providers\pi.rs:747:4

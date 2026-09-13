@@ -85,30 +85,6 @@ pub fn session_roots() -> Vec<PathBuf> {
     }
 }
 
-/// Return candidate JSONL files using Pi's active root and layout rules.
-/// Oversized files remain candidates so the usage importer can report them
-/// instead of silently treating an incomplete import as success.
-pub(crate) fn session_files() -> Result<Vec<PathBuf>, String> {
-    session_files_from_resolution(resolve_session_root())
-}
-
-fn session_files_from_resolution(
-    resolution: SessionRootResolution,
-) -> Result<Vec<PathBuf>, String> {
-    match resolution {
-        SessionRootResolution::Available { root, layout } => {
-            let mut files = Vec::new();
-            collect_jsonl_files(&root, layout, &mut files, false);
-            files.sort();
-            Ok(files)
-        }
-        SessionRootResolution::RequiresProjectContext { configured_path } => Err(format!(
-            "Pi sessionDir '{configured_path}' requires a project cwd and cannot be globally enumerated"
-        )),
-        SessionRootResolution::Unavailable { reason } => Err(reason),
-    }
-}
-
 pub fn session_discovery() -> PiSessionDiscovery {
     match resolve_session_root() {
         SessionRootResolution::Available { .. } => PiSessionDiscovery::Available,
@@ -765,6 +741,24 @@ fn push_jsonl_file(entry: &fs::DirEntry, output: &mut Vec<PathBuf>, enforce_size
                 .is_ok_and(|metadata| metadata.len() <= MAX_SESSION_BYTES))
     {
         output.push(path);
+    }
+}
+
+#[cfg(test)]
+fn session_files_from_resolution(
+    resolution: SessionRootResolution,
+) -> Result<Vec<PathBuf>, String> {
+    match resolution {
+        SessionRootResolution::Available { root, layout } => {
+            let mut files = Vec::new();
+            collect_jsonl_files(&root, layout, &mut files, false);
+            files.sort();
+            Ok(files)
+        }
+        SessionRootResolution::RequiresProjectContext { configured_path } => Err(format!(
+            "Pi sessionDir '{configured_path}' requires a project cwd and cannot be globally enumerated"
+        )),
+        SessionRootResolution::Unavailable { reason } => Err(reason),
     }
 }
 

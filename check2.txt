@@ -1,0 +1,5 @@
+src\services\s3.rs:261:38: error: prefix `failed` is unknown: unknown prefix
+src\services\s3.rs:263:40: error: prefix `failed` is unknown: unknown prefix
+src\services\s3.rs:261:9: error: mismatched closing delimiter: `}`: unclosed delimiter, mismatched closing delimiter
+src\services\s3.rs:270:5: error: unexpected closing delimiter: `)`: unexpected closing delimiter
+error: could not compile `cc-switch` (lib) due to 4 previous errors

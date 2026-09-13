@@ -1,0 +1,5 @@
+warning: unused import: `once_cell::sync::OnceCell`
+warning: field assignment outside of initializer for an instance created with Default::default()
+warning: field assignment outside of initializer for an instance created with Default::default()
+warning: `cc-switch` (test "fixture_v18") generated 2 warnings
+warning: `cc-switch` (lib test) generated 1 warning (run `cargo clippy --fix --lib -p cc-switch --tests -- ` to apply 1 suggestion)

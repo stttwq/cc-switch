@@ -1,0 +1,4 @@
+src\services\provider\mod.rs:4828:24: error[E0433]: cannot find `proxy` in `crate`: could not find `proxy` in the crate root
+src\services\provider\mod.rs:4929:29: error[E0425]: cannot find function `sync_live_for_provider_respecting_takeover` in module `live`: not found in `live`
+src\services\provider\mod.rs:4930:23: error[E0433]: cannot find type `LiveSyncOutcome` in this scope: use of undeclared type `LiveSyncOutcome`
+error: could not compile `cc-switch` (lib) due to 3 previous errors; 6 warnings emitted

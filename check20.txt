@@ -1,0 +1,158 @@
+src\codex_config.rs:166:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
+src\codex_config.rs:231:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
+src\codex_config.rs:1222:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
+src\codex_config.rs:1235:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
+src\tray.rs:605:75: error[E0432]: unresolved import `super::TRAY_ID`: no `TRAY_ID` in `tray`
+src\lib.rs:1918:42: error[E0432]: unresolved import `super::redact_url_origin_for_log`: no `redact_url_origin_for_log` in the root
+src\codex_config.rs:167:6: error[E0425]: cannot find type `CodexLiveFileState` in this scope: not found in this scope
+src\codex_config.rs:219:6: error[E0425]: cannot find type `CodexModelCatalogFileSnapshot` in this scope: not found in this scope
+src\codex_config.rs:232:6: error[E0425]: cannot find type `CodexLiveStateSnapshot` in this scope: not found in this scope
+src\codex_config.rs:316:22: error[E0425]: cannot find type `CodexLiveFileState` in this scope: not found in this scope
+src\codex_config.rs:317:24: error[E0425]: cannot find type `CodexLiveFileState` in this scope: not found in this scope
+src\codex_config.rs:983:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:2170:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:2175:38: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:2184:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:2350:17: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\tray.rs:287:48: error[E0425]: cannot find value `TRAY_ID` in this scope: not found in this scope
+src\tray.rs:517:48: error[E0425]: cannot find value `TRAY_ID` in this scope: not found in this scope
+src\lib.rs:289:54: error[E0425]: cannot find value `TRAY_ID` in module `tray`: not found in `tray`
+src\lib.rs:1047:67: error[E0425]: cannot find value `TRAY_ID` in module `tray`: not found in `tray`
+src\lib.rs:1623:53: error[E0425]: cannot find value `TRAY_ID` in module `tray`: not found in `tray`
+src\provider.rs:323:10: error[E0119]: conflicting implementations of trait `std::fmt::Debug` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:325:10: error[E0119]: conflicting implementations of trait `std::fmt::Debug` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:323:17: error[E0119]: conflicting implementations of trait `Clone` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:325:17: error[E0119]: conflicting implementations of trait `Clone` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:323:24: error[E0119]: conflicting implementations of trait `app_config::_::_serde::Serialize` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:325:24: error[E0119]: conflicting implementations of trait `app_config::_::_serde::Serialize` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:323:35: error[E0119]: conflicting implementations of trait `app_config::_::_serde::Deserialize<'_>` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\provider.rs:325:35: error[E0119]: conflicting implementations of trait `app_config::_::_serde::Deserialize<'_>` for type `AuthBindingSource`: conflicting implementation for `AuthBindingSource`
+src\codex_config.rs:221:9: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:221:73: error: the `Self` constructor can only be used with tuple or unit structs
+src\codex_config.rs:235:19: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:236:21: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:237:22: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:238:29: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:254:34: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:264:19: error[E0433]: cannot find type `CodexLiveFileState` in this scope: use of undeclared type `CodexLiveFileState`
+src\codex_config.rs:3993:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID` in this scope
+src\codex_config.rs:4001:48: error[E0425]: cannot find value `CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID` in this scope
+src\codex_config.rs:4059:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID` in this scope
+src\codex_config.rs:4067:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID` in this scope
+src\codex_config.rs:7079:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7305:40: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7609:27: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7626:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7705:32: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7730:32: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7757:45: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7780:42: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+src\codex_config.rs:7789:18: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
+error: could not compile `cc-switch` (lib) due to 35 previous errors
+src\codex_config.rs:3883:20: error[E0425]: cannot find function `codex_managed_oauth_auth_value` in this scope: not found in this scope
+src\codex_config.rs:3913:13: error[E0425]: cannot find function `ensure_codex_live_auth_unchanged_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:3926:13: error[E0425]: cannot find function `clear_codex_live_auth_for_managed_account_if_unchanged` in this scope: not found in this scope
+src\codex_config.rs:3987:22: error[E0425]: cannot find function `apply_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4018:17: error[E0425]: cannot find function `codex_config_has_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4024:13: error[E0425]: cannot find function `apply_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4026:23: error[E0425]: cannot find function `remove_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4042:26: error[E0425]: cannot find function `apply_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4052:25: error[E0425]: cannot find function `apply_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4062:23: error[E0425]: cannot find function `remove_codex_official_proxy_route` in this scope: not found in this scope
+src\codex_config.rs:4271:13: error[E0425]: cannot find function `codex_live_auth_matches_managed_request` in this scope: not found in this scope
+src\codex_config.rs:4275:14: error[E0425]: cannot find function `codex_live_auth_matches_managed_request` in this scope: not found in this scope
+src\codex_config.rs:4283:13: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4287:14: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4293:14: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4299:13: error[E0425]: cannot find function `read_codex_live_auth_refresh_for_account` in this scope: not found in this scope
+src\codex_config.rs:4302:9: error[E0425]: cannot find function `clear_codex_live_auth_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:4318:13: error[E0425]: cannot find function `read_codex_live_auth_refresh_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:4326:14: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4330:13: error[E0425]: cannot find function `read_codex_live_auth_refresh_for_account` in this scope: not found in this scope
+src\codex_config.rs:4333:9: error[E0425]: cannot find function `clear_codex_live_auth_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:4342:18: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4353:23: error[E0425]: cannot find function `codex_managed_oauth_auth_value` in this scope: not found in this scope
+src\codex_config.rs:4370:24: error[E0433]: cannot find type `CodexLiveStateSnapshot` in this scope: use of undeclared type `CodexLiveStateSnapshot`
+src\codex_config.rs:4373:13: error[E0425]: cannot find function `read_codex_live_auth_refresh_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:4377:17: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4382:23: error[E0425]: cannot find function `codex_managed_oauth_auth_value` in this scope: not found in this scope
+src\codex_config.rs:4398:17: error[E0425]: cannot find function `codex_live_auth_is_managed_chatgpt_login` in this scope: not found in this scope
+src\codex_config.rs:4409:20: error[E0425]: cannot find function `codex_managed_oauth_auth_value` in this scope: not found in this scope
+src\codex_config.rs:4428:17: error[E0425]: cannot find function `prepare_codex_live_auth_for_managed_account_removal` in this scope: not found in this scope
+src\codex_config.rs:4436:9: error[E0425]: cannot find function `prepare_codex_live_auth_for_managed_account_removal` in this scope: not found in this scope
+src\codex_config.rs:4438:9: error[E0425]: cannot find function `clear_codex_live_auth_for_managed_account` in this scope: not found in this scope
+src\codex_config.rs:4719:27: error[E0425]: cannot find function `neutralize_codex_official_auth_fallback_for_proxy_oauth` in this scope: not found in this scope
+src\codex_config.rs:4729:17: error[E0425]: cannot find function `neutralize_codex_official_auth_fallback_for_proxy_oauth` in this scope: not found in this scope
+src\codex_config.rs:4734:34: error[E0425]: cannot find function `neutralize_codex_official_auth_fallback_for_proxy_oauth` in this scope: not found in this scope
+src\codex_config.rs:4750:17: error[E0425]: cannot find function `neutralize_codex_official_auth_fallback_for_proxy_oauth` in this scope: not found in this scope
+src\codex_config.rs:5171:23: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5181:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5199:23: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5216:13: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5229:20: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5250:28: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5252:28: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5445:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5448:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5452:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5457:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5460:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5464:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5471:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5475:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5480:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5485:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5492:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5498:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5501:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5508:17: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5512:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5516:18: error[E0425]: cannot find function `codex_auth_has_openai_account_material` in this scope
+src\codex_config.rs:5525:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5526:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5529:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5530:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5533:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5534:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5537:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5538:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5541:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5542:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5546:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5547:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5551:13: error[E0425]: cannot find function `codex_config_auth_store_mode` in this scope: not found in this scope
+src\codex_config.rs:5554:13: error[E0433]: cannot find type `CodexAuthStoreMode` in this scope: use of undeclared type `CodexAuthStoreMode`
+src\codex_config.rs:5626:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5638:23: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5642:20: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5712:17: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5715:17: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5718:17: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5724:18: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5727:18: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5732:18: error[E0425]: cannot find function `codex_auth_has_credential_login_material` in this scope
+src\codex_config.rs:5738:17: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5741:17: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5745:17: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5752:18: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5756:18: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5763:18: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5764:18: error[E0425]: cannot find function `codex_live_auth_is_stale_third_party_residue` in this scope: not found in this scope
+src\codex_config.rs:5893:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5927:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5952:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5969:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5978:25: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5980:23: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:5996:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6028:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6057:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6062:23: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6079:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6098:22: error[E0425]: cannot find function `update_codex_toml_field` in this scope: not found in this scope
+src\codex_config.rs:6129:13: error[E0425]: cannot find function `remove_codex_toml_base_url_if` in this scope: not found in this scope
+src\codex_config.rs:6152:13: error[E0425]: cannot find function `remove_codex_toml_base_url_if` in this scope: not found in this scope
+src\grok_config.rs:430:23: error[E0425]: cannot find function `apply_proxy_takeover` in this scope: not found in this scope
+src\grok_config.rs:439:17: error[E0425]: cannot find function `has_proxy_placeholder` in this scope: not found in this scope
+src\grok_config.rs:448:23: error[E0425]: cannot find function `apply_proxy_takeover` in this scope: not found in this scope
+error: could not compile `cc-switch` (lib test) due to 156 previous errors; 1 warning emitted

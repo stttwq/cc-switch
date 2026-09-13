@@ -1,0 +1,12 @@
+warning: this `else` branch is empty
+warning: unused import: `once_cell::sync::OnceCell`
+error[E0425]: cannot find function `get_or_load_codex_model_catalog_template` in this scope
+error[E0425]: cannot find function `session_files_from_resolution` in this scope
+939 |             session_files_from_resolution(unavailable).expect_err("discovery error"),
+error[E0425]: cannot find function `session_files_from_resolution` in this scope
+For more information about this error, try `rustc --explain E0425`.
+warning: `cc-switch` (lib) generated 1 warning
+error: could not compile `cc-switch` (lib) due to 1 previous error; 1 warning emitted
+warning: build failed, waiting for other jobs to finish...
+warning: `cc-switch` (lib test) generated 2 warnings (1 duplicate)
+error: could not compile `cc-switch` (lib test) due to 2 previous errors; 2 warnings emitted

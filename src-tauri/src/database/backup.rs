@@ -444,31 +444,6 @@ impl Database {
             }
         }
 
-        // Periodic maintenance is always enabled, regardless of auto-backup settings.
-        let mut reclaimed_rows = 0u64;
-        match self.cleanup_old_stream_check_logs(7) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
-            Err(e) => {
-                log::warn!("Periodic stream_check_logs cleanup failed: {e}");
-            }
-        }
-        match self.rollup_and_prune(30) {
-            Ok(deleted) => {
-                reclaimed_rows += deleted;
-            }
-            Err(e) => {
-                log::warn!("Periodic rollup_and_prune failed: {e}");
-            }
-        }
-        if reclaimed_rows > 0 {
-            let conn = lock_conn!(self.conn);
-            if let Err(e) = conn.execute_batch("PRAGMA incremental_vacuum;") {
-                log::warn!("Periodic incremental vacuum failed: {e}");
-            }
-        }
-
         Ok(())
     }
 
@@ -2117,40 +2092,6 @@ mod tests {
     }
 
     #[test]
-    #[serial]
-    fn full_sql_backup_still_round_trips_session_cursors() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-        let source = Database::memory()?;
-        {
-            let conn = crate::database::lock_conn!(source.conn);
-            conn.execute_batch(
-                "INSERT INTO providers (id, app_type, name, settings_config, meta)
-                 VALUES ('cursor-provider', 'claude', 'Cursor Provider', '{}', '{}');
-                 INSERT INTO session_log_sync (
-                     file_path, last_modified, last_line_offset, last_synced_at
-                 ) VALUES ('/local/sessions/manual-backup.jsonl', 11, 22, 33);",
-            )?;
-        }
-
-        let sql = source.export_sql_string()?;
-        let target = Database::memory()?;
-        target.import_sql_string(&sql)?;
-
-        let conn = crate::database::lock_conn!(target.conn);
-        let cursor: (String, i64, i64, i64) = conn.query_row(
-            "SELECT file_path, last_modified, last_line_offset, last_synced_at
-             FROM session_log_sync",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-        assert_eq!(
-            cursor,
-            ("/local/sessions/manual-backup.jsonl".into(), 11, 22, 33,)
-        );
-        Ok(())
-    }
-
-    #[test]
     fn every_sync_preserved_table_is_skipped_from_remote_payloads() {
         for table in super::SYNC_PRESERVE_TABLES {
             assert!(
@@ -3024,73 +2965,6 @@ mod tests {
             backup_count_after, backup_count_before,
             "staging failure should occur before creating a redundant safety backup"
         );
-        Ok(())
-    }
-
-    #[test]
-    #[serial]
-    fn periodic_maintenance_runs_even_when_auto_backup_disabled() -> Result<(), AppError> {
-        let _test_home = TestHomeGuard::new();
-
-        let settings = AppSettings {
-            backup_interval_hours: Some(0),
-            ..AppSettings::default()
-        };
-        update_settings(settings).expect("disable auto backup");
-
-        let db = Database::memory()?;
-        let now = chrono::Utc::now().timestamp();
-        let old_ts = now - 40 * 86400;
-        let old_stream_ts = now - 8 * 86400;
-
-        {
-            let conn = crate::database::lock_conn!(db.conn);
-            conn.execute(
-                "INSERT INTO proxy_request_logs (
-                    request_id, provider_id, app_type, model,
-                    input_tokens, output_tokens, total_cost_usd,
-                    latency_ms, status_code, created_at
-                ) VALUES ('old-req', 'p1', 'claude', 'claude-3', 100, 50, '0.01', 100, 200, ?1)",
-                [old_ts],
-            )?;
-            conn.execute(
-                "INSERT INTO stream_check_logs (
-                    provider_id, provider_name, app_type, status, success, message,
-                    response_time_ms, http_status, model_used, retry_count, tested_at
-                ) VALUES ('p1', 'Provider 1', 'claude', 'operational', 1, 'ok', 42, 200, 'claude-3', 0, ?1)",
-                [old_stream_ts],
-            )?;
-        }
-
-        db.periodic_backup_if_needed()?;
-
-        let (remaining_request_logs, stream_logs, rollups): (i64, i64, i64) = {
-            let conn = crate::database::lock_conn!(db.conn);
-            let remaining_request_logs =
-                conn.query_row("SELECT COUNT(*) FROM proxy_request_logs", [], |row| {
-                    row.get(0)
-                })?;
-            let stream_logs =
-                conn.query_row("SELECT COUNT(*) FROM stream_check_logs", [], |row| {
-                    row.get(0)
-                })?;
-            let rollups =
-                conn.query_row("SELECT COUNT(*) FROM usage_daily_rollups", [], |row| {
-                    row.get(0)
-                })?;
-            (remaining_request_logs, stream_logs, rollups)
-        };
-
-        assert_eq!(
-            remaining_request_logs, 0,
-            "old request logs should still be pruned when auto backup is disabled"
-        );
-        assert_eq!(
-            stream_logs, 0,
-            "old stream check logs should still be pruned when auto backup is disabled"
-        );
-        assert_eq!(rollups, 1, "old request logs should be rolled up");
-
         Ok(())
     }
 

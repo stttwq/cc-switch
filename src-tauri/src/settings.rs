@@ -17,6 +17,54 @@ pub struct CustomEndpoint {
     pub last_used: Option<i64>,
 }
 
+/// 日志配置
+///
+/// 存储在 settings 表的 log_config 字段中（JSON 格式）
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LogConfig {
+    /// 总开关：是否启用日志
+    #[serde(default = "log_config_default_enabled")]
+    pub enabled: bool,
+    /// 日志级别: error, warn, info, debug, trace
+    #[serde(default = "log_config_default_level")]
+    pub level: String,
+}
+
+impl Default for LogConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            level: "info".to_string(),
+        }
+    }
+}
+
+impl LogConfig {
+    /// 将配置转换为 log::LevelFilter
+    pub fn to_level_filter(&self) -> log::LevelFilter {
+        if !self.enabled {
+            return log::LevelFilter::Off;
+        }
+        match self.level.to_lowercase().as_str() {
+            "error" => log::LevelFilter::Error,
+            "warn" => log::LevelFilter::Warn,
+            "info" => log::LevelFilter::Info,
+            "debug" => log::LevelFilter::Debug,
+            "trace" => log::LevelFilter::Trace,
+            _ => log::LevelFilter::Info,
+        }
+    }
+}
+
+fn log_config_default_enabled() -> bool {
+    true
+}
+
+fn log_config_default_level() -> String {
+    "info".to_string()
+}
+
 fn default_true() -> bool {
     true
 }

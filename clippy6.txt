@@ -1,0 +1,10 @@
+warning: this `else` branch is empty
+warning: constant `DEFAULT_CREATED_AT` is never used
+warning: constant `MIMO_TOOL_CALL_THINKING_PLACEHOLDER` is never used
+warning: function `session_files_from_resolution` is never used
+warning: function `get_or_load_codex_model_catalog_template` is never used
+warning: `cc-switch` (lib) generated 4 warnings (run `cargo clippy --fix --lib -p cc-switch -- ` to apply 1 suggestion)
+warning: field assignment outside of initializer for an instance created with Default::default()
+warning: field assignment outside of initializer for an instance created with Default::default()
+warning: `cc-switch` (test "fixture_v18") generated 2 warnings
+warning: `cc-switch` (lib test) generated 4 warnings (3 duplicates)
