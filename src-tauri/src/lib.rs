@@ -9,6 +9,7 @@ mod codex_state_db;
 mod commands;
 mod config;
 mod database;
+mod env_delivery;
 mod error;
 mod init_status;
 mod lightweight;

@@ -427,6 +427,9 @@ impl ProviderService {
 
             // Sync to live (write_gemini_live handles security flag internally for Gemini).
             write_live_with_common_config_for_state(state, &app_type, provider)?;
+
+            // Deliver credentials via environment variables
+            Self::deliver_env_credentials(state, &app_type, provider, &mut result)?;
         }
         // Third-party dual of the block above: with preservation off, the
         // config-only write is expected to delete auth.json. A deletion
@@ -537,6 +540,83 @@ impl ProviderService {
             state
                 .db
                 .save_provider(app_type.as_str(), &updated_provider)?;
+        }
+
+        Ok(())
+    }
+
+    /// Deliver credentials via environment variables after switching provider
+    fn deliver_env_credentials(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        result: &mut SwitchResult,
+    ) -> Result<(), AppError> {
+        use crate::env_delivery::{EnvSink, ManagedEnvVars};
+        use crate::secrets::SecretTarget;
+
+        #[cfg(target_os = "windows")]
+        let sink = crate::env_delivery::WindowsUserEnvSink::new();
+        #[cfg(not(target_os = "windows"))]
+        let sink = crate::env_delivery::UnsupportedEnvSink::new();
+
+        let mut managed = ManagedEnvVars::load(&state.db)?;
+
+        // Clear old variables for this app
+        let old_vars = managed.vars_for_app(app_type.as_str());
+        for var_name in &old_vars {
+            if let Err(e) = sink.remove(var_name) {
+                log::warn!("Failed to remove env var {}: {}", var_name, e);
+                result.warnings.push(format!("env_cleanup_failed:{}", var_name));
+            }
+            managed.unregister(var_name);
+        }
+
+        // Deliver new credentials based on app type
+        match app_type {
+            AppType::Claude => {
+                // Retrieve API key from SecretStore
+                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
+                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
+                    if let Err(e) = sink.set("ANTHROPIC_API_KEY", &api_key) {
+                        log::warn!("Failed to set ANTHROPIC_API_KEY: {}", e);
+                        result.warnings.push("env_delivery_failed:ANTHROPIC_API_KEY".to_string());
+                    } else {
+                        managed.register("ANTHROPIC_API_KEY", app_type.as_str(), &provider.id);
+                    }
+                }
+            }
+            AppType::Codex => {
+                // Retrieve API key from SecretStore
+                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
+                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
+                    if let Err(e) = sink.set("CC_SWITCH_CODEX_API_KEY", &api_key) {
+                        log::warn!("Failed to set CC_SWITCH_CODEX_API_KEY: {}", e);
+                        result.warnings.push("env_delivery_failed:CC_SWITCH_CODEX_API_KEY".to_string());
+                    } else {
+                        managed.register("CC_SWITCH_CODEX_API_KEY", app_type.as_str(), &provider.id);
+                    }
+                }
+            }
+            AppType::Pi => {
+                // Pi uses multiple variables for different services
+                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
+                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
+                    let var_name = "CC_SWITCH_PI_DEFAULT_API_KEY";
+                    if let Err(e) = sink.set(var_name, &api_key) {
+                        log::warn!("Failed to set {}: {}", var_name, e);
+                        result.warnings.push(format!("env_delivery_failed:{}", var_name));
+                    } else {
+                        managed.register(var_name, app_type.as_str(), &provider.id);
+                    }
+                }
+            }
+        }
+
+        // Save managed registry and broadcast
+        managed.save(&state.db)?;
+        if let Err(e) = sink.broadcast() {
+            log::warn!("Failed to broadcast WM_SETTINGCHANGE: {}", e);
         }
 
         Ok(())
