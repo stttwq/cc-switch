@@ -1,0 +1,1 @@
+{"providers":{"fixture-pi-one":{"baseUrl":"https://fixture-pi.example.com","apiKey":"sk-fixture-pi-0003","model":"fixture-model-1"},"fixture-pi-two":{"baseUrl":"https://fixture-pi2.example.com","apiKey":"sk-fixture-pi-0004","model":"fixture-model-2","headers":{"Authorization":"Bearer sk-fixture-pi-header-0008"}}}}

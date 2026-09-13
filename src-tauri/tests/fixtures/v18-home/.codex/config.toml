@@ -1,0 +1,6 @@
+model_provider = "fixture"
+[model_providers.fixture]
+name = "Fixture Third Party"
+base_url = "https://fixture-codex.example.com/v1"
+experimental_bearer_token = "sk-fixture-codex-3rd-0002"
+wire_api = "responses"
