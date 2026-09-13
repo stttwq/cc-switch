@@ -43,16 +43,6 @@ fn require_enabled_webdav_settings() -> Result<WebDavSyncSettings, String> {
     Ok(settings)
 }
 
-// Password resolution removed - credentials now managed by SecretStore
-// This function is now a no-op passthrough for Phase 2A transition
-fn resolve_password_for_request(
-    incoming: WebDavSyncSettings,
-    _existing: Option<WebDavSyncSettings>,
-    _preserve_empty_password: bool,
-) -> WebDavSyncSettings {
-    incoming
-}
-
 #[cfg(test)]
 fn webdav_sync_mutex() -> &'static tokio::sync::Mutex<()> {
     webdav_sync_service::sync_mutex()
@@ -100,16 +90,12 @@ where
 
 #[tauri::command]
 pub async fn webdav_test_connection(
+    state: State<'_, AppState>,
     settings: WebDavSyncSettings,
     #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
 ) -> Result<Value, String> {
-    let preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    let resolved = resolve_password_for_request(
-        settings,
-        settings::get_webdav_sync_settings(),
-        preserve_empty,
-    );
-    webdav_sync_service::check_connection(&resolved)
+    let _preserve_empty = preserveEmptyPassword.unwrap_or(true);
+    webdav_sync_service::check_connection(&state.secrets, &settings)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({
@@ -121,9 +107,10 @@ pub async fn webdav_test_connection(
 #[tauri::command]
 pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let secrets = state.secrets.clone();
     let mut settings = require_enabled_webdav_settings()?;
 
-    let result = run_with_webdav_lock(webdav_sync_service::upload(&db, &mut settings)).await;
+    let result = run_with_webdav_lock(webdav_sync_service::upload(&db, &secrets, &mut settings)).await;
     map_sync_result(result, |error| {
         persist_sync_error(&mut settings, error, "manual")
     })
@@ -132,6 +119,7 @@ pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, Str
 #[tauri::command]
 pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let secrets = state.secrets.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_webdav_settings()?;
 
@@ -139,7 +127,7 @@ pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, S
     // operation. Otherwise another WebDAV/S3 restore can start after the DB
     // apply but before this snapshot has finished projecting its live files.
     let sync_result = run_download_with_webdav_lock(
-        webdav_sync_service::download(&db, &mut settings),
+        webdav_sync_service::download(&db, &secrets, &mut settings),
         |result| async move {
             let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
                 run_post_import_sync(&app_state_for_sync)
@@ -166,13 +154,24 @@ pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, S
 
 #[tauri::command]
 pub async fn webdav_sync_save_settings(
+    state: State<'_, AppState>,
     settings: WebDavSyncSettings,
+    password: Option<String>,
     #[allow(non_snake_case)] passwordTouched: Option<bool>,
 ) -> Result<Value, String> {
     let password_touched = passwordTouched.unwrap_or(false);
+
+    // Extract password to SecretStore if provided and touched
+    if password_touched {
+        if let Some(pwd) = password {
+            crate::secrets::extract_webdav_password(&state.secrets, &pwd)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+    }
+
     let existing = settings::get_webdav_sync_settings();
-    let mut sync_settings =
-        resolve_password_for_request(settings, existing.clone(), !password_touched);
+    let mut sync_settings = settings;
 
     // Preserve server-owned fields that the frontend does not manage
     if let Some(existing_settings) = existing {
@@ -186,9 +185,10 @@ pub async fn webdav_sync_save_settings(
 }
 
 #[tauri::command]
-pub async fn webdav_sync_fetch_remote_info() -> Result<Value, String> {
+pub async fn webdav_sync_fetch_remote_info(state: State<'_, AppState>) -> Result<Value, String> {
+    let secrets = state.secrets.clone();
     let settings = require_enabled_webdav_settings()?;
-    let info = webdav_sync_service::fetch_remote_info(&settings)
+    let info = webdav_sync_service::fetch_remote_info(&secrets, &settings)
         .await
         .map_err(|e| e.to_string())?;
     Ok(info.unwrap_or(json!({ "empty": true })))
@@ -198,8 +198,7 @@ pub async fn webdav_sync_fetch_remote_info() -> Result<Value, String> {
 mod tests {
     use super::{
         map_sync_result, persist_sync_error, require_enabled_webdav_settings,
-        resolve_password_for_request, run_download_with_webdav_lock, run_with_webdav_lock,
-        webdav_sync_mutex,
+        run_download_with_webdav_lock, run_with_webdav_lock, webdav_sync_mutex,
     };
     use crate::error::AppError;
     use crate::settings::{AppSettings, WebDavSyncSettings};
@@ -302,19 +301,6 @@ mod tests {
     }
 
     #[test]
-    fn resolve_password_for_request_is_now_passthrough() {
-        let incoming = WebDavSyncSettings {
-            base_url: "https://dav.example.com".to_string(),
-            username: "alice".to_string(),
-            ..WebDavSyncSettings::default()
-        };
-        let existing = Some(WebDavSyncSettings::default());
-        let resolved = resolve_password_for_request(incoming.clone(), existing, true);
-        assert_eq!(resolved.base_url, incoming.base_url);
-        assert_eq!(resolved.username, incoming.username);
-    }
-
-    #[test]
     #[serial]
     fn persist_sync_error_updates_status_without_overwriting_credentials() {
         let test_home = std::env::temp_dir().join("cc-switch-sync-error-status-test");
@@ -402,5 +388,55 @@ mod tests {
             require_enabled_webdav_settings().expect("enabled settings should be accepted");
         assert!(settings.enabled);
         assert_eq!(settings.base_url, "https://dav.example.com/dav/");
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn webdav_sync_save_settings_extracts_password_to_secret_store() {
+        let test_home = std::env::temp_dir().join("cc-switch-webdav-extract-test");
+        let _ = std::fs::remove_dir_all(&test_home);
+        std::fs::create_dir_all(&test_home).expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+
+        crate::settings::update_settings(AppSettings::default()).expect("reset settings");
+
+        let secrets: Arc<dyn crate::secrets::SecretStore> =
+            Arc::new(crate::secrets::InMemorySecretStore::new());
+
+        let settings = WebDavSyncSettings {
+            enabled: true,
+            base_url: "https://dav.example.com/dav/".to_string(),
+            username: "alice".to_string(),
+            remote_root: "cc-switch-sync".to_string(),
+            profile: "default".to_string(),
+            ..WebDavSyncSettings::default()
+        };
+
+        let password_touched = true;
+        let password = "secret-password".to_string();
+
+        if password_touched {
+            crate::secrets::extract_webdav_password(&secrets, &password)
+                .await
+                .expect("extraction should succeed");
+        }
+
+        let existing = crate::settings::get_webdav_sync_settings();
+        let mut sync_settings = settings;
+
+        if let Some(existing_settings) = existing {
+            sync_settings.status = existing_settings.status;
+        }
+
+        sync_settings.normalize();
+        sync_settings.validate().expect("validation should succeed");
+        crate::settings::set_webdav_sync_settings(Some(sync_settings))
+            .expect("save should succeed");
+
+        let restored = crate::secrets::restore_webdav_password(&secrets)
+            .await
+            .expect("restore should succeed")
+            .expect("password should be stored");
+        assert_eq!(restored, "secret-password");
     }
 }

@@ -968,6 +968,7 @@ pub fn get_webdav_sync_settings() -> Option<WebDavSyncSettings> {
 }
 
 /// 保存 WebDAV 同步设置
+/// Phase 2B: This will need to extract password to SecretStore
 pub fn set_webdav_sync_settings(settings: Option<WebDavSyncSettings>) -> Result<(), AppError> {
     mutate_settings(|current| {
         current.webdav_sync = settings;
@@ -989,6 +990,7 @@ pub fn get_s3_sync_settings() -> Option<S3SyncSettings> {
     settings_store().read().ok()?.s3_sync.clone()
 }
 
+/// Phase 2B: This will need to extract access_key_id and secret_access_key to SecretStore
 pub fn set_s3_sync_settings(settings: Option<S3SyncSettings>) -> Result<(), AppError> {
     mutate_settings(|current| {
         current.s3_sync = settings;

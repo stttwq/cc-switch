@@ -4,11 +4,14 @@
 //! primitives in [`super::webdav`]. Artifact set: `db.sql` + `skills.zip`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::secrets::sync_secrets::restore_webdav_password;
+use crate::secrets::SecretStore;
 use crate::services::webdav::{
     auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
     path_segments, put_bytes, test_connection, WebDavAuth,
@@ -40,9 +43,12 @@ struct RemoteSnapshot {
 // ─── Public API ──────────────────────────────────────────────
 
 /// Check WebDAV connectivity and ensure remote directory structure.
-pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppError> {
+pub async fn check_connection(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &WebDavSyncSettings,
+) -> Result<(), AppError> {
     settings.validate()?;
-    let auth = auth_for(settings);
+    let auth = auth_for(secrets, settings).await?;
     test_connection(&settings.base_url, &auth).await?;
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
@@ -52,10 +58,11 @@ pub async fn check_connection(settings: &WebDavSyncSettings) -> Result<(), AppEr
 /// Upload local snapshot (db + skills) to remote.
 pub async fn upload(
     db: &crate::database::Database,
+    secrets: &Arc<dyn SecretStore>,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let auth = auth_for(settings);
+    let auth = auth_for(secrets, settings).await?;
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
 
@@ -98,10 +105,11 @@ pub async fn upload(
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
     db: &crate::database::Database,
+    secrets: &Arc<dyn SecretStore>,
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let auth = auth_for(settings);
+    let auth = auth_for(secrets, settings).await?;
     let snapshot = find_remote_snapshot(settings, &auth)
         .await?
         .ok_or_else(|| {
@@ -150,9 +158,12 @@ pub async fn download(
 }
 
 /// Fetch remote manifest info without downloading artifacts.
-pub async fn fetch_remote_info(settings: &WebDavSyncSettings) -> Result<Option<Value>, AppError> {
+pub async fn fetch_remote_info(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &WebDavSyncSettings,
+) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    let auth = auth_for(settings);
+    let auth = auth_for(secrets, settings).await?;
     let Some(snapshot) = find_remote_snapshot(settings, &auth).await? else {
         return Ok(None);
     };
@@ -290,10 +301,12 @@ fn remote_dir_display(settings: &WebDavSyncSettings, layout: RemoteLayout) -> St
     format!("/{}", segs.join("/"))
 }
 
-fn auth_for(settings: &WebDavSyncSettings) -> WebDavAuth {
-    // TODO Phase 2B: Retrieve password from SecretStore
-    // For now, return auth with empty password to allow compilation
-    auth_from_credentials(&settings.username, "")
+async fn auth_for(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &WebDavSyncSettings,
+) -> Result<WebDavAuth, AppError> {
+    let password = restore_webdav_password(secrets).await?.unwrap_or_default();
+    Ok(auth_from_credentials(&settings.username, &password))
 }
 
 // ─── Tests ───────────────────────────────────────────────────

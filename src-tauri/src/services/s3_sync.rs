@@ -4,11 +4,14 @@
 //! primitives in [`super::s3`]. Artifact set: `db.sql` + `skills.zip`.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::secrets::sync_secrets::restore_s3_credentials;
+use crate::secrets::SecretStore;
 use crate::services::s3::{self, S3Credentials};
 use crate::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
 
@@ -28,19 +31,23 @@ pub(crate) fn sync_mutex() -> &'static tokio::sync::Mutex<()> {
 // ─── Public API ──────────────────────────────────────────────
 
 /// Check S3 connectivity by issuing a HEAD request against the bucket.
-pub async fn check_connection(settings: &S3SyncSettings) -> Result<(), AppError> {
+pub async fn check_connection(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &S3SyncSettings,
+) -> Result<(), AppError> {
     settings.validate()?;
-    let creds = creds_for(settings);
+    let creds = creds_for(secrets, settings).await?;
     s3::test_connection(&creds).await
 }
 
 /// Upload local snapshot (db + skills) to remote S3.
 pub async fn upload(
     db: &crate::database::Database,
+    secrets: &Arc<dyn SecretStore>,
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let creds = creds_for(settings);
+    let creds = creds_for(secrets, settings).await?;
 
     let snapshot = build_local_snapshot(db)?;
 
@@ -81,10 +88,11 @@ pub async fn upload(
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
     db: &crate::database::Database,
+    secrets: &Arc<dyn SecretStore>,
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let creds = creds_for(settings);
+    let creds = creds_for(secrets, settings).await?;
 
     let manifest_key = s3_key(settings, REMOTE_MANIFEST);
     let (manifest_bytes, etag) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES)
@@ -106,9 +114,9 @@ pub async fn download(
     validate_manifest_compat(&manifest, RemoteLayout::Current)?;
 
     // Download and verify artifacts
-    let db_sql = download_and_verify(settings, &creds, REMOTE_DB_SQL, &manifest.artifacts).await?;
+    let db_sql = download_and_verify(&secrets, settings, &creds, REMOTE_DB_SQL, &manifest.artifacts).await?;
     let skills_zip =
-        download_and_verify(settings, &creds, REMOTE_SKILLS_ZIP, &manifest.artifacts).await?;
+        download_and_verify(&secrets, settings, &creds, REMOTE_SKILLS_ZIP, &manifest.artifacts).await?;
 
     // Apply snapshot
     apply_snapshot(db, &db_sql, &skills_zip)?;
@@ -120,9 +128,12 @@ pub async fn download(
 }
 
 /// Fetch remote manifest info without downloading artifacts.
-pub async fn fetch_remote_info(settings: &S3SyncSettings) -> Result<Option<Value>, AppError> {
+pub async fn fetch_remote_info(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &S3SyncSettings,
+) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    let creds = creds_for(settings);
+    let creds = creds_for(secrets, settings).await?;
     let manifest_key = s3_key(settings, REMOTE_MANIFEST);
 
     let Some((bytes, _)) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES).await? else {
@@ -174,6 +185,7 @@ fn persist_sync_success(
 // ─── Download & verify ───────────────────────────────────────
 
 async fn download_and_verify(
+    _secrets: &Arc<dyn SecretStore>,
     settings: &S3SyncSettings,
     creds: &S3Credentials,
     artifact_name: &str,
@@ -223,16 +235,18 @@ fn s3_dir_display(settings: &S3SyncSettings) -> String {
     )
 }
 
-fn creds_for(settings: &S3SyncSettings) -> S3Credentials {
-    // TODO Phase 2B: Retrieve credentials from SecretStore
-    // For now, return empty credentials to allow compilation
-    S3Credentials {
-        access_key_id: String::new(),
-        secret_access_key: String::new(),
+async fn creds_for(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &S3SyncSettings,
+) -> Result<S3Credentials, AppError> {
+    let (access_key_id, secret_access_key) = restore_s3_credentials(secrets).await?;
+    Ok(S3Credentials {
+        access_key_id: access_key_id.unwrap_or_default(),
+        secret_access_key: secret_access_key.unwrap_or_default(),
         region: settings.region.clone(),
         bucket: settings.bucket.clone(),
         endpoint: settings.endpoint.clone(),
-    }
+    })
 }
 
 // ─── Tests ───────────────────────────────────────────────────

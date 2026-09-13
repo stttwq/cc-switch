@@ -81,8 +81,9 @@ pub async fn import_config_from_file(
 #[tauri::command]
 pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let secrets = state.secrets.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let app_state = AppState::new(db);
+        let app_state = AppState::new(db, secrets);
         ProviderService::sync_current_to_live(&app_state)?;
         Ok::<_, AppError>(json!({
             "success": true,

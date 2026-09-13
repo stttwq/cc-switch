@@ -48,9 +48,11 @@ mod tests {
     #[serial]
     fn state_exposes_every_explicit_provider_node() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         let models_path = crate::pi_config::get_pi_models_path().expect("models path");
         fs::create_dir_all(models_path.parent().expect("models directory"))
             .expect("create models directory");
@@ -105,9 +107,11 @@ mod tests {
     #[serial]
     fn invalid_global_settings_do_not_hide_provider_membership() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         let models_path = crate::pi_config::get_pi_models_path().expect("models path");
         fs::create_dir_all(models_path.parent().expect("models directory"))
             .expect("create models directory");

@@ -20,7 +20,7 @@ mod pi_config;
 mod prompt;
 mod prompt_files;
 mod provider;
-mod secrets;
+pub mod secrets;
 mod services;
 mod session_manager;
 mod settings;
@@ -501,7 +501,9 @@ pub fn run() {
                 }
             }
 
-            let app_state = AppState::new(db);
+            let secrets: Arc<dyn crate::secrets::SecretStore> =
+                Arc::new(crate::secrets::WindowsSecretStore::new()?);
+            let app_state = AppState::new(db, secrets);
 
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）

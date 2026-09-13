@@ -581,9 +581,11 @@ mod pi_prompt_tests {
     #[serial]
     fn pi_active_prompt_is_derived_from_agents_file() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         state
             .db
             .save_prompt(AppType::Pi.as_str(), &prompt(true))
@@ -619,9 +621,11 @@ mod pi_prompt_tests {
     #[serial]
     fn generic_prompt_projection_does_not_rewrite_pi_agents_file() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         state
             .db
             .save_prompt(AppType::Pi.as_str(), &prompt(false))
@@ -642,9 +646,11 @@ mod pi_prompt_tests {
     #[serial]
     fn editing_an_inactive_duplicate_pi_prompt_preserves_agents_file() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         let first = prompt(false);
         let mut duplicate = first.clone();
         duplicate.id = "duplicate-prompt".to_string();
@@ -682,9 +688,11 @@ mod pi_prompt_tests {
     #[serial]
     fn failed_pi_native_update_restores_the_previous_database_prompt() {
         let _agent = TestAgentDir::new();
-        let state = AppState::new(Arc::new(
-            Database::memory().expect("create in-memory database"),
-        ));
+        let secrets = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(Database::memory().expect("create in-memory database")),
+            secrets,
+        );
         let previous = prompt(false);
         state
             .db

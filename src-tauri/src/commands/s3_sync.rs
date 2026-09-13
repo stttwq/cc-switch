@@ -38,16 +38,6 @@ fn require_enabled_s3_settings() -> Result<S3SyncSettings, String> {
     Ok(settings)
 }
 
-// Secret resolution removed - credentials now managed by SecretStore
-// This function is now a no-op passthrough for Phase 2A transition
-fn resolve_secret_for_request(
-    incoming: S3SyncSettings,
-    _existing: Option<S3SyncSettings>,
-    _preserve_empty_secret: bool,
-) -> S3SyncSettings {
-    incoming
-}
-
 #[cfg(test)]
 fn s3_sync_mutex() -> &'static tokio::sync::Mutex<()> {
     s3_sync_service::sync_mutex()
@@ -95,13 +85,12 @@ where
 
 #[tauri::command]
 pub async fn s3_test_connection(
+    state: State<'_, AppState>,
     settings: S3SyncSettings,
     #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
 ) -> Result<Value, String> {
-    let preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    let resolved =
-        resolve_secret_for_request(settings, settings::get_s3_sync_settings(), preserve_empty);
-    s3_sync_service::check_connection(&resolved)
+    let _preserve_empty = preserveEmptyPassword.unwrap_or(true);
+    s3_sync_service::check_connection(&state.secrets, &settings)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({
@@ -113,9 +102,10 @@ pub async fn s3_test_connection(
 #[tauri::command]
 pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let secrets = state.secrets.clone();
     let mut settings = require_enabled_s3_settings()?;
 
-    let result = run_with_s3_lock(s3_sync_service::upload(&db, &mut settings)).await;
+    let result = run_with_s3_lock(s3_sync_service::upload(&db, &secrets, &mut settings)).await;
     map_sync_result(result, |error| {
         persist_sync_error(&mut settings, error, "manual")
     })
@@ -124,6 +114,7 @@ pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String>
 #[tauri::command]
 pub async fn s3_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
+    let secrets = state.secrets.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_s3_settings()?;
 
@@ -131,7 +122,7 @@ pub async fn s3_sync_download(state: State<'_, AppState>) -> Result<Value, Strin
     // operation. Otherwise another WebDAV/S3 restore can start after the DB
     // apply but before this snapshot has finished projecting its live files.
     let sync_result = run_download_with_s3_lock(
-        s3_sync_service::download(&db, &mut settings),
+        s3_sync_service::download(&db, &secrets, &mut settings),
         |result| async move {
             let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
                 run_post_import_sync(&app_state_for_sync)
@@ -158,13 +149,25 @@ pub async fn s3_sync_download(state: State<'_, AppState>) -> Result<Value, Strin
 
 #[tauri::command]
 pub async fn s3_sync_save_settings(
+    state: State<'_, AppState>,
     settings: S3SyncSettings,
+    #[allow(non_snake_case)] accessKeyId: Option<String>,
+    #[allow(non_snake_case)] secretAccessKey: Option<String>,
     #[allow(non_snake_case)] passwordTouched: Option<bool>,
 ) -> Result<Value, String> {
     let password_touched = passwordTouched.unwrap_or(false);
+
+    // Extract credentials to SecretStore if provided and touched
+    if password_touched {
+        let access_key = accessKeyId.unwrap_or_default();
+        let secret_key = secretAccessKey.unwrap_or_default();
+        crate::secrets::extract_s3_credentials(&state.secrets, &access_key, &secret_key)
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+
     let existing = settings::get_s3_sync_settings();
-    let mut sync_settings =
-        resolve_secret_for_request(settings, existing.clone(), !password_touched);
+    let mut sync_settings = settings;
 
     // Preserve server-owned fields that the frontend does not manage
     if let Some(existing_settings) = existing {
@@ -178,9 +181,10 @@ pub async fn s3_sync_save_settings(
 }
 
 #[tauri::command]
-pub async fn s3_sync_fetch_remote_info() -> Result<Value, String> {
+pub async fn s3_sync_fetch_remote_info(state: State<'_, AppState>) -> Result<Value, String> {
+    let secrets = state.secrets.clone();
     let settings = require_enabled_s3_settings()?;
-    let info = s3_sync_service::fetch_remote_info(&settings)
+    let info = s3_sync_service::fetch_remote_info(&secrets, &settings)
         .await
         .map_err(|e| e.to_string())?;
     Ok(info.unwrap_or(json!({ "empty": true })))

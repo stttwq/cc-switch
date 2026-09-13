@@ -76,7 +76,8 @@ pub fn test_mutex() -> &'static Mutex<()> {
 #[allow(dead_code)]
 pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
     let db = Arc::new(Database::init()?);
-    Ok(AppState::new(db))
+    let secrets = Arc::new(cc_switch_lib::secrets::InMemorySecretStore::new());
+    Ok(AppState::new(db, secrets))
 }
 
 /// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据
@@ -86,5 +87,6 @@ pub fn create_test_state_with_config(
 ) -> Result<AppState, Box<dyn std::error::Error>> {
     let db = Arc::new(Database::init()?);
     db.migrate_from_json(config)?;
-    Ok(AppState::new(db))
+    let secrets = Arc::new(cc_switch_lib::secrets::InMemorySecretStore::new());
+    Ok(AppState::new(db, secrets))
 }
