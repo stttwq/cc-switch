@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 /// 获取全局代理 URL
 ///
-/// 返回当前配置的代理 URL，null 表示直连。
+/// 返回当前配置的代理 URL（脱敏处理，移除用户名和密码），null 表示直连。
 #[tauri::command]
 pub fn get_global_proxy_url(state: tauri::State<'_, AppState>) -> Result<Option<String>, String> {
     let result = state.db.get_global_proxy_url().map_err(|e| e.to_string())?;
@@ -21,7 +21,8 @@ pub fn get_global_proxy_url(state: tauri::State<'_, AppState>) -> Result<Option<
             .map(|u| http_client::mask_url(u))
             .unwrap_or_else(|| "None".to_string())
     );
-    Ok(result)
+    // 脱敏处理：移除 URL 中的用户名和密码后返回给前端
+    Ok(result.map(|url| http_client::mask_url(&url)))
 }
 
 /// 设置全局代理 URL
@@ -159,13 +160,14 @@ pub async fn test_proxy_url(url: String) -> Result<ProxyTestResult, String> {
 
 /// 获取当前出站代理状态
 ///
-/// 返回当前是否启用了出站代理以及代理 URL。
+/// 返回当前是否启用了出站代理以及代理 URL（脱敏处理）。
 #[tauri::command]
 pub fn get_upstream_proxy_status() -> UpstreamProxyStatus {
     let url = http_client::get_current_proxy_url();
     UpstreamProxyStatus {
         enabled: url.is_some(),
-        proxy_url: url,
+        // 脱敏处理：移除 URL 中的用户名和密码后返回给前端
+        proxy_url: url.map(|u| http_client::mask_url(&u)),
     }
 }
 
