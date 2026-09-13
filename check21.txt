@@ -1,8 +1,0 @@
-src\codex_config.rs:1021:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
-src\codex_config.rs:1034:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
-src\codex_config.rs:782:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
-src\codex_config.rs:1969:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
-src\codex_config.rs:1974:38: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
-src\codex_config.rs:1983:33: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
-src\codex_config.rs:2149:17: error[E0425]: cannot find value `CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME` in this scope: not found in this scope
-error: could not compile `cc-switch` (lib) due to 7 previous errors; 2 warnings emitted

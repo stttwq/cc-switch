@@ -1,9 +1,0 @@
-tests\profile_roundtrip.rs:211:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:325:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:361:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:425:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:542:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:556:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:597:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-tests\profile_roundtrip.rs:687:9: error[E0308]: mismatched types: expected `Vec<String>`, found `(_, _)`
-error: could not compile `cc-switch` (test "profile_roundtrip") due to 8 previous errors

@@ -1,8 +1,0 @@
-thread 'tray::tests::locale_maps_traditional_chinese_variants_to_zh_tw' (19684) panicked at src\tray.rs:618:13:
-assertion `left == right` failed
-  left: "zh"
- right: "zh-TW"
-thread 'tray::tests::tray_id_is_unique_to_app' (10708) panicked at src\tray.rs:612:9:
-assertion `left == right` failed
-  left: "cc-switch"
- right: "tray"

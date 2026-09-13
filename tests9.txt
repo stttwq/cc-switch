@@ -1,4 +1,0 @@
-src\codex_config.rs:3574:1: error: expected item after doc comment: this doc comment doesn't document anything
-src\lib.rs:1918:42: error[E0432]: unresolved import `super::redact_url_origin_for_log`: no `redact_url_origin_for_log` in the root
-error: could not compile `cc-switch` (lib) due to 1 previous error
-error: could not compile `cc-switch` (lib test) due to 2 previous errors; 1 warning emitted

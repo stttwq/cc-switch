@@ -1,7 +1,0 @@
-warning: function `session_files_from_resolution` is never used
-warning: function `get_or_load_codex_model_catalog_template` is never used
-warning: `cc-switch` (lib) generated 1 warning
-warning: field assignment outside of initializer for an instance created with Default::default()
-warning: field assignment outside of initializer for an instance created with Default::default()
-warning: `cc-switch` (test "fixture_v18") generated 2 warnings
-warning: `cc-switch` (lib test) generated 1 warning

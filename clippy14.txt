@@ -1,3 +1,0 @@
-warning: field assignment outside of initializer for an instance created with Default::default()
-warning: field assignment outside of initializer for an instance created with Default::default()
-warning: `cc-switch` (test "fixture_v18") generated 2 warnings

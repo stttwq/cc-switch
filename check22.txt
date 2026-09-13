@@ -1,3 +1,0 @@
-src\codex_config.rs:1022:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
-src\codex_config.rs:1035:1: error[E0774]: `derive` may only be applied to `struct`s, `enum`s and `union`s: not applicable here
-error: could not compile `cc-switch` (lib) due to 2 previous errors; 2 warnings emitted
