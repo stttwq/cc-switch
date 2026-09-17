@@ -45,6 +45,9 @@ pub fn set_global_proxy_url(state: tauri::State<'_, AppState>, url: String) -> R
     let url_opt = if url.trim().is_empty() {
         None
     } else {
+        if url.contains('@') {
+            return Err("代理 URL 不允许包含用户名或密码".to_string());
+        }
         Some(url.as_str())
     };
 

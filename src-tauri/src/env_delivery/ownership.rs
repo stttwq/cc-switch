@@ -4,6 +4,7 @@
 //! and detects conflicts with foreign variables.
 
 use crate::error::AppError;
+use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -23,6 +24,29 @@ pub struct ManagedEnvVars {
 }
 
 impl ManagedEnvVars {
+    pub fn load_from_disk() -> Result<Self, AppError> {
+        let path = crate::config::get_app_config_dir().join("cc-switch.db");
+        let conn = rusqlite::Connection::open_with_flags(
+            &path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        let json: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'managed_env_vars'",
+                [],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        match json {
+            Some(json) => serde_json::from_str(&json).map_err(|e| {
+                AppError::Config(format!("Failed to parse managed_env_vars: {e}"))
+            }),
+            None => Ok(Self::default()),
+        }
+    }
+
     /// Load from settings DB
     pub fn load(db: &crate::database::Database) -> Result<Self, AppError> {
         match db.get_setting("managed_env_vars")? {

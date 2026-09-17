@@ -17,9 +17,9 @@ CC Switch is a local desktop application. It manages configuration files for AI 
 
 CC Switch 是一个本地桌面应用，用于管理本机上各 AI 编程 CLI 的配置文件。本项目不运营任何云端后端，没有多用户模型，也不与运行它的用户之间存在权限隔离。
 
-It does, however, run a **local HTTP proxy** whose listen address and port are user-configurable and **may be bound to a non-loopback interface**. Requests arriving at that listener are untrusted input and are in scope — see Scope below.
+Credentials (API keys and Base URLs) are stored only in **Windows Credential Manager**. Delivery to CLIs is via **user-level environment variables** (`HKCU\Environment`); live files must not contain secret values. Codex and Pi currently still write the **active** Base URL into live config because those CLIs have no env-var indirection for it.
 
-但它会启动一个**本地 HTTP 代理**，其监听地址与端口可由用户配置，**可能绑定到非 loopback 接口**。抵达该监听端口的请求属于不可信输入，在范围内——见下方「范围」。
+密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
 
 ### The bundled renderer is inside the trust boundary / 打包的渲染进程属于信任边界之内
 
@@ -27,8 +27,8 @@ The bundled WebView renderer is treated as a trusted component. This is a **scop
 
 打包的 WebView 渲染进程被视为可信组件。这是一项**范围划定决策，由下列事实支撑，而非从中必然推出**——这些事实的作用是让该决策可被核验；一旦任一条不再成立，该决策必须重新评估。已针对 v3.18.0 核实：
 
-1. **No remote executable content is loaded.** `frontendDist` is bundled at build time (`src-tauri/tauri.conf.json`); the codebase contains no `<iframe>`, no `<webview>`, and no remote script or stylesheet URL. The application *does* retrieve remote **data** — model pricing JSON and provider avatars — which CSP permits via `connect-src`/`img-src`; such data is treated as untrusted input, not as content.
-   前端资源在构建期打包，代码库中不存在 `<iframe>`、`<webview>` 或远程脚本/样式地址。应用**确实**会获取远程**数据**（模型定价 JSON、供应商头像），CSP 经 `connect-src`/`img-src` 允许之；此类数据按不可信输入对待，不作为内容。
+1. **No remote executable content is loaded.** `frontendDist` is bundled at build time (`src-tauri/tauri.conf.json`); the codebase contains no `<iframe>`, no `<webview>`, and no remote script or stylesheet URL. Avatars may load over `img-src https:`; Skills and sync go through the Rust backend, not the WebView.
+   前端资源在构建期打包。头像可通过 `img-src https:` 加载；Skills 与同步走 Rust 后端，不经 WebView 直连。
 2. **CSP restricts script execution to bundled assets** — `script-src 'self'` (`src-tauri/tauri.conf.json`).
    CSP 将脚本执行限制在打包资源内。
 3. **No dynamic code evaluation.** There is no `eval()` or `new Function()` anywhere under `src/`.
@@ -69,12 +69,9 @@ Inputs that genuinely cross a trust boundary:
 
 真正跨越信任边界的输入：
 
-- `ccswitch://` deep link payloads / deeplink 载荷（由第三方构造，经浏览器抵达）
-- **Inbound requests to the local HTTP proxy**, including from other hosts when it is configured to bind a non-loopback address / **抵达本地 HTTP 代理的入站请求**，包括配置为绑定非 loopback 地址时来自其他主机的请求
 - Remote sync payloads restored from WebDAV / S3 / 从 WebDAV、S3 还原的同步数据
 - Imported files: SQL import/export, provider and MCP config import / 导入文件：SQL 导入导出、供应商与 MCP 配置导入
-- Upstream API responses processed by the local proxy (`src-tauri/src/proxy/`) / 本地代理处理的上游 API 响应
-- Remote data rendered or acted upon by the renderer (model pricing, avatars) / 渲染进程展示或据以行动的远程数据（模型定价、头像）
+- Remote data rendered by the renderer (avatars) / 渲染进程展示的远程数据（头像）
 - Live config files on disk that a third party can write / 磁盘上可被第三方写入的 live 配置文件
 - Any path by which credentials (API keys, tokens) reach logs, telemetry, or shared config snippets / 凭据（API Key、令牌）进入日志、遥测或共享配置片段的任何路径
 - The build, release, signing and updater pipeline / 构建、发布、签名与更新链路

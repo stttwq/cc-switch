@@ -26,7 +26,10 @@ pub fn sanitize_pi_provider_for_live_write(
             obj.remove("api_key");
 
             // Inject environment variable reference
-            let var_name = format!("CC_SWITCH_PI_{}_API_KEY", provider_id.to_uppercase());
+            let var_name = format!(
+                "CC_SWITCH_PI_{}_API_KEY",
+                crate::secrets::normalize_env_key_segment(provider_id)
+            );
             let env_ref = format!("${}", var_name);
             obj.insert("apiKey".to_string(), Value::String(env_ref));
         }

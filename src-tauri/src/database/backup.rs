@@ -117,7 +117,9 @@ impl Database {
     /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
-        Self::dump_sql(&snapshot, &[])
+        let dump = Self::dump_sql(&snapshot, &[])?;
+        crate::secrets::scan::assert_no_secret_patterns(&dump)?;
+        Ok(dump)
     }
 
     /// Export SQL for sync (WebDAV), skipping local-only tables' data
@@ -1313,6 +1315,24 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(name, "Provider One");
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn export_rejects_plaintext_secret_pattern() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(source.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Leak', '{\"env\":{\"ANTHROPIC_AUTH_TOKEN\":\"sk-ant-abcdefghijk\"}}', '{}')",
+                [],
+            )?;
+        }
+        let err = source.export_sql_string().expect_err("must refuse secret dump");
+        assert!(err.to_string().contains("导出护栏"));
         Ok(())
     }
 

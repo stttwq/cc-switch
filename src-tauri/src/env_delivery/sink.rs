@@ -58,6 +58,7 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
     if name.starts_with("ANTHROPIC_")
         || name.starts_with("CC_SWITCH_")
         || name == "OPENAI_API_KEY"
+        || crate::secrets::is_sensitive_config_key(name)
     {
         return Ok(());
     }

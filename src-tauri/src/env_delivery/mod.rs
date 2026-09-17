@@ -6,7 +6,7 @@
 mod ownership;
 mod sink;
 
-pub use ownership::ManagedEnvVars;
+pub use ownership::{check_conflict, EnvConflict, ManagedEnvVars};
 pub use sink::{EnvSink, InMemoryEnvSink};
 
 #[cfg(target_os = "windows")]

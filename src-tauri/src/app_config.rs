@@ -282,10 +282,6 @@ impl AppType {
         matches!(self, AppType::Pi)
     }
 
-    pub fn supports_local_proxy(&self) -> bool {
-        matches!(self, AppType::Claude | AppType::Codex)
-    }
-
     /// Return an iterator over all app types
     pub fn all() -> impl Iterator<Item = AppType> {
         [AppType::Claude, AppType::Codex, AppType::Pi].into_iter()

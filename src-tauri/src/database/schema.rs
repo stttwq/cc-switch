@@ -38,7 +38,6 @@ impl Database {
                 icon_color TEXT,
                 meta TEXT NOT NULL DEFAULT '{}',
                 is_current BOOLEAN NOT NULL DEFAULT 0,
-                in_failover_queue BOOLEAN NOT NULL DEFAULT 0,
                 PRIMARY KEY (id, app_type)
             )",
             [],
@@ -410,25 +409,6 @@ impl Database {
         {
             Self::migrate_proxy_config_to_per_app(conn)?;
         }
-
-        // 确保 in_failover_queue 列存在（对于已存在的 v2 数据库）
-        Self::add_column_if_missing(
-            conn,
-            "providers",
-            "in_failover_queue",
-            "BOOLEAN NOT NULL DEFAULT 0",
-        )?;
-
-        // 删除旧的 failover_queue 表（如果存在）
-        let _ = conn.execute("DROP INDEX IF EXISTS idx_failover_queue_order", []);
-        let _ = conn.execute("DROP TABLE IF EXISTS failover_queue", []);
-
-        // 为故障转移队列创建索引（基于 providers 表）
-        let _ = conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_providers_failover
-             ON providers(app_type, in_failover_queue, sort_index)",
-            [],
-        );
 
         Ok(())
     }
@@ -1661,24 +1641,83 @@ impl Database {
         Ok(())
     }
 
-    /// v18 -> v19 迁移：触发凭据迁移
+    /// v18 -> v19 迁移：删废弃表/列/非目标应用，触发凭据迁移（不剥离密钥）
     fn migrate_v18_to_v19(conn: &Connection) -> Result<(), AppError> {
-        // 确保 settings 表存在（某些测试场景可能不完整）
         conn.execute(
             "CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)",
             [],
         )
         .map_err(|e| AppError::Database(format!("创建 settings 表失败: {e}")))?;
 
-        // 设置凭据迁移触发器（只设置标志位，不剥离密钥）
-        // 实际迁移在启动流程中执行，因为需要访问凭据管理器
+        for table in [
+            "proxy_config",
+            "provider_health",
+            "proxy_request_logs",
+            "model_pricing",
+            "stream_check_logs",
+            "proxy_live_backup",
+            "usage_daily_rollups",
+            "session_log_sync",
+            "session_usage_dedup",
+            "provider_endpoints",
+        ] {
+            conn.execute(&format!("DROP TABLE IF EXISTS {table}"), [])
+                .map_err(|e| AppError::Database(format!("删除表 {table} 失败: {e}")))?;
+        }
+        conn.execute("DROP INDEX IF EXISTS idx_providers_failover", [])
+            .map_err(|e| AppError::Database(format!("删除 failover 索引失败: {e}")))?;
+
+        conn.execute(
+            "DELETE FROM providers WHERE app_type NOT IN ('claude','codex','pi')",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("删除非目标应用供应商失败: {e}")))?;
+
+        if Self::has_column(conn, "mcp_servers", "enabled_gemini")? {
+            conn.execute(
+                "UPDATE mcp_servers SET enabled_gemini = 0, enabled_grokbuild = 0, enabled_opencode = 0, enabled_hermes = 0",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("清 mcp 非目标启用位失败: {e}")))?;
+        }
+
+        if Self::has_column(conn, "providers", "in_failover_queue")? {
+            conn.execute("ALTER TABLE providers DROP COLUMN in_failover_queue", [])
+                .map_err(|e| AppError::Database(format!("删除 in_failover_queue 失败: {e}")))?;
+        }
+
+        conn.execute(
+            "DELETE FROM settings WHERE key IN (
+                'universal_providers',
+                'claude_desktop_gateway_token',
+                'rectifier_config',
+                'optimizer_config',
+                'copilot_optimizer_config'
+            ) OR key LIKE 'proxy_takeover_%'",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("清理废弃 settings 键失败: {e}")))?;
+
+        if Self::has_column(conn, "providers", "meta")? {
+            conn.execute(
+                "UPDATE providers SET meta = json_remove(meta, '$.usage_script') WHERE json_type(meta, '$.usage_script') IS NOT NULL",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("剥离 meta.usage_script 失败: {e}")))?;
+        }
+
         conn.execute(
             "INSERT OR REPLACE INTO settings (key, value) VALUES ('secrets_migration_pending', '1')",
             [],
         )
         .map_err(|e| AppError::Database(format!("设置凭据迁移触发器失败: {e}")))?;
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_reapply_pending', '1')",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("设置 live 重写触发器失败: {e}")))?;
 
-        log::info!("v18→v19: 已设置 secrets_migration_pending=1，启动时将执行凭据迁移");
+        log::info!("v18→v19: 废弃表/列已清，secrets_migration_pending=1，live_reapply_pending=1");
         Ok(())
     }
 

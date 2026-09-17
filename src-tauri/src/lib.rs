@@ -106,7 +106,7 @@ pub(crate) fn url_for_log_with_secrets<'a>(
 
 /// 已知密钥参与子串脱敏的最短长度：过短的值(如 "api")当作子串会误伤无关文本，
 /// 所以只对足够长、几乎不可能是普通词的值做替换。
-const MIN_KNOWN_SECRET_LEN: usize = 8;
+const MIN_KNOWN_SECRET_LEN: usize = 6;
 
 /// 唯一的密钥脱敏原语：把字符串里出现的、我们确切握有的密钥值替换为 [REDACTED]。
 /// 不做任何“看起来像密钥”的形状猜测——只隐藏已知值，天然收敛、不误伤正常路径。
@@ -488,11 +488,10 @@ pub fn run() {
                         // 标记迁移成功，供前端显示 Toast
                         crate::init_status::set_migration_success();
                         // 归档旧配置文件（重命名而非删除，便于用户恢复）
-                        let archive_path = json_path.with_extension("json.migrated");
-                        if let Err(e) = std::fs::rename(&json_path, &archive_path) {
-                            log::warn!("归档旧配置文件失败: {e}");
+                        if let Err(e) = std::fs::remove_file(&json_path) {
+                            log::warn!("删除已迁移的旧配置文件失败: {e}");
                         } else {
-                            log::info!("✓ 旧配置已归档为 config.json.migrated");
+                            log::info!("✓ 已删除旧 config.json，避免明文残留");
                         }
                     }
                     Err(e) => {
@@ -505,6 +504,54 @@ pub fn run() {
             let secrets: Arc<dyn crate::secrets::SecretStore> =
                 Arc::new(crate::secrets::WindowsSecretStore::new()?);
             let app_state = AppState::new(db, secrets);
+
+            match app_state.db.get_setting("live_reapply_pending") {
+                Ok(Some(flag)) if flag == "1" => {
+                    log::info!("检测到 live_reapply_pending=1，开始重写 live 并投递环境变量");
+                    let mut ok = true;
+                    for app_type in [
+                        crate::app_config::AppType::Claude,
+                        crate::app_config::AppType::Codex,
+                    ] {
+                        match crate::settings::get_effective_current_provider(
+                            &app_state.db,
+                            &app_type,
+                        ) {
+                            Ok(Some(id)) => {
+                                match crate::services::provider::ProviderService::switch(
+                                    &app_state,
+                                    app_type.clone(),
+                                    &id,
+                                ) {
+                                    Ok(_) => log::info!(
+                                        "✓ live reapply {}",
+                                        app_type.as_str()
+                                    ),
+                                    Err(e) => {
+                                        ok = false;
+                                        log::warn!(
+                                            "✗ live reapply {} failed: {e}",
+                                            app_type.as_str()
+                                        );
+                                    }
+                                }
+                            }
+                            Ok(None) => {}
+                            Err(e) => {
+                                ok = false;
+                                log::warn!("✗ live reapply 读取当前供应商失败: {e}");
+                            }
+                        }
+                    }
+                    if ok {
+                        let _ = app_state.db.set_setting("live_reapply_pending", "0");
+                        log::info!("live_reapply_pending 已清零");
+                        crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
+                    }
+                }
+                Ok(_) => {}
+                Err(e) => log::warn!("读取 live_reapply_pending 失败: {e}"),
+            }
 
             // ============================================================
             // 按表独立判断的导入逻辑（各类数据独立检查，互不影响）
@@ -701,6 +748,23 @@ pub fn run() {
                 }
                 Ok(_) => log::debug!("○ No Pi provider changes from native config"),
                 Err(e) => log::warn!("✗ Failed to import Pi providers: {e}"),
+            }
+            if let Ok(native) = crate::pi_config::read_pi_native_providers() {
+                for id in native.keys() {
+                    if let Ok(Some(provider)) =
+                        app_state.db.get_provider_by_id(id, "pi")
+                    {
+                        let mut dummy = crate::services::SwitchResult::default();
+                        if let Err(e) = crate::services::provider::ProviderService::deliver_env_credentials_pub(
+                            &app_state,
+                            &crate::app_config::AppType::Pi,
+                            &provider,
+                            &mut dummy,
+                        ) {
+                            log::warn!("✗ Failed to deliver Pi env for {id}: {e}");
+                        }
+                    }
+                }
             }
 
             // 3. 导入 MCP 服务器配置（表空时触发）
@@ -935,6 +999,10 @@ pub fn run() {
             commands::open_external,
             commands::get_init_error,
             commands::get_migration_result,
+            commands::get_secrets_migration_report,
+            commands::confirm_secrets_migration,
+            commands::list_plaintext_backups,
+            commands::delete_plaintext_backups,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,

@@ -7,10 +7,8 @@ use crate::config::{
 };
 use crate::error::AppError;
 use crate::provider::Provider;
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 #[cfg(not(test))]
 use once_cell::sync::OnceCell;
-use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::fs;
 use std::process::{Command, Stdio};
@@ -150,20 +148,6 @@ fn codex_native_gateway_rejects_web_search(config_text: &str) -> bool {
     false
 }
 const CODEX_MODEL_CATALOG_TEMPLATE_SLUG: &str = "gpt-5.5";
-const CODEX_MANAGED_OAUTH_LIVE_AUTH_MARKER_FILENAME: &str = "codex_managed_oauth_live_auth.json";
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct CodexManagedOAuthLiveAuthMarker {
-    version: u32,
-    /// cc-switch 本地托管账号 ID，用于区分同一 ChatGPT workspace 下的登录。
-    account_id: String,
-    /// 原生 auth.json 的 `tokens.account_id`，即 ChatGPT workspace ID。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    chatgpt_account_id: Option<String>,
-    /// id_token 中跨刷新稳定的用户身份，防止同 workspace 的原生登录串号。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    user_identity: Option<String>,
-}
 /// Which Codex tool surface the generated model catalog should target.
 ///
 /// - `ProxyChat`: cc-switch's proxy takes over and converts Responses<->Chat,
@@ -428,15 +412,6 @@ pub fn is_codex_official_provider(provider: &Provider) -> bool {
         return false;
     }
 
-    let has_managed_account = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-        .is_some_and(|account_id| !account_id.trim().is_empty());
-    if has_managed_account {
-        return true;
-    }
-
     let has_stored_api_key = provider
         .settings_config
         .get("auth")
@@ -525,11 +500,6 @@ pub fn resolve_codex_catalog_tool_profile(provider: &Provider) -> CodexCatalogTo
     if is_codex_official_provider(provider) {
         return CodexCatalogToolProfile::NativeResponses;
     }
-    // xAI OAuth pins the native Responses profile regardless of editable
-    // api_format, mirroring the Claude-side managed-provider invariant.
-    if provider.is_xai_oauth() {
-        return CodexCatalogToolProfile::NativeResponses;
-    }
     if codex_provider_uses_anthropic(provider) {
         return CodexCatalogToolProfile::Anthropic;
     }
@@ -592,173 +562,6 @@ pub fn get_codex_auth_path() -> PathBuf {
     get_codex_config_dir().join("auth.json")
 }
 
-fn get_codex_managed_oauth_live_auth_marker_path() -> PathBuf {
-    crate::config::get_app_config_dir().join(CODEX_MANAGED_OAUTH_LIVE_AUTH_MARKER_FILENAME)
-}
-
-/// 从 live/备份的 Codex `auth` 中提取上游 ChatGPT workspace ID。
-///
-/// 仅接受 ChatGPT 登录形状（`auth_mode == "chatgpt"`、`OPENAI_API_KEY` 可清空）。
-/// 托管账号写入的完整 bundle 会额外带 `tokens.refresh_token` 与顶层 `last_refresh`，
-/// 这里一并容忍。Codex CLI 自刷新会轮换 access_token，因此短期 token 指纹不能
-/// 作为稳定的所有权谓词；cc-switch 的本地账号 ID 单独记录在 marker 中。
-fn extract_codex_managed_oauth_account_id(auth: &Value) -> Option<String> {
-    let auth_obj = auth.as_object()?;
-
-    if auth_obj.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "auth_mode" | "OPENAI_API_KEY" | "tokens" | "last_refresh"
-        )
-    }) {
-        return None;
-    }
-
-    if auth.get("auth_mode").and_then(|value| value.as_str()) != Some("chatgpt") {
-        return None;
-    }
-
-    let api_key_is_clearable = auth
-        .get("OPENAI_API_KEY")
-        .is_none_or(|value| value.is_null() || value.as_str() == Some("PROXY_MANAGED"));
-    if !api_key_is_clearable {
-        return None;
-    }
-
-    let tokens = auth.get("tokens").and_then(|value| value.as_object())?;
-
-    if tokens.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "access_token" | "account_id" | "id_token" | "refresh_token"
-        )
-    }) {
-        return None;
-    }
-
-    let account_id = tokens
-        .get("account_id")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|id| !id.is_empty())?;
-    tokens
-        .get("access_token")
-        .and_then(|value| value.as_str())
-        .map(str::trim)
-        .filter(|token| !token.is_empty())?;
-
-    Some(account_id.to_string())
-}
-
-/// 从原生 auth.json 的 id_token 提取跨刷新稳定的用户身份。
-fn extract_codex_auth_user_identity(auth: &Value) -> Option<String> {
-    let id_token = auth.pointer("/tokens/id_token")?.as_str()?;
-    extract_codex_id_token_user_identity(id_token)
-}
-
-pub(crate) fn extract_codex_id_token_user_identity(id_token: &str) -> Option<String> {
-    extract_codex_id_token_subject(id_token).map(|subject| format!("sub:{subject}"))
-}
-
-pub(crate) fn extract_codex_id_token_subject(id_token: &str) -> Option<String> {
-    let mut segments = id_token.split('.');
-    let header = segments.next()?;
-    let payload = segments.next()?;
-    segments.next()?;
-    if segments.next().is_some() {
-        return None;
-    }
-
-    let header: Value = URL_SAFE_NO_PAD
-        .decode(header)
-        .ok()
-        .and_then(|decoded| serde_json::from_slice(&decoded).ok())?;
-    header
-        .get("alg")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-
-    let claims: Value = URL_SAFE_NO_PAD
-        .decode(payload)
-        .ok()
-        .and_then(|decoded| serde_json::from_slice(&decoded).ok())?;
-    claims
-        .get("sub")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-}
-
-/// Build the native-shaped ChatGPT auth bundle shared by cc-switch and Codex CLI.
-pub fn record_codex_managed_oauth_live_auth(
-    auth: &Value,
-    managed_account_id: &str,
-) -> Result<(), AppError> {
-    let managed_account_id = managed_account_id.trim();
-    let Some(chatgpt_account_id) = extract_codex_managed_oauth_account_id(auth) else {
-        return Ok(());
-    };
-    if managed_account_id.is_empty() {
-        return Ok(());
-    }
-    let user_identity = extract_codex_auth_user_identity(auth).ok_or_else(|| {
-        AppError::Message(
-            "Codex 托管 OAuth auth.json 的 id_token 缺少稳定用户身份，无法安全记录账号所有权"
-                .to_string(),
-        )
-    })?;
-
-    let marker = CodexManagedOAuthLiveAuthMarker {
-        version: 3,
-        account_id: managed_account_id.to_string(),
-        chatgpt_account_id: Some(chatgpt_account_id),
-        user_identity: Some(user_identity),
-    };
-    crate::config::write_json_file(&get_codex_managed_oauth_live_auth_marker_path(), &marker)
-}
-
-/// Before removing a manager record, make any legacy live-auth ownership
-/// provable with the manager's persisted user identity. Failure is surfaced so
-/// callers keep the manager record and marker instead of orphaning auth.json.
-/// Verify that a proxied Codex request still uses the exact live access token
-/// owned by the selected local account. Workspace IDs alone are not sufficient:
-/// different Team users can share one value.
-/// 切走托管 provider 或从认证中心删除账号时，清理其残留在
-/// `~/.codex/auth.json` 的 ChatGPT 登录。
-///
-/// 删除谓词同时校验 cc-switch marker 中的本地账号 ID 与原生 auth.json 中的
-/// workspace ID，不依赖会被 Codex CLI 自刷新破坏的 access-token 指纹。切换路径必须
-/// 先把盘上轮换后的 refresh token 采纳回 manager，再调用本函数。
-/// Verify that the outgoing account's live refresh generation has not changed
-/// since it was adopted into the OAuth manager.
-/// Content-based cleanup with an optional compare-before-delete guard.
-/// 判断给定的 Codex `auth` 是否属于指定的 cc-switch 本地托管账号。
-///
-/// 原生 `tokens.account_id` 是 workspace ID，可能被多个本地账号共享；因此必须同时
-/// 命中 cc-switch marker 中的本地账号 ID，不能只按 auth.json 内容判断。
-///
-/// 用于 Live 备份剥离：避免把托管账号的可刷新 token 持久化进备份配置。
-/// 读回 Codex CLI 当前 `~/.codex/auth.json` 中属于 `account_id` 的 refresh_token /
-/// id_token（仅当磁盘上的登录账号与之一致时）。
-///
-/// 用于切换回托管 provider 前，采纳 CLI 自行刷新时轮换出的最新 refresh_token，避免
-/// 用陈腐 token 覆盖 CLI 的有效登录（“裸跑 codex” 反复切换场景）。
-/// Read a managed live credential after safely upgrading a legacy marker.
-/// v1/v2 markers only identify a workspace, so the manager's persisted
-/// id_token must prove the live user's identity before the marker can become
-/// authoritative again.
-/// Keep Codex CLI's live auth in the same refresh-token generation after the
-/// manager refreshes a managed account.
-///
-/// The write is compare-and-swap-like: immediately before replacing auth.json,
-/// it verifies that the file still contains the refresh token used for the
-/// network request. Codex CLI does not share cc-switch's process lock, so this
-/// is a best-effort guard that narrows (but cannot make atomic) the cross-process
-/// check-to-replace window.
-/// Ownership is local-account scoped through the marker, while auth.json keeps
-/// the upstream workspace ID required by Codex.
 /// 获取 Codex config.toml 路径
 pub fn get_codex_config_path() -> PathBuf {
     get_codex_config_dir().join("config.toml")
@@ -3431,9 +3234,16 @@ pub fn write_codex_live_for_provider(
         crate::settings::preserve_codex_official_auth_on_switch(),
     )?;
 
-    // Phase 4: Sanitize config.toml to inject env_key reference
     let sanitized_config = if let Some(ref config) = plan.config_text {
-        Some(crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write(config)?)
+        if config.contains("env_key") {
+            Some(config.clone())
+        } else {
+            Some(
+                crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write(
+                    config,
+                )?,
+            )
+        }
     } else {
         None
     };

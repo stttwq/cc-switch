@@ -231,14 +231,13 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 ### Provider Management
 
-- **8 supported tools, 50+ presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes; copy your key and import with one click
-- **Universal providers** — One config syncs to Claude Code, Codex, and Gemini CLI
-- One-click switching, system tray quick access, drag-and-drop sorting, import/export
+- **Claude Code, Codex, and Pi** — one-click switching, tray access, drag-and-drop sorting, import/export
 
-### Proxy & Failover
+### Credentials
 
-- **Local proxy with hot-switching** — Format conversion, auto-failover, circuit breaker, provider health monitoring, and request rectifier
-- **App-level takeover** — Independently proxy Claude, Codex, Gemini, or Grok Build, down to individual providers
+- API keys and Base URLs live in **Windows Credential Manager**, not SQLite
+- Delivery is via **user environment variables** (`HKCU\\Environment`); reopen terminals after switching
+- Live files must not contain secret values (Codex/Pi still write the active Base URL because those CLIs require it)
 
 ### MCP, Prompts & Skills
 

@@ -3,7 +3,8 @@ use tauri::{Manager, State};
 
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderForFrontend};
+use crate::provider::{Provider, ProviderForFrontend, SecretHint, SecretStatus};
+use crate::secrets::SecretTarget;
 use crate::services::{ProviderService, ProviderSortUpdate, SwitchResult};
 use crate::store::AppState;
 use std::str::FromStr;
@@ -16,15 +17,47 @@ pub fn get_providers(
     app: String,
 ) -> Result<IndexMap<String, ProviderForFrontend>, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let providers = ProviderService::list(state.inner(), app_type).map_err(|e| e.to_string())?;
-
-    // Strip settings_config from all providers before returning to frontend
-    let sanitized = providers
-        .into_iter()
-        .map(|(id, provider)| (id, provider.to_frontend()))
-        .collect();
-
+    let providers = ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
+    let mut sanitized = IndexMap::new();
+    for (id, provider) in providers {
+        let mut front = provider.to_frontend();
+        front.secret_status = Some(load_secret_status(state.inner(), &app_type, &id));
+        sanitized.insert(id, front);
+    }
     Ok(sanitized)
+}
+
+fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -> SecretStatus {
+    let api = futures::executor::block_on(
+        state
+            .secrets
+            .retrieve(&SecretTarget::provider_api_key(app_type.clone(), provider_id)),
+    )
+    .ok()
+    .flatten();
+    let base = futures::executor::block_on(
+        state
+            .secrets
+            .retrieve(&SecretTarget::provider_base_url(app_type.clone(), provider_id)),
+    )
+    .ok()
+    .flatten();
+    SecretStatus {
+        api_key: SecretHint {
+            present: api.is_some(),
+            hint: api.as_deref().and_then(hint_last4),
+        },
+        base_url: base,
+        extra_env: Vec::new(),
+    }
+}
+
+fn hint_last4(value: &str) -> Option<String> {
+    if value.len() < 8 {
+        None
+    } else {
+        Some(value[value.len() - 4..].to_string())
+    }
 }
 
 #[tauri::command]

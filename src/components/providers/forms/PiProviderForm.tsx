@@ -451,6 +451,7 @@ export function PiProviderForm({
   );
   const includeModelsRef = useRef(!isEdit || hasOwn(initialConfig, "models"));
   const [apiKey, setApiKey] = useState(optionalText(initialConfig.apiKey));
+  const existingKeyHint = initialData?.secretStatus?.apiKey;
   const initialHeaders = useMemo(
     () => asObject(initialConfig.headers),
     [initialConfig.headers],
@@ -1425,6 +1426,15 @@ export function PiProviderForm({
               websiteUrl={selectedPreset?.apiKeyUrl ?? ""}
               isPartner={selectedPreset?.isPartner}
               partnerPromotionKey={selectedPreset?.partnerPromotionKey}
+              placeholder={{
+                official: t("providerForm.officialNoApiKey"),
+                thirdParty: existingKeyHint?.present
+                  ? t("providerForm.apiKeyConfigured", {
+                      defaultValue: "已配置（末四位 {{hint}}），留空保持不变",
+                      hint: existingKeyHint.hint ?? "****",
+                    })
+                  : t("providerForm.apiKeyAutoFill"),
+              }}
             />
 
             <div className="space-y-2">

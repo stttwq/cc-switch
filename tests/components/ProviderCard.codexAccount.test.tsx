@@ -82,7 +82,7 @@ describe("ProviderCard Codex Official account identity", () => {
       name: "Legacy Official",
       category: "official",
       settingsConfig: { auth: {}, config: "" },
-      meta: { providerType: "codex_oauth" },
+      meta: {},
     };
     renderCard(provider, { isCurrent: true });
 

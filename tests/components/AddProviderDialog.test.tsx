@@ -165,8 +165,7 @@ describe("AddProviderDialog", () => {
   it("submits the optional managed account from the Codex Official preset", async () => {
     const handleSubmit = vi.fn().mockResolvedValue(undefined);
     const officialPresetIndex = codexProviderPresets.findIndex(
-      (preset) =>
-        preset.category === "official" && preset.providerType === "codex_oauth",
+      (preset) => preset.category === "official",
     );
     expect(officialPresetIndex).toBeGreaterThanOrEqual(0);
 
@@ -177,12 +176,7 @@ describe("AddProviderDialog", () => {
       presetId: `codex-${officialPresetIndex}`,
       presetCategory: "official",
       meta: {
-        providerType: "codex_oauth",
-        authBinding: {
-          source: "managed_account",
-          authProvider: "codex_oauth",
-          accountId: "acct-managed",
-        },
+        commonConfigEnabled: true,
       },
     };
 
@@ -202,11 +196,7 @@ describe("AddProviderDialog", () => {
       expect.objectContaining({
         category: "official",
         meta: expect.objectContaining({
-          authBinding: {
-            source: "managed_account",
-            authProvider: "codex_oauth",
-            accountId: "acct-managed",
-          },
+          commonConfigEnabled: true,
         }),
       }),
     );

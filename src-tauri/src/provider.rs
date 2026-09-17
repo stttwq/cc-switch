@@ -32,10 +32,6 @@ pub struct Provider {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "iconColor")]
     pub icon_color: Option<String>,
-    /// 是否加入故障转移队列
-    #[serde(default)]
-    #[serde(rename = "inFailoverQueue")]
-    pub in_failover_queue: bool,
 }
 
 /// Sanitized provider for frontend consumption - excludes settings_config to prevent secret leakage
@@ -47,6 +43,9 @@ pub struct ProviderForFrontend {
     /// Indicates whether this provider has configuration (true if settings_config is non-empty)
     #[serde(rename = "hasConfig")]
     pub has_config: bool,
+    /// 已剥离密钥的配置（可含模型列表、非敏感 env）
+    #[serde(rename = "settingsConfig")]
+    pub settings_config: Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "websiteUrl")]
     pub website_url: Option<String>,
@@ -67,9 +66,23 @@ pub struct ProviderForFrontend {
     #[serde(skip_serializing_if = "Option::is_none")]
     #[serde(rename = "iconColor")]
     pub icon_color: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "inFailoverQueue")]
-    pub in_failover_queue: bool,
+    #[serde(rename = "secretStatus", skip_serializing_if = "Option::is_none")]
+    pub secret_status: Option<SecretStatus>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretHint {
+    pub present: bool,
+    pub hint: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct SecretStatus {
+    pub api_key: SecretHint,
+    pub base_url: Option<String>,
+    pub extra_env: Vec<String>,
 }
 
 impl Provider {
@@ -80,6 +93,7 @@ impl Provider {
             name: self.name.clone(),
             has_config: !self.settings_config.is_null()
                 && self.settings_config.as_object().map_or(false, |obj| !obj.is_empty()),
+            settings_config: self.settings_config.clone(),
             website_url: self.website_url.clone(),
             category: self.category.clone(),
             created_at: self.created_at,
@@ -88,22 +102,8 @@ impl Provider {
             meta: self.meta.clone(),
             icon: self.icon.clone(),
             icon_color: self.icon_color.clone(),
-            in_failover_queue: self.in_failover_queue,
+            secret_status: None,
         }
-    }
-
-    pub fn provider_type(&self) -> Option<&str> {
-        self.settings_config
-            .get("providerType")
-            .and_then(|v| v.as_str())
-    }
-
-    pub fn is_codex_oauth(&self) -> bool {
-        self.provider_type() == Some("codex_oauth")
-    }
-
-    pub fn is_xai_oauth(&self) -> bool {
-        self.provider_type() == Some("xai_oauth")
     }
 
     /// Create a new Provider with the given ID and default values
@@ -120,7 +120,6 @@ impl Provider {
             meta: None,
             icon: None,
             icon_color: None,
-            in_failover_queue: false,
         }
     }
 }
@@ -143,24 +142,15 @@ pub struct ProviderMeta {
     /// API format for Claude providers (anthropic/openai_chat/openai_responses)
     #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
-    /// Provider type identifier (e.g., "codex_oauth", "xai_oauth")
-    #[serde(rename = "providerType", skip_serializing_if = "Option::is_none")]
-    pub provider_type: Option<String>,
     /// Whether common config is enabled
     #[serde(rename = "commonConfigEnabled", skip_serializing_if = "Option::is_none")]
     pub common_config_enabled: Option<bool>,
     /// Whether live config is managed by cc-switch
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]
     pub live_config_managed: Option<bool>,
-}
-
-impl ProviderMeta {
-    /// Get managed account ID for a specific auth type (e.g., "codex_oauth", "github_copilot")
-    pub fn managed_account_id_for(&self, _auth_type: &str) -> Option<String> {
-        // This was removed in earlier refactoring - return None for now
-        // The field no longer exists in ProviderMeta
-        None
-    }
+    /// Claude: ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY
+    #[serde(rename = "apiKeyField", skip_serializing_if = "Option::is_none")]
+    pub api_key_field: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

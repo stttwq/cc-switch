@@ -202,6 +202,12 @@ export function EditProviderDialog({
 
   const initialSettingsConfig = useMemo(() => {
     const storedSettings = asRecord(provider?.settingsConfig);
+    const withSecrets = {
+      ...(storedSettings ?? {}),
+      ...(provider?.secretStatus?.baseUrl
+        ? { baseUrl: provider.secretStatus.baseUrl }
+        : {}),
+    };
     const base =
       appId === "codex" && liveSettings
         ? reconcileCodexLiveAuth(
@@ -209,7 +215,7 @@ export function EditProviderDialog({
             storedSettings,
             provider?.category,
           )
-        : (liveSettings ?? storedSettings ?? {});
+        : (liveSettings ?? withSecrets);
 
     // Codex 的 modelCatalog 是 cc-switch 私有字段，SSOT 在数据库。Live 的 config.toml
     // 仅在写入时投影出 model_catalog_json 指针；Codex.app 改写配置、代理接管/恢复周期、
@@ -230,7 +236,7 @@ export function EditProviderDialog({
     }
 
     return base;
-  }, [liveSettings, provider?.settingsConfig, provider?.category, appId]); // 只依赖表单初始化所需字段，不依赖整个 provider
+  }, [liveSettings, provider?.settingsConfig, provider?.secretStatus, provider?.category, appId]);
 
   // 固定 initialData，防止 provider 对象更新时重置表单
   const initialData = useMemo(() => {
@@ -244,6 +250,7 @@ export function EditProviderDialog({
       meta: provider.meta,
       icon: provider.icon,
       iconColor: provider.iconColor,
+      secretStatus: provider.secretStatus,
     };
   }, [
     open, // 修复：编辑保存后再次打开显示旧数据，依赖 open 确保每次打开时重新读取最新 provider 数据

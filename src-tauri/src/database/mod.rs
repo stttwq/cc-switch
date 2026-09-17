@@ -197,14 +197,18 @@ impl Database {
                 )
                 .map_err(|e| AppError::Database(format!("保存迁移报告失败: {e}")))?;
 
-                // Clear migration pending flag
                 conn.execute(
                     "DELETE FROM settings WHERE key = 'secrets_migration_pending'",
                     [],
                 )
                 .map_err(|e| AppError::Database(format!("清除迁移标志失败: {e}")))?;
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) VALUES ('live_reapply_pending', '1')",
+                    [],
+                )
+                .map_err(|e| AppError::Database(format!("设置 live 重写标志失败: {e}")))?;
 
-                log::info!("凭据迁移标志已清除");
+                log::info!("凭据迁移标志已清除，live_reapply_pending=1");
                 Ok(())
             }
             Err(e) => {

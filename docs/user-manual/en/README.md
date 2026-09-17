@@ -76,15 +76,9 @@ CC Switch User Manual
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | Session Manager: browse, search, resume, delete sessions |
 | [3.5-workspace.md](./3-extensions/3.5-workspace.md) | Workspace files and daily memory (OpenClaw) |
 
-### 4. Proxy & High Availability
+### 4. Credentials
 
-| File | Description |
-|------|-------------|
-| [4.1-service.md](./4-proxy/4.1-service.md) | Start proxy, configuration, running status |
-| [4.2-routing.md](./4-proxy/4.2-routing.md) | App routing, configuration changes, status indicators |
-| [4.3-failover.md](./4-proxy/4.3-failover.md) | Failover queue, circuit breaker, health status |
-| [4.4-usage.md](./4-proxy/4.4-usage.md) | Usage statistics, trend charts, pricing configuration |
-| [4.5-model-test.md](./4-proxy/4.5-model-test.md) | Model test, health check, latency testing |
+Secrets live in Windows Credential Manager and are delivered via user environment variables. The local HTTP proxy and usage dashboard are removed.
 
 ### 5. FAQ
 
@@ -101,7 +95,7 @@ CC Switch User Manual
 - **Installation issues**: See [1.2 Installation Guide](./1-getting-started/1.2-installation.md)
 - **Configure providers**: See [2.1 Add Provider](./2-providers/2.1-add.md)
 - **Use Claude Desktop**: See [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
-- **Using proxy**: See [4.1 Proxy Service](./4-proxy/4.1-service.md)
+- **Credentials**: See “Credentials” above
 - **Having trouble**: See [5.2 FAQ](./5-faq/5.2-questions.md)
 
 ## Version Information

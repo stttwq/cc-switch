@@ -15,6 +15,7 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
+use crate::secrets::SecretExtractor;
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 
@@ -167,6 +168,7 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             Self::set_provider_live_config_managed(&mut provider, add_to_live);
         }
+        strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
 
         // Save to database
         state.db.save_provider(app_type.as_str(), &provider)?;
@@ -257,6 +259,7 @@ impl ProviderService {
             }
 
             Self::set_provider_live_config_managed(&mut provider, false);
+            strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
             state.db.save_provider(app_type.as_str(), &provider)?;
             state.db.delete_provider(app_type.as_str(), &original_id)?;
 
@@ -272,6 +275,7 @@ impl ProviderService {
             crate::settings::get_effective_current_provider(&state.db, &app_type)?;
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
+        strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
         // Save to database
         state.db.save_provider(app_type.as_str(), &provider)?;
 
@@ -428,7 +432,6 @@ impl ProviderService {
                 state.db.set_current_provider(app_type.as_str(), id)?;
             }
 
-            // Sync to live (write_gemini_live handles security flag internally for Gemini).
             write_live_with_common_config_for_state(state, &app_type, provider)?;
 
             // Deliver credentials via environment variables
@@ -548,6 +551,15 @@ impl ProviderService {
         Ok(())
     }
 
+    pub(crate) fn deliver_env_credentials_pub(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        result: &mut SwitchResult,
+    ) -> Result<(), AppError> {
+        Self::deliver_env_credentials(state, app_type, provider, result)
+    }
+
     /// Deliver credentials via environment variables after switching provider
     fn deliver_env_credentials(
         state: &AppState,
@@ -565,55 +577,91 @@ impl ProviderService {
 
         let mut managed = ManagedEnvVars::load(&state.db)?;
 
-        // Clear old variables for this app
-        let old_vars = managed.vars_for_app(app_type.as_str());
-        for var_name in &old_vars {
-            if let Err(e) = sink.remove(var_name) {
-                log::warn!("Failed to remove env var {}: {}", var_name, e);
-                result.warnings.push(format!("env_cleanup_failed:{}", var_name));
+        if !matches!(app_type, AppType::Pi) {
+            let old_vars = managed.vars_for_app(app_type.as_str());
+            for var_name in &old_vars {
+                if let Err(e) = sink.remove(var_name) {
+                    log::warn!("Failed to remove env var {}: {}", var_name, e);
+                    result.warnings.push(format!("env_cleanup_failed:{}", var_name));
+                }
+                managed.unregister(var_name);
             }
-            managed.unregister(var_name);
         }
 
-        // Deliver new credentials based on app type
+        let mut pending: Vec<(String, String)> = Vec::new();
         match app_type {
             AppType::Claude => {
-                // Retrieve API key from SecretStore
-                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
-                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
-                    if let Err(e) = sink.set("ANTHROPIC_API_KEY", &api_key) {
-                        log::warn!("Failed to set ANTHROPIC_API_KEY: {}", e);
-                        result.warnings.push("env_delivery_failed:ANTHROPIC_API_KEY".to_string());
-                    } else {
-                        managed.register("ANTHROPIC_API_KEY", app_type.as_str(), &provider.id);
-                    }
+                let key_target =
+                    SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
+                let key = futures::executor::block_on(state.secrets.retrieve(&key_target))
+                    .ok()
+                    .flatten()
+                    .ok_or_else(|| AppError::Message("请先补全密钥".to_string()))?;
+                let field = provider
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.api_key_field.as_deref())
+                    .unwrap_or("ANTHROPIC_AUTH_TOKEN");
+                pending.push((field.to_string(), key));
+                if let Ok(Some(url)) = futures::executor::block_on(state.secrets.retrieve(
+                    &SecretTarget::provider_base_url(app_type.clone(), provider.id.clone()),
+                )) {
+                    pending.push(("ANTHROPIC_BASE_URL".to_string(), url));
                 }
             }
             AppType::Codex => {
-                // Retrieve API key from SecretStore
-                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
-                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
-                    if let Err(e) = sink.set("CC_SWITCH_CODEX_API_KEY", &api_key) {
-                        log::warn!("Failed to set CC_SWITCH_CODEX_API_KEY: {}", e);
-                        result.warnings.push("env_delivery_failed:CC_SWITCH_CODEX_API_KEY".to_string());
-                    } else {
-                        managed.register("CC_SWITCH_CODEX_API_KEY", app_type.as_str(), &provider.id);
-                    }
-                }
+                let key = futures::executor::block_on(state.secrets.retrieve(
+                    &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
+                ))
+                .ok()
+                .flatten()
+                .ok_or_else(|| AppError::Message("请先补全密钥".to_string()))?;
+                let official = provider.category.as_deref() == Some("official")
+                    || crate::codex_config::is_codex_official_provider(provider);
+                let name = if official {
+                    "OPENAI_API_KEY"
+                } else {
+                    "CC_SWITCH_CODEX_API_KEY"
+                };
+                pending.push((name.to_string(), key));
             }
             AppType::Pi => {
-                // Pi uses provider-specific variable names: CC_SWITCH_PI_<ID>_API_KEY
-                let target = SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
-                if let Ok(Some(api_key)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
-                    let var_name = format!("CC_SWITCH_PI_{}_API_KEY", provider.id.to_uppercase());
-                    if let Err(e) = sink.set(&var_name, &api_key) {
-                        log::warn!("Failed to set {}: {}", var_name, e);
-                        result.warnings.push(format!("env_delivery_failed:{}", var_name));
-                    } else {
-                        managed.register(&var_name, app_type.as_str(), &provider.id);
+                match futures::executor::block_on(state.secrets.retrieve(
+                    &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
+                )) {
+                    Ok(Some(api_key)) => {
+                        let var_name = format!(
+                            "CC_SWITCH_PI_{}_API_KEY",
+                            crate::secrets::normalize_env_key_segment(&provider.id)
+                        );
+                        pending.push((var_name, api_key));
+                    }
+                    Ok(None) => {
+                        log::warn!("Pi provider {} has no api_key in SecretStore", provider.id);
+                        result.warnings.push(format!("pi_missing_api_key:{}", provider.id));
+                    }
+                    Err(e) => {
+                        log::warn!("Pi retrieve api_key failed for {}: {}", provider.id, e);
+                        result.warnings.push(format!("pi_retrieve_failed:{}", provider.id));
                     }
                 }
             }
+        }
+
+        for (name, value) in &pending {
+            if let Some(conflict) =
+                crate::env_delivery::check_conflict(&sink, &managed, name, value)?
+            {
+                return Err(AppError::Message(format!(
+                    "环境变量冲突: {} (外来值 {})",
+                    conflict.name, conflict.masked_value
+                )));
+            }
+        }
+
+        for (name, value) in pending {
+            sink.set(&name, &value)?;
+            managed.register(&name, app_type.as_str(), &provider.id);
         }
 
         // Save managed registry and broadcast
@@ -1179,6 +1227,25 @@ pub(crate) fn normalize_claude_models_in_value(settings: &mut Value) -> bool {
     }
 
     changed
+}
+
+fn strip_and_store_provider_secrets(
+    state: &AppState,
+    app_type: &AppType,
+    provider: &mut Provider,
+) -> Result<(), AppError> {
+    let extractor = SecretExtractor::new(state.secrets.as_ref(), app_type.clone());
+    let field = provider
+        .meta
+        .as_ref()
+        .and_then(|m| m.api_key_field.as_deref());
+    let (stripped, _) = futures::executor::block_on(extractor.extract_provider_secrets_with_field(
+        &provider.id,
+        &provider.settings_config,
+        field,
+    ))?;
+    provider.settings_config = stripped;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]

@@ -1,7 +1,8 @@
 use super::{ProviderService, SwitchResult};
 use crate::app_config::AppType;
 use crate::error::AppError;
-use crate::provider::{Provider, ProviderMeta};
+use crate::provider::Provider;
+use crate::secrets::SecretExtractor;
 use crate::store::AppState;
 use indexmap::IndexMap;
 use serde_json::Value;
@@ -58,8 +59,11 @@ pub(super) fn add(
         )));
     }
 
+    let live_config = provider.settings_config.clone();
+    strip_and_store_pi_secrets(state, &mut provider)?;
+
     let native_inserted = if add_to_live {
-        crate::pi_config::insert_pi_provider(&provider.id, &provider.settings_config)?
+        crate::pi_config::insert_pi_provider(&provider.id, &live_config)?
     } else {
         false
     };
@@ -68,7 +72,7 @@ pub(super) fn add(
         if native_inserted {
             if let Err(rollback) = crate::pi_config::remove_pi_provider_if_matches(
                 &provider.id,
-                &provider.settings_config,
+                &live_config,
             ) {
                 return Err(AppError::Config(format!(
                     "failed to save Pi provider: {error}; native rollback failed: {rollback}"
@@ -101,13 +105,16 @@ pub(super) fn update(
     strip_unsupported_pi_metadata(&mut provider);
     ProviderService::validate_provider_settings(&app_type, &provider)?;
 
+    let live_config = provider.settings_config.clone();
+    strip_and_store_pi_secrets(state, &mut provider)?;
+
     let previous_native =
-        crate::pi_config::replace_pi_provider_if_present(&original_id, &provider.settings_config)?;
+        crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config)?;
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
         if let Some(previous_native) = previous_native.as_ref() {
             if let Err(rollback) = crate::pi_config::replace_pi_provider(
                 &original_id,
-                &provider.settings_config,
+                &live_config,
                 previous_native,
             ) {
                 return Err(AppError::Config(format!(
@@ -175,16 +182,17 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
         .get_provider_by_id(id, app_type.as_str())?
         .ok_or_else(|| AppError::InvalidInput(format!("Pi provider '{id}' not found")))?;
 
-    if let Some(native) = crate::pi_config::read_pi_native_provider(id)? {
-        let mut synced = provider;
-        merge_native_config(&mut synced, native);
-        state.db.save_provider(app_type.as_str(), &synced)?;
-        return Ok(SwitchResult::default());
+    if crate::pi_config::read_pi_native_provider(id)?.is_some() {
+        let mut result = SwitchResult::default();
+        ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut result)?;
+        return Ok(result);
     }
 
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     crate::pi_config::insert_pi_provider(id, &provider.settings_config)?;
-    Ok(SwitchResult::default())
+    let mut result = SwitchResult::default();
+    ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut result)?;
+    Ok(result)
 }
 
 fn sync_native_locked(
@@ -244,7 +252,16 @@ fn align_native_display_name(provider: &mut Provider) {
 }
 
 fn strip_unsupported_pi_metadata(provider: &mut Provider) {
-    provider.in_failover_queue = false;
     // Pi doesn't support most metadata fields, so clear them
     provider.meta = None;
+}
+
+fn strip_and_store_pi_secrets(state: &AppState, provider: &mut Provider) -> Result<(), AppError> {
+    let extractor = SecretExtractor::new(state.secrets.as_ref(), AppType::Pi);
+    let (stripped, _) = futures::executor::block_on(extractor.extract_provider_secrets(
+        &provider.id,
+        &provider.settings_config,
+    ))?;
+    provider.settings_config = stripped;
+    Ok(())
 }

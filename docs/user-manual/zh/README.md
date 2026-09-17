@@ -76,15 +76,9 @@
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | 会话浏览、搜索过滤、恢复与删除 |
 | [3.5-workspace.md](./3-extensions/3.5-workspace.md) | OpenClaw 工作区文件、每日记忆 |
 
-### 4. 代理与高可用
+### 4. 凭据与投递
 
-| 文件 | 内容 |
-|------|------|
-| [4.1-service.md](./4-proxy/4.1-service.md) | 启动代理、配置项、运行状态 |
-| [4.2-routing.md](./4-proxy/4.2-routing.md) | 应用路由、配置修改、状态指示 |
-| [4.3-failover.md](./4-proxy/4.3-failover.md) | 故障转移队列、熔断器、健康状态 |
-| [4.4-usage.md](./4-proxy/4.4-usage.md) | 用量统计、趋势图表、定价配置 |
-| [4.5-model-test.md](./4-proxy/4.5-model-test.md) | 模型检查、健康检测、延迟测试 |
+密钥保存在 Windows 凭据管理器，通过用户环境变量投递给 CLI。本地 HTTP 代理与用量看板已移除。
 
 ### 5. 常见问题
 
@@ -101,7 +95,7 @@
 - **安装问题**：查看 [1.2 安装指南](./1-getting-started/1.2-installation.md)
 - **配置供应商**：查看 [2.1 添加供应商](./2-providers/2.1-add.md)
 - **使用 Claude Desktop**：查看 [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
-- **使用代理**：查看 [4.1 代理服务](./4-proxy/4.1-service.md)
+- **密钥与环境变量**：见上文「凭据与投递」
 - **遇到问题**：查看 [5.2 FAQ](./5-faq/5.2-questions.md)
 
 ## 版本信息

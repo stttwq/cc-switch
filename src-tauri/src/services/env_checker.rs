@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 #[cfg(not(target_os = "windows"))]
 use std::fs;
 
@@ -59,9 +60,10 @@ use winreg::RegKey;
 pub fn check_env_conflicts(app: &str) -> Result<Vec<EnvConflict>, String> {
     let keywords = get_keywords_for_app(app);
     let mut conflicts = Vec::new();
+    let managed = load_managed_names();
 
     // Check system environment variables
-    conflicts.extend(check_system_env(&keywords)?);
+    conflicts.extend(check_system_env(&keywords, &managed)?);
 
     // Check shell configuration files (Unix only)
     #[cfg(not(target_os = "windows"))]
@@ -101,14 +103,26 @@ fn matches_env_keyword(name: &str, keywords: &[EnvKeyword]) -> bool {
     })
 }
 
+fn load_managed_names() -> HashSet<String> {
+    crate::env_delivery::ManagedEnvVars::load_from_disk()
+        .map(|m| m.entries.keys().cloned().collect())
+        .unwrap_or_default()
+}
+
 /// Check system environment variables (Windows Registry or Unix env)
 #[cfg(target_os = "windows")]
-fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String> {
+fn check_system_env(
+    keywords: &[EnvKeyword],
+    managed: &HashSet<String>,
+) -> Result<Vec<EnvConflict>, String> {
     let mut conflicts = Vec::new();
 
     // Check HKEY_CURRENT_USER\Environment
     if let Ok(hkcu) = RegKey::predef(HKEY_CURRENT_USER).open_subkey("Environment") {
         for (name, value) in hkcu.enum_values().filter_map(Result::ok) {
+            if managed.contains(&name) {
+                continue;
+            }
             if matches_env_keyword(&name, keywords) {
                 conflicts.push(EnvConflictInternal {
                     var_name: name.clone(),
@@ -140,11 +154,17 @@ fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String>
 }
 
 #[cfg(not(target_os = "windows"))]
-fn check_system_env(keywords: &[EnvKeyword]) -> Result<Vec<EnvConflict>, String> {
+fn check_system_env(
+    keywords: &[EnvKeyword],
+    managed: &HashSet<String>,
+) -> Result<Vec<EnvConflict>, String> {
     let mut conflicts = Vec::new();
 
     // Check current process environment
     for (key, value) in std::env::vars() {
+        if managed.contains(&key) {
+            continue;
+        }
         if matches_env_keyword(&key, keywords) {
             conflicts.push(EnvConflictInternal {
                 var_name: key,

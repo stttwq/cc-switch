@@ -239,7 +239,7 @@ mod tests {
             conn.execute(
                 r#"INSERT INTO providers (id, name, app_type, settings_config, created_at, meta)
                    VALUES ('test-claude-1', 'Test Claude', 'claude',
-                           '{"anthropicApiKey":"sk-ant-test123"}',
+                           '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-test123"}}',
                            1234567890, '{}')"#,
                 [],
             )?;
@@ -274,7 +274,7 @@ mod tests {
         let migrated = &result.migrated_providers[0];
         assert_eq!(migrated.provider_id, "test-claude-1");
         assert_eq!(migrated.app_type, "claude");
-        assert_eq!(migrated.fields_count, 1, "Expected 1 field (anthropicApiKey)");
+        assert_eq!(migrated.fields_count, 1, "Expected 1 field (ANTHROPIC_AUTH_TOKEN)");
 
         // 验证凭据已存储
         let api_key_target = SecretTarget::provider_api_key(AppType::Claude, "test-claude-1");
@@ -294,7 +294,7 @@ mod tests {
 
         eprintln!("Cleaned config: {}", config);
         assert!(!config.contains("sk-ant-test123"));
-        assert!(config.contains("literal:***"));
+        assert!(!config.contains("ANTHROPIC_AUTH_TOKEN"));
 
         Ok(())
     }
@@ -308,7 +308,7 @@ mod tests {
             conn.execute(
                 r#"INSERT INTO providers (id, name, app_type, settings_config, created_at)
                    VALUES ('test-claude-2', 'Test Claude 2', 'claude',
-                           '{"anthropicApiKey":"sk-ant-test456"}',
+                           '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-test456"}}',
                            1234567890)"#,
                 [],
             )?;
@@ -345,9 +345,9 @@ mod tests {
             conn.execute(
                 r#"INSERT INTO providers (id, name, app_type, settings_config, created_at)
                    VALUES
-                   ('claude-1', 'Claude 1', 'claude', '{"anthropicApiKey":"sk-ant-key1"}', 1234567890),
-                   ('claude-2', 'Claude 2', 'claude', '{"anthropicApiKey":"sk-ant-key2"}', 1234567890),
-                   ('codex-1', 'Codex 1', 'codex', '{"anthropicApiKey":"sk-ant-key3"}', 1234567890)"#,
+                   ('claude-1', 'Claude 1', 'claude', '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-key1"}}', 1234567890),
+                   ('claude-2', 'Claude 2', 'claude', '{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-ant-key2"}}', 1234567890),
+                   ('codex-1', 'Codex 1', 'codex', '{"auth":{"OPENAI_API_KEY":"sk-ant-key3"}}', 1234567890)"#,
                 [],
             )?;
         }

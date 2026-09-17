@@ -27,11 +27,7 @@ describe("mergeProviderMeta", () => {
 
   it("overrides custom endpoints but preserves other fields", () => {
     const initial: ProviderMeta = {
-      usage_script: {
-        enabled: true,
-        language: "javascript",
-        code: "console.log(1);",
-      },
+      commonConfigEnabled: true,
       custom_endpoints: {
         "https://old.com": buildEndpoint("https://old.com"),
       },
@@ -42,7 +38,7 @@ describe("mergeProviderMeta", () => {
     });
 
     expect(result).toEqual({
-      usage_script: initial.usage_script,
+      commonConfigEnabled: true,
       custom_endpoints: {
         "https://new.com": buildEndpoint("https://new.com"),
       },
@@ -51,11 +47,7 @@ describe("mergeProviderMeta", () => {
 
   it("removes custom endpoints when result is empty but keeps other meta", () => {
     const initial: ProviderMeta = {
-      usage_script: {
-        enabled: true,
-        language: "javascript",
-        code: "console.log(1);",
-      },
+      commonConfigEnabled: true,
       custom_endpoints: {
         "https://example.com": buildEndpoint("https://example.com"),
       },
@@ -64,7 +56,7 @@ describe("mergeProviderMeta", () => {
     const result = mergeProviderMeta(initial, null);
 
     expect(result).toEqual({
-      usage_script: initial.usage_script,
+      commonConfigEnabled: true,
     });
   });
 

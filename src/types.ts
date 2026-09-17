@@ -26,8 +26,11 @@ export interface Provider {
   // 图标配置
   icon?: string; // 图标名称（如 "openai", "anthropic"）
   iconColor?: string; // 图标颜色（Hex 格式，如 "#00A67E"）
-  // 是否加入故障转移队列
-  inFailoverQueue?: boolean;
+  secretStatus?: {
+    apiKey: { present: boolean; hint: string | null };
+    baseUrl: string | null;
+    extraEnv: string[];
+  };
 }
 
 export interface AppConfig {
@@ -47,76 +50,6 @@ export interface EndpointCandidate {
   id?: string;
   url: string;
   isCustom?: boolean;
-}
-
-import type { TemplateType } from "./config/constants";
-
-// 用量查询脚本配置
-export interface UsageScript {
-  enabled: boolean; // 是否启用用量查询
-  language: "javascript"; // 脚本语言
-  code: string; // 脚本代码（JSON 格式配置）
-  timeout?: number; // 超时时间（秒，默认 10）
-  templateType?: TemplateType; // 模板类型（用于后端判断验证规则）
-  apiKey?: string; // 用量查询专用的 API Key（通用模板使用）
-  baseUrl?: string; // 用量查询专用的 Base URL（通用和 NewAPI 模板使用）
-  accessToken?: string; // 访问令牌（NewAPI 模板使用）
-  userId?: string; // 用户ID（NewAPI 模板使用）
-  accessKeyId?: string; // 火山方舟 AccessKey ID（用量查询签名用，与推理 Key 分离）
-  secretAccessKey?: string; // 火山方舟 SecretAccessKey
-  teamOrganizationId?: string; // 智谱团队套餐组织 ID（请求头 bigmodel-organization）
-  teamProjectId?: string; // 智谱团队套餐项目 ID（请求头 bigmodel-project）
-  codingPlanProvider?: string; // Coding Plan 供应商标识（如 "kimi", "zhipu", "minimax"）
-  autoQueryInterval?: number; // 自动查询间隔（单位：分钟，0 表示禁用）
-  autoIntervalMinutes?: number; // 自动查询间隔（分钟）- 别名字段
-  request?: {
-    // 请求配置
-    url?: string; // 请求 URL
-    method?: string; // HTTP 方法
-    headers?: Record<string, string>; // 请求头
-    body?: any; // 请求体
-  };
-}
-
-const DEFAULT_USAGE_SCRIPT: UsageScript = {
-  enabled: false,
-  language: "javascript",
-  code: "",
-  timeout: 10,
-  autoQueryInterval: 5,
-};
-
-export function createUsageScript(
-  overrides?: Partial<UsageScript>,
-): UsageScript {
-  return { ...DEFAULT_USAGE_SCRIPT, ...overrides };
-}
-
-// 单个套餐用量数据
-export interface UsageData {
-  planName?: string; // 套餐名称（可选）
-  extra?: string; // 扩展字段，可自由补充需要展示的文本（可选）
-  isValid?: boolean; // 套餐是否有效（可选）
-  invalidMessage?: string; // 失效原因说明（可选，当 isValid 为 false 时显示）
-  total?: number; // 总额度（可选）
-  used?: number; // 已用额度（可选）
-  remaining?: number; // 剩余额度（可选）
-  unit?: string; // 单位（可选）
-}
-
-// 用量查询结果（支持多套餐）
-export interface UsageResult {
-  success: boolean;
-  data?: UsageData[]; // 改为数组，支持返回多个套餐
-  error?: string;
-}
-
-export type AuthBindingSource = "provider_config" | "managed_account";
-
-export interface AuthBinding {
-  source: AuthBindingSource;
-  authProvider?: string;
-  accountId?: string;
 }
 
 export interface ClaudeDesktopModelRoute {
@@ -166,11 +99,6 @@ export interface CodexChatReasoning {
 
 export type PromptCacheRoutingMode = "auto" | "enabled" | "disabled";
 
-export interface LocalProxyRequestOverrides {
-  headers?: Record<string, string>;
-  body?: Record<string, unknown>;
-}
-
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息
@@ -181,8 +109,6 @@ export interface ProviderMeta {
   claudeDesktopMode?: "direct" | "proxy";
   // Claude Desktop 本地路由模式：Claude-safe route -> upstream model
   claudeDesktopModelRoutes?: Record<string, ClaudeDesktopModelRoute>;
-  // 用量查询脚本配置
-  usage_script?: UsageScript;
   // 请求地址管理：测速后自动选择最佳端点
   endpointAutoSelect?: boolean;
   // 是否为官方合作伙伴
@@ -203,8 +129,6 @@ export interface ProviderMeta {
     | "openai_chat"
     | "openai_responses"
     | "gemini_native";
-  // 通用认证绑定
-  authBinding?: AuthBinding;
   // Claude 认证字段名
   apiKeyField?: ClaudeApiKeyField;
   // 是否将 base_url 视为完整 API 端点（代理直接使用此 URL，不拼接路径）
@@ -214,8 +138,6 @@ export interface ProviderMeta {
   // Session-based prompt-cache routing for Codex Responses -> Chat conversions.
   // auto enables only for known-compatible upstreams; enabled/disabled are user overrides.
   promptCacheRouting?: PromptCacheRoutingMode;
-  // Codex OAuth FAST mode: injects service_tier="priority" on ChatGPT Codex requests
-  codexFastMode?: boolean;
   // Codex Responses -> Chat Completions reasoning capability metadata
   codexChatReasoning?: CodexChatReasoning;
   // Codex → Anthropic path: emulate the Claude Code client (disabled by default; only an explicit true enables it)
@@ -226,16 +148,8 @@ export interface ProviderMeta {
   // long/thinking-heavy responses. When set (>0) it takes precedence over the
   // request value and the default.
   maxOutputTokens?: number;
-  // Custom User-Agent for local proxy routing. Only applied by the local proxy.
-  customUserAgent?: string;
-  // Local proxy request overrides. Only applied by the local proxy after route transforms.
-  localProxyRequestOverrides?: LocalProxyRequestOverrides;
   // Whether this provider is currently projected into an additive app's live config.
   liveConfigManaged?: boolean;
-  // 供应商类型（用于识别 Copilot 等特殊供应商）
-  providerType?: string;
-  // GitHub Copilot 关联账号 ID（旧字段，保留兼容读取）
-  githubAccountId?: string;
 }
 
 // Skill 同步方式

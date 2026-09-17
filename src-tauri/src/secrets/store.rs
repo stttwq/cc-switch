@@ -36,11 +36,12 @@ pub trait SecretStore: Send + Sync {
 }
 
 /// Windows Credential Manager implementation
-pub struct WindowsSecretStore;
+pub struct WindowsSecretStore {
+    write_lock: Mutex<()>,
+}
 
 impl WindowsSecretStore {
     pub fn new() -> Result<Self, AppError> {
-        // Verify we're on Windows
         #[cfg(not(target_os = "windows"))]
         {
             return Err(AppError::SecretStoreError(
@@ -48,7 +49,9 @@ impl WindowsSecretStore {
             ));
         }
 
-        Ok(Self)
+        Ok(Self {
+            write_lock: Mutex::new(()),
+        })
     }
 }
 
@@ -76,6 +79,7 @@ impl SecretStore for WindowsSecretStore {
                 )));
             }
 
+            let _guard = self.write_lock.lock().unwrap();
             let entry = Entry::new(&target_str, &target.to_user_metadata())
                 .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {}", e)))?;
 
@@ -312,5 +316,19 @@ mod tests {
     async fn test_in_memory_store_probe() {
         let store = InMemorySecretStore::new();
         assert!(store.probe().await.is_ok());
+    }
+
+    #[tokio::test]
+    #[ignore]
+    #[cfg(target_os = "windows")]
+    async fn secrets_windows_roundtrip() {
+        let store = WindowsSecretStore::new().expect("windows store");
+        let target = SecretTarget::provider_api_key(AppType::Claude, "cc-switch-test-roundtrip");
+        let secret = Zeroizing::new("sk-fixture-roundtrip-0001".to_string());
+        store.set(&target, secret.clone()).await.unwrap();
+        let got = store.get(&target).await.unwrap();
+        assert_eq!(got.as_deref().map(|s| s.as_str()), Some("sk-fixture-roundtrip-0001"));
+        store.delete(&target).await.unwrap();
+        assert!(store.get(&target).await.unwrap().is_none());
     }
 }

@@ -14,6 +14,13 @@ use crate::error::AppError;
 /// - Remove any existing experimental_bearer_token
 /// - Inject env_key at the appropriate level (top-level or active provider)
 pub fn sanitize_codex_config_for_live_write(toml_text: &str) -> Result<String, AppError> {
+    sanitize_codex_config_for_live_write_with_base_url(toml_text, None)
+}
+
+pub fn sanitize_codex_config_for_live_write_with_base_url(
+    toml_text: &str,
+    base_url: Option<&str>,
+) -> Result<String, AppError> {
     use toml_edit::DocumentMut;
 
     let mut doc = toml_text
@@ -43,11 +50,13 @@ pub fn sanitize_codex_config_for_live_write(toml_text: &str) -> Result<String, A
                     // Remove experimental_bearer_token from provider
                     provider_table.remove("experimental_bearer_token");
 
-                    // Inject env_key
                     provider_table.insert(
                         "env_key",
                         toml_edit::value("CC_SWITCH_CODEX_API_KEY"),
                     );
+                    if let Some(url) = base_url {
+                        provider_table.insert("base_url", toml_edit::value(url));
+                    }
                 }
             }
         }

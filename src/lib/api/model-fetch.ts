@@ -37,38 +37,6 @@ export async function fetchModelsForConfig(
   });
 }
 
-export interface OpenCodeModelRef {
-  providerId: string;
-  modelId: string;
-}
-
-/** 获取 OpenCode 当前运行时可用模型（包含 OAuth 与 Zen 免费模型）。 */
-export async function getOpenCodeModels(): Promise<OpenCodeModelRef[]> {
-  return invoke("get_opencode_models");
-}
-
-/**
- * 获取 Codex OAuth (ChatGPT Plus/Pro 反代) 可用模型列表
- *
- * Codex OAuth 使用 ChatGPT 的 backend-api/codex 端点，不兼容普通 /v1/models。
- */
-export async function fetchCodexOauthModels(
-  accountId?: string | null,
-): Promise<FetchedModel[]> {
-  return invoke("get_codex_oauth_models", {
-    accountId: accountId || null,
-  });
-}
-
-/** 获取当前 xAI OAuth 账号可访问的模型列表。 */
-export async function fetchXaiOauthModels(
-  accountId?: string | null,
-): Promise<FetchedModel[]> {
-  return invoke("get_xai_oauth_models", {
-    accountId: accountId || null,
-  });
-}
-
 /**
  * 根据错误类型显示对应的 toast 提示
  */

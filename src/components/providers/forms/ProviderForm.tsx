@@ -195,6 +195,11 @@ export interface ProviderFormProps {
     meta?: ProviderMeta;
     icon?: string;
     iconColor?: string;
+    secretStatus?: {
+      apiKey: { present: boolean; hint: string | null };
+      baseUrl: string | null;
+      extraEnv: string[];
+    };
   };
   showButtons?: boolean;
   isProxyTakeover?: boolean;
@@ -1093,7 +1098,6 @@ function ProviderFormFull({
               websiteUrl={claudeWebsiteUrl}
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
-              usesOAuth={templatePreset?.requiresOAuth === true}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}

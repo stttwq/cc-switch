@@ -2,7 +2,7 @@
 //!
 //! Handles reading and writing live configuration files for Claude, Codex, and Pi.
 
-use serde_json::{json, Value};
+use serde_json::Value;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_config::AppType;
@@ -16,52 +16,7 @@ use crate::store::AppState;
 
 use super::normalize_claude_models_in_value;
 
-/// ChatGPT Codex catalogs gpt-5.6 at a 372K context window with a ~353K
-/// effective budget (openai/codex#31860), far below the 1.05M API spec.
-/// Declare the catalog window for both knobs: Claude Code's built-in output
-/// reserve and compact buffer already keep the actual compact trigger
-/// (~278K-339K) below the effective budget, so anything lower only wastes
-/// usable context.
-const CODEX_OAUTH_CLAUDE_MAX_CONTEXT_TOKENS: &str = "372000";
-const CODEX_OAUTH_CLAUDE_AUTO_COMPACT_WINDOW: &str = "372000";
 const KIMI_FOR_CODING_CONTEXT_TOKENS: &str = "262144";
-
-/// Model env keys Claude Code may route requests through. The defaults above
-/// are calibrated against gpt-5.6's Codex catalog, so every configured model
-/// must belong to that family before they are injected — gpt-5.5's upstream
-/// catalog oscillates between 272K and 372K and must not inherit them.
-const CODEX_OAUTH_MODEL_ENV_KEYS: [&str; 6] = [
-    "ANTHROPIC_MODEL",
-    "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    "ANTHROPIC_DEFAULT_SONNET_MODEL",
-    "ANTHROPIC_DEFAULT_OPUS_MODEL",
-    "ANTHROPIC_DEFAULT_FABLE_MODEL",
-    "CLAUDE_CODE_SUBAGENT_MODEL",
-];
-
-fn provider_env_targets_gpt56(provider_env: Option<&serde_json::Map<String, Value>>) -> bool {
-    let Some(env) = provider_env else {
-        return false;
-    };
-    let mut saw_model = false;
-    for key in CODEX_OAUTH_MODEL_ENV_KEYS {
-        let Some(value) = env.get(key) else {
-            continue;
-        };
-        let Some(model) = value.as_str() else {
-            return false;
-        };
-        let model = model.trim();
-        if model.is_empty() {
-            continue;
-        }
-        saw_model = true;
-        if !model.to_ascii_lowercase().starts_with("gpt-5.6") {
-            return false;
-        }
-    }
-    saw_model
-}
 
 fn is_kimi_for_coding_provider(provider: &Provider) -> bool {
     provider
@@ -71,61 +26,6 @@ fn is_kimi_for_coding_provider(provider: &Provider) -> bool {
         .map(str::trim)
         .map(|url| url.trim_end_matches('/'))
         == Some("https://api.kimi.com/coding")
-}
-
-/// Claude Code assigns unknown non-Claude model ids a 200K context window.
-/// Codex OAuth deliberately exposes GPT ids through Claude Code, so enrich the
-/// effective live settings for both newly-created and already-saved providers.
-/// Explicit user values always win; the defaults are only injected when every
-/// configured model targets gpt-5.6.
-fn apply_codex_oauth_claude_context_defaults(settings: &mut Value, provider: &Provider) {
-    if !provider.is_codex_oauth() {
-        return;
-    }
-
-    // Read provider-owned values before mutably borrowing the effective
-    // settings. This also deliberately prevents a legacy common-config
-    // snippet from overriding model-specific context limits.
-    let provider_env = provider
-        .settings_config
-        .get("env")
-        .and_then(Value::as_object);
-    let Some(root) = settings.as_object_mut() else {
-        return;
-    };
-    let env = root.entry("env".to_string()).or_insert_with(|| json!({}));
-    let Some(env) = env.as_object_mut() else {
-        log::warn!(
-            "Cannot apply Codex OAuth Claude context defaults for '{}': env is not an object",
-            provider.id
-        );
-        return;
-    };
-
-    let inject_defaults = provider_env_targets_gpt56(provider_env);
-    for (key, default_value) in [
-        (
-            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-            CODEX_OAUTH_CLAUDE_MAX_CONTEXT_TOKENS,
-        ),
-        (
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-            CODEX_OAUTH_CLAUDE_AUTO_COMPACT_WINDOW,
-        ),
-    ] {
-        match provider_env.and_then(|provider_env| provider_env.get(key)) {
-            Some(value) => {
-                env.insert(key.to_string(), value.clone());
-            }
-            None if inject_defaults => {
-                env.insert(key.to_string(), Value::String(default_value.to_string()));
-            }
-            // 老模型不注入默认值，同时剥掉遗留共享片段可能带进来的值
-            None => {
-                env.remove(key);
-            }
-        }
-    }
 }
 
 /// Kimi For Coding serves a 256K window, but Claude Code caps unknown models at
@@ -643,7 +543,6 @@ pub(crate) fn build_effective_settings_with_common_config(
     }
 
     if matches!(app_type, AppType::Claude) {
-        apply_codex_oauth_claude_context_defaults(&mut effective_settings, provider);
         apply_kimi_for_coding_context_defaults(&mut effective_settings, provider);
     }
 
@@ -655,7 +554,7 @@ pub(crate) fn write_live_with_common_config_for_state(
     app_type: &AppType,
     provider: &Provider,
 ) -> Result<(), AppError> {
-    write_live_with_common_config(state.db.as_ref(), app_type, provider)
+    write_live_with_common_config(state, app_type, provider)
 }
 
 /// Validate the target provider's Codex live projection without writing.
@@ -677,13 +576,13 @@ pub(crate) fn preflight_codex_live_write_for_state(
 }
 
 pub(crate) fn write_live_with_common_config(
-    db: &Database,
+    state: &AppState,
     app_type: &AppType,
     provider: &Provider,
 ) -> Result<(), AppError> {
-    let effective_provider = build_effective_provider_for_live(db, app_type, provider)?;
-
-    write_live_snapshot(app_type, &effective_provider)
+    let effective_provider =
+        build_effective_provider_for_live(state.db.as_ref(), app_type, provider)?;
+    write_live_snapshot(state, app_type, &effective_provider)
 }
 
 pub(crate) fn build_effective_provider_for_live(
@@ -739,45 +638,6 @@ pub(crate) fn strip_common_config_from_live_settings(
     restore_live_settings_for_provider_backfill(app_type, provider, backfill_settings)
 }
 
-/// 与 `apply_codex_oauth_claude_context_defaults` 严格对称：注入产物只活在
-/// live，切走回填时必须剥掉，否则程序默认值会固化成供应商的"用户显式值"，
-/// 之后调整默认值或更换模型时旧值永远压住新默认。仅当"注入会发生且注入的
-/// 就是这个值、且存储配置本来没有显式值"时才剥；用户显式存储的值和手改
-/// live 成其他数字的值都保留。
-fn strip_injected_codex_oauth_context_defaults(settings: &mut Value, provider: &Provider) {
-    if !provider.is_codex_oauth() {
-        return;
-    }
-    let provider_env = provider
-        .settings_config
-        .get("env")
-        .and_then(Value::as_object);
-    if !provider_env_targets_gpt56(provider_env) {
-        return;
-    }
-    let Some(env) = settings.get_mut("env").and_then(Value::as_object_mut) else {
-        return;
-    };
-    for (key, default_value) in [
-        (
-            "CLAUDE_CODE_MAX_CONTEXT_TOKENS",
-            CODEX_OAUTH_CLAUDE_MAX_CONTEXT_TOKENS,
-        ),
-        (
-            "CLAUDE_CODE_AUTO_COMPACT_WINDOW",
-            CODEX_OAUTH_CLAUDE_AUTO_COMPACT_WINDOW,
-        ),
-    ] {
-        let stored_explicit = provider_env.is_some_and(|e| e.contains_key(key));
-        if stored_explicit {
-            continue;
-        }
-        if env.get(key).and_then(Value::as_str) == Some(default_value) {
-            env.remove(key);
-        }
-    }
-}
-
 fn strip_injected_kimi_for_coding_context_defaults(settings: &mut Value, provider: &Provider) {
     if !is_kimi_for_coding_provider(provider) {
         return;
@@ -809,7 +669,6 @@ fn restore_live_settings_for_provider_backfill(
 ) -> Value {
     if matches!(app_type, AppType::Claude) {
         let mut settings = live_settings;
-        strip_injected_codex_oauth_context_defaults(&mut settings, provider);
         strip_injected_kimi_for_coding_context_defaults(&mut settings, provider);
         return settings;
     }
@@ -833,8 +692,6 @@ fn restore_live_settings_for_provider_backfill(
             provider.id
         );
     }
-
-    strip_codex_managed_oauth_auth_for_backfill(provider, &mut settings);
 
     // MCP 服务器归 DB mcp_servers 表所有，live 里的 [mcp_servers] 是同步投影；
     // 回填时剥掉，否则已删除的服务器会随供应商快照复活（逐条 reconcile 清不掉孤儿）。
@@ -874,40 +731,6 @@ fn restore_live_settings_for_provider_backfill(
     }
 
     settings
-}
-
-/// 回填（backfill）托管 Codex 官方 provider 时，剥离 live 的 `auth`。
-///
-/// 托管 provider 的存储配置**永远不应**持久化真实 OAuth token：token 由
-/// `CodexOAuthManager` 按账号集中保管，provider 配置只保留绑定与占位 auth。
-///
-/// 因此无论 live 里当前是什么（我们写入的托管 auth、被 CLI 轮换过的 token、
-/// 还是用户自己浏览器登录的原生 auth，后者含真实 access/refresh_token），
-/// 都统一替换为 provider 存储的占位 auth，避免把真实凭据回填进 DB 配置。
-fn strip_codex_managed_oauth_auth_for_backfill(provider: &Provider, settings: &mut Value) {
-    let is_managed = provider
-        .meta
-        .as_ref()
-        .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-        .is_some();
-    if !is_managed {
-        return;
-    }
-
-    // live 里没有 auth 就无需处理。
-    if settings.get("auth").is_none() {
-        return;
-    }
-
-    let stored_auth = provider
-        .settings_config
-        .get("auth")
-        .filter(|auth| auth.is_object())
-        .cloned()
-        .unwrap_or_else(|| json!({}));
-    if let Some(obj) = settings.as_object_mut() {
-        obj.insert("auth".to_string(), stored_auth);
-    }
 }
 
 pub(crate) fn normalize_provider_common_config_for_storage(
@@ -993,7 +816,11 @@ impl LiveSnapshot {
 }
 
 /// Write live configuration snapshot for a provider
-pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
+pub(crate) fn write_live_snapshot(
+    state: &AppState,
+    app_type: &AppType,
+    provider: &Provider,
+) -> Result<(), AppError> {
     match app_type {
         AppType::Claude => {
             let path = get_claude_settings_path();
@@ -1016,9 +843,23 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
             // the proxy router (apiFormat meta/settings + TOML wire_api).
             let profile = crate::codex_config::resolve_codex_catalog_tool_profile(provider);
 
-            // Phase 4: Sanitize config.toml to use env_key instead of plaintext tokens
+            let mut live_auth = auth.clone();
+            if let Some(obj) = live_auth.as_object_mut() {
+                obj.remove("OPENAI_API_KEY");
+            }
+            let base_url = futures::executor::block_on(
+                state.secrets.retrieve(&crate::secrets::SecretTarget::provider_base_url(
+                    AppType::Codex,
+                    provider.id.clone(),
+                )),
+            )
+            .ok()
+            .flatten();
             let sanitized_config = if let Some(config_text) = config_str {
-                let sanitized = super::codex_sanitizer::sanitize_codex_config_for_live_write(config_text)?;
+                let sanitized = super::codex_sanitizer::sanitize_codex_config_for_live_write_with_base_url(
+                    config_text,
+                    base_url.as_deref(),
+                )?;
                 Some(sanitized)
             } else {
                 None
@@ -1027,17 +868,10 @@ pub(crate) fn write_live_snapshot(app_type: &AppType, provider: &Provider) -> Re
             crate::codex_config::write_codex_provider_live_with_catalog(
                 &provider.settings_config,
                 provider.category.as_deref(),
-                auth,
+                &live_auth,
                 sanitized_config.as_deref().or(config_str),
                 profile,
             )?;
-            if let Some(account_id) = provider
-                .meta
-                .as_ref()
-                .and_then(|meta| meta.managed_account_id_for("codex_oauth"))
-            {
-                crate::codex_config::record_codex_managed_oauth_live_auth(auth, &account_id)?;
-            }
         }
         AppType::Pi => {
             return Err(AppError::InvalidInput(

@@ -75,6 +75,47 @@ pub async fn get_migration_result() -> Result<bool, String> {
     Ok(crate::init_status::take_migration_success())
 }
 
+#[tauri::command]
+pub fn get_secrets_migration_report(
+    state: State<'_, crate::store::AppState>,
+) -> Result<Option<crate::secrets::MigrationReport>, String> {
+    let confirmed = state
+        .db
+        .get_setting("secrets_migration_confirmed")
+        .map_err(|e| e.to_string())?;
+    if confirmed.as_deref() == Some("1") {
+        return Ok(None);
+    }
+    let raw = state
+        .db
+        .get_setting("secrets_migration_report")
+        .map_err(|e| e.to_string())?;
+    match raw {
+        Some(json) => serde_json::from_str(&json).map(Some).map_err(|e| e.to_string()),
+        None => Ok(None),
+    }
+}
+
+#[tauri::command]
+pub fn confirm_secrets_migration(
+    state: State<'_, crate::store::AppState>,
+) -> Result<(), String> {
+    state
+        .db
+        .set_setting("secrets_migration_confirmed", "1")
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn list_plaintext_backups() -> Result<Vec<crate::secrets::cleanup::PlaintextBackupInfo>, String> {
+    crate::secrets::cleanup::list_plaintext_db_backups().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn delete_plaintext_backups() -> Result<usize, String> {
+    crate::secrets::cleanup::delete_plaintext_db_backups().map_err(|e| e.to_string())
+}
+
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
 /// 只返回一次 Some({count})，之后返回 None，用于前端显示一次性 Toast 通知。
 #[tauri::command]
@@ -3437,7 +3478,7 @@ pub async fn open_provider_terminal(
     let env_vars = extract_env_vars_from_config(config, &app_type);
 
     // 根据平台启动终端，传入提供商ID用于生成唯一的配置文件名
-    launch_terminal_with_env(env_vars, &providerId, launch_cwd.as_deref())
+    launch_terminal_with_env(env_vars, launch_cwd.as_deref())
         .map_err(|e| format!("启动终端失败: {e}"))?;
 
     Ok(true)
@@ -3510,63 +3551,22 @@ fn resolve_launch_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
     Ok(Some(resolved))
 }
 
-/// 创建临时配置文件并启动 claude 终端
-/// 使用 --settings 参数传入提供商特定的 API 配置
+/// 启动终端：密钥只进进程环境，不写 %TEMP% JSON。
 fn launch_terminal_with_env(
     env_vars: Vec<(String, String)>,
-    provider_id: &str,
     cwd: Option<&Path>,
 ) -> Result<(), String> {
-    let temp_dir = std::env::temp_dir();
-    let config_file = temp_dir.join(format!(
-        "claude_{}_{}.json",
-        provider_id,
-        std::process::id()
-    ));
-
-    // 创建并写入配置文件
-    write_claude_config(&config_file, &env_vars)?;
-
-    #[cfg(target_os = "macos")]
-    {
-        launch_macos_terminal(&config_file, cwd)?;
-        Ok(())
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        launch_linux_terminal(&config_file, cwd)?;
-        Ok(())
-    }
-
     #[cfg(target_os = "windows")]
     {
-        launch_windows_terminal(&temp_dir, &config_file, cwd)?;
-        Ok(())
+        launch_windows_terminal(&env_vars, cwd)?;
+        return Ok(());
     }
 
-    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
-    Err("不支持的操作系统".to_string())
-}
-
-/// 写入 claude 配置文件
-fn write_claude_config(
-    config_file: &std::path::Path,
-    env_vars: &[(String, String)],
-) -> Result<(), String> {
-    let mut config_obj = serde_json::Map::new();
-    let mut env_obj = serde_json::Map::new();
-
-    for (key, value) in env_vars {
-        env_obj.insert(key.clone(), serde_json::Value::String(value.clone()));
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (env_vars, cwd);
+        Err("当前阶段仅支持 Windows 环境变量启动".to_string())
     }
-
-    config_obj.insert("env".to_string(), serde_json::Value::Object(env_obj));
-
-    let config_json =
-        serde_json::to_string_pretty(&config_obj).map_err(|e| format!("序列化配置失败: {e}"))?;
-
-    std::fs::write(config_file, config_json).map_err(|e| format!("写入配置文件失败: {e}"))
 }
 
 /// macOS: 根据用户首选终端启动
@@ -4081,30 +4081,29 @@ fn which_command(cmd: &str) -> bool {
 /// Windows: 根据用户首选终端启动
 #[cfg(target_os = "windows")]
 fn launch_windows_terminal(
-    temp_dir: &std::path::Path,
-    config_file: &std::path::Path,
+    env_vars: &[(String, String)],
     cwd: Option<&Path>,
 ) -> Result<(), String> {
     let preferred = crate::settings::get_preferred_terminal();
     let terminal = preferred.as_deref().unwrap_or("cmd");
-
+    let temp_dir = std::env::temp_dir();
     let bat_file = temp_dir.join(format!("cc_switch_claude_{}.bat", std::process::id()));
-    let config_path_for_batch = escape_windows_batch_value(&config_file.to_string_lossy());
     let cwd_command = build_windows_cwd_command(cwd);
-
+    let mut set_lines = String::new();
+    for (key, value) in env_vars {
+        if crate::secrets::is_sensitive_config_key(key) {
+            continue;
+        }
+        set_lines.push_str(&format!(
+            "set \"{}={}\"\n",
+            key,
+            escape_windows_batch_value(value)
+        ));
+    }
     let content = format!(
-        "@echo off
-{cwd_command}
-echo Using provider-specific claude config:
-echo {}
-claude --settings \"{}\"
-del \"{}\" >nul 2>&1
-del \"%~f0\" >nul 2>&1
-",
-        config_path_for_batch,
-        config_path_for_batch,
-        config_path_for_batch,
+        "@echo off\n{cwd_command}{set_lines}claude\ndel \"%~f0\" >nul 2>&1\n",
         cwd_command = cwd_command,
+        set_lines = set_lines,
     );
 
     std::fs::write(&bat_file, &content).map_err(|e| format!("写入批处理文件失败: {e}"))?;

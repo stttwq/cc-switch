@@ -63,9 +63,6 @@ interface ClaudeFormFieldsProps {
   isPartner?: boolean;
   partnerPromotionKey?: string;
 
-  // OAuth 预设
-  usesOAuth?: boolean;
-
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
   templateValues: Record<string, TemplateValueConfig>;
@@ -123,7 +120,6 @@ export function ClaudeFormFields({
   websiteUrl,
   isPartner,
   partnerPromotionKey,
-  usesOAuth,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -335,8 +331,8 @@ export function ClaudeFormFields({
 
   return (
     <>
-      {/* API Key 输入框（非 OAuth 预设时显示） */}
-      {shouldShowApiKey && !usesOAuth && (
+      {/* API Key 输入框 */}
+      {shouldShowApiKey && (
         <ApiKeySection
           value={apiKey}
           onChange={onApiKeyChange}

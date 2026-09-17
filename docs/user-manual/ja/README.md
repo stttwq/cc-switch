@@ -76,15 +76,9 @@ CC Switch ユーザーマニュアル
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | セッションマネージャー：閲覧、検索、再開、削除 |
 | [3.5-workspace.md](./3-extensions/3.5-workspace.md) | ワークスペースファイルとデイリーメモリー（OpenClaw） |
 
-### 4. プロキシと高可用性
+### 4. 資格情報
 
-| ファイル | 内容 |
-|------|------|
-| [4.1-service.md](./4-proxy/4.1-service.md) | プロキシの起動、設定項目、実行状態 |
-| [4.2-routing.md](./4-proxy/4.2-routing.md) | アプリケーションルーティング、設定変更、ステータス表示 |
-| [4.3-failover.md](./4-proxy/4.3-failover.md) | フェイルオーバーキュー、サーキットブレーカー、ヘルスステータス |
-| [4.4-usage.md](./4-proxy/4.4-usage.md) | 使用量統計、トレンドグラフ、料金設定 |
-| [4.5-model-test.md](./4-proxy/4.5-model-test.md) | モデルテスト、ヘルスチェック、レイテンシテスト |
+シークレットは Windows Credential Manager に保存され、ユーザー環境変数経由で CLI に渡されます。ローカル HTTP プロキシと使用量ダッシュボードは削除されました。
 
 ### 5. よくある質問
 
@@ -101,7 +95,7 @@ CC Switch ユーザーマニュアル
 - **インストールの問題**：[1.2 インストールガイド](./1-getting-started/1.2-installation.md) をご確認ください
 - **プロバイダーの設定**：[2.1 プロバイダーの追加](./2-providers/2.1-add.md) をご確認ください
 - **Claude Desktop の利用**：[2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md) をご確認ください
-- **プロキシの使用**：[4.1 プロキシサービス](./4-proxy/4.1-service.md) をご確認ください
+- **資格情報**：上記「資格情報」を参照
 - **お困りの方**：[5.2 FAQ](./5-faq/5.2-questions.md) をご確認ください
 
 ## バージョン情報
