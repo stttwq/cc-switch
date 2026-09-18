@@ -258,7 +258,7 @@ command = "echo"
         manager.current = "old-provider".to_string();
         manager.providers.insert(
             "old-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "old-provider".to_string(),
                 "Legacy".to_string(),
                 json!({
@@ -270,7 +270,7 @@ command = "echo"
         );
         manager.providers.insert(
             "new-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "new-provider".to_string(),
                 "Latest".to_string(),
                 json!({
@@ -329,8 +329,8 @@ command = "say"
         "config.toml should contain synced MCP servers"
     );
     assert!(
-        config_text.contains("experimental_bearer_token"),
-        "config.toml should carry the selected provider API key as bearer token"
+        config_text.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "config.toml should carry the selected provider auth source (env_key)"
     );
 
     let current_id = app_state
@@ -439,7 +439,7 @@ fn switch_provider_updates_claude_live_and_state() {
         manager.current = "old-provider".to_string();
         manager.providers.insert(
             "old-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "old-provider".to_string(),
                 "Legacy Claude".to_string(),
                 json!({
@@ -450,7 +450,7 @@ fn switch_provider_updates_claude_live_and_state() {
         );
         manager.providers.insert(
             "new-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "new-provider".to_string(),
                 "Fresh Claude".to_string(),
                 json!({
@@ -472,10 +472,9 @@ fn switch_provider_updates_claude_live_and_state() {
     assert_eq!(
         live_after
             .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|key| key.as_str()),
-        Some("fresh-key"),
-        "live settings.json should reflect new provider auth"
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "live settings.json must not contain plaintext auth (env-var delivery)"
     );
 
     let current_id = app_state
@@ -499,8 +498,12 @@ fn switch_provider_updates_claude_live_and_state() {
     // 回填机制：切换前会将 live 配置回填到当前供应商
     // 这保护了用户在 live 文件中的手动修改
     assert_eq!(
-        legacy_provider.settings_config, legacy_live,
-        "previous provider should be backfilled with live config"
+        legacy_provider
+            .settings_config
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "previous provider backfill must not re-store plaintext secrets"
     );
 
     let new_provider = providers.get("new-provider").expect("new provider exists");
@@ -508,10 +511,9 @@ fn switch_provider_updates_claude_live_and_state() {
         new_provider
             .settings_config
             .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|key| key.as_str()),
-        Some("fresh-key"),
-        "new provider snapshot should retain fresh auth"
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "new provider snapshot must not store plaintext auth"
     );
 
     // v3.7.0+ 使用 SQLite 数据库而非 config.json
@@ -550,7 +552,7 @@ fn switch_provider_codex_missing_auth_returns_error_and_keeps_state() {
             .expect("codex manager");
         manager.providers.insert(
             "invalid".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "invalid".to_string(),
                 "Broken Codex".to_string(),
                 json!({

@@ -62,8 +62,8 @@ use std::{fmt, sync::Arc};
 #[cfg(target_os = "macos")]
 use tauri::image::Image;
 use tauri::tray::TrayIconBuilder;
-use tauri::RunEvent;
 use tauri::Manager;
+use tauri::RunEvent;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 #[cfg(target_os = "windows")]
@@ -543,10 +543,17 @@ pub fn run() {
                             }
                         }
                     }
+                    match crate::services::provider::reapply_pi_live(&app_state) {
+                        Ok(n) => log::info!("✓ live reapply pi ({n} providers)"),
+                        Err(e) => {
+                            ok = false;
+                            log::warn!("✗ live reapply pi failed: {e}");
+                        }
+                    }
+                    crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
                     if ok {
                         let _ = app_state.db.set_setting("live_reapply_pending", "0");
                         log::info!("live_reapply_pending 已清零");
-                        crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
                     }
                 }
                 Ok(_) => {}
@@ -1003,6 +1010,7 @@ pub fn run() {
             commands::confirm_secrets_migration,
             commands::list_plaintext_backups,
             commands::delete_plaintext_backups,
+            commands::secrets_cleanup_orphans,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,
@@ -1102,6 +1110,8 @@ pub fn run() {
             commands::check_env_conflicts,
             commands::delete_env_vars,
             commands::restore_env_backup,
+            commands::env_delivery_conflicts,
+            commands::env_delivery_adopt,
             // Skill management (v3.10.0+ unified)
             commands::get_installed_skills,
             commands::get_skill_backups,

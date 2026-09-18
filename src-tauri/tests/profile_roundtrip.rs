@@ -13,10 +13,12 @@ use cc_switch_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{create_test_state, ensure_test_home, reset_test_fs, test_mutex};
+use support::{
+    create_test_state, ensure_test_home, reset_test_fs, seed_secrets_from_db, test_mutex,
+};
 
 fn claude_provider(id: &str, token: &str) -> Provider {
-    Provider::with_id(
+    Provider::from_parts(
         id.to_string(),
         id.to_uppercase(),
         json!({
@@ -160,6 +162,7 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
     assert_eq!(payload.mcp.codex, None, "uncaptured side stays None");
 
     // ---- 改动全部四类配置（走真实切换路径）----
+    seed_secrets_from_db(&state);
     ProviderService::switch(&state, AppType::Claude, "p2").expect("switch to p2");
     McpService::toggle_app(&state, "m1", AppType::Claude, false).expect("disable m1");
     McpService::toggle_app(&state, "m2", AppType::Claude, true).expect("enable m2");
@@ -486,6 +489,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     assert!(warnings.is_empty(), "unexpected warnings: {warnings:?}");
 
     // ---- 在 A 下改到状态 Y（p2 / m2 / pr2），然后据此创建 Project B ----
+    seed_secrets_from_db(&state);
     ProviderService::switch(&state, AppType::Claude, "p2").expect("switch to p2");
     McpService::toggle_app(&state, "m1", AppType::Claude, false).expect("disable m1");
     McpService::toggle_app(&state, "m2", AppType::Claude, true).expect("enable m2");
@@ -531,6 +535,7 @@ fn switching_profile_autosaves_previous_profile_state() {
     assert_eq!(payload_a.prompts.claude.as_deref(), Some("pr2"));
 
     // ---- 在 B 下改回状态 X，再切换回 A ----
+    seed_secrets_from_db(&state);
     ProviderService::switch(&state, AppType::Claude, "p1").expect("switch to p1");
     McpService::toggle_app(&state, "m1", AppType::Claude, true).expect("enable m1");
     McpService::toggle_app(&state, "m2", AppType::Claude, false).expect("disable m2");

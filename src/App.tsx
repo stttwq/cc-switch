@@ -71,11 +71,9 @@ import {
 import UnifiedSkillsPanel, {
   type SkillsCheckUpdatesState,
 } from "@/components/skills/UnifiedSkillsPanel";
-import { DeepLinkImportDialog } from "@/components/DeepLinkImportDialog";
 import { FirstRunNoticeDialog } from "@/components/FirstRunNoticeDialog";
 import { SecretsMigrationDialog } from "@/components/SecretsMigrationDialog";
 import { AgentsPanel } from "@/components/agents/AgentsPanel";
-import { UniversalProviderPanel } from "@/components/universal";
 import { McpIcon } from "@/components/BrandIcons";
 import { Button } from "@/components/ui/button";
 import { SessionManagerPage } from "@/components/sessions/SessionManagerPage";
@@ -90,7 +88,6 @@ type View =
   | "skillsDiscovery"
   | "mcp"
   | "agents"
-  | "universal"
   | "sessions";
 
 interface SyncStatusUpdatedPayload {
@@ -120,7 +117,6 @@ const VALID_VIEWS: View[] = [
   "skillsDiscovery",
   "mcp",
   "agents",
-  "universal",
   "sessions",
 ];
 
@@ -137,8 +133,7 @@ function App() {
   const queryClient = useQueryClient();
 
   const [activeApp, setActiveApp] = useState<AppId>(getInitialApp);
-  const sharedFeatureApp: AppId =
-    activeApp === "claude-desktop" ? "claude" : activeApp;
+  const sharedFeatureApp: AppId = activeApp;
   const [currentView, setCurrentView] = useState<View>(getInitialView);
   const [skillsDiscoverySource, setSkillsDiscoverySource] =
     useState<SkillsPageSource>("repos");
@@ -297,15 +292,6 @@ function App() {
       unsubscribe?.();
     };
   }, [activeApp, queryClient, refetch]);
-
-  useTauriEvent("universal-provider-synced", async () => {
-    await queryClient.invalidateQueries({ queryKey: ["providers"] });
-    try {
-      await providersApi.updateTrayMenu();
-    } catch (error) {
-      console.error("[App] Failed to update tray menu", error);
-    }
-  });
 
   // 应用项目后刷新相关缓存（providers 由既有 provider-switched 监听承接）
   useTauriEvent("profile-applied", async () => {
@@ -877,13 +863,6 @@ function App() {
           return (
             <AgentsPanel onOpenChange={() => setCurrentView("providers")} />
           );
-        case "universal":
-          return (
-            <div className="px-6 pt-4">
-              <UniversalProviderPanel />
-            </div>
-          );
-
         case "sessions":
           return (
             <SessionManagerPage
@@ -1088,10 +1067,6 @@ function App() {
                   {currentView === "skillsDiscovery" && t("skills.title")}
                   {currentView === "mcp" && t("mcp.unifiedPanel.title")}
                   {currentView === "agents" && t("agents.title")}
-                  {currentView === "universal" &&
-                    t("universalProvider.title", {
-                      defaultValue: "统一供应商",
-                    })}
                   {currentView === "sessions" && t("sessionManager.title")}
                 </h1>
               </div>
@@ -1400,7 +1375,6 @@ function App() {
         onCancel={() => setConfirmAction(null)}
       />
 
-      <DeepLinkImportDialog />
       <FirstRunNoticeDialog />
       <SecretsMigrationDialog />
     </div>

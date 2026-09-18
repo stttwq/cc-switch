@@ -114,9 +114,22 @@ pub async fn download(
     validate_manifest_compat(&manifest, RemoteLayout::Current)?;
 
     // Download and verify artifacts
-    let db_sql = download_and_verify(&secrets, settings, &creds, REMOTE_DB_SQL, &manifest.artifacts).await?;
-    let skills_zip =
-        download_and_verify(&secrets, settings, &creds, REMOTE_SKILLS_ZIP, &manifest.artifacts).await?;
+    let db_sql = download_and_verify(
+        secrets,
+        settings,
+        &creds,
+        REMOTE_DB_SQL,
+        &manifest.artifacts,
+    )
+    .await?;
+    let skills_zip = download_and_verify(
+        secrets,
+        settings,
+        &creds,
+        REMOTE_SKILLS_ZIP,
+        &manifest.artifacts,
+    )
+    .await?;
 
     // Apply snapshot
     apply_snapshot(db, &db_sql, &skills_zip)?;

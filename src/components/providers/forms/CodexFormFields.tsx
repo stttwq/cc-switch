@@ -40,7 +40,6 @@ import {
   Plus,
   Trash2,
 } from "lucide-react";
-import EndpointSpeedTest from "./EndpointSpeedTest";
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
 import {
   fetchModelsForConfig,
@@ -56,15 +55,8 @@ import type {
   PromptCacheRoutingMode,
   ProviderCategory,
 } from "@/types";
-import type { AppId } from "@/lib/api";
-
-interface EndpointCandidate {
-  url: string;
-}
 
 interface CodexFormFieldsProps {
-  appId?: AppId;
-  providerId?: string;
   // API Key
   codexApiKey: string;
   onApiKeyChange: (key: string) => void;
@@ -80,11 +72,6 @@ interface CodexFormFieldsProps {
   onBaseUrlChange: (url: string) => void;
   isFullUrl: boolean;
   onFullUrlChange: (value: boolean) => void;
-  isEndpointModalOpen: boolean;
-  onEndpointModalToggle: (open: boolean) => void;
-  onCustomEndpointsChange?: (endpoints: string[]) => void;
-  autoSelect: boolean;
-  onAutoSelectChange: (checked: boolean) => void;
 
   // Default model (config.toml top-level `model`)
   codexModel?: string;
@@ -111,9 +98,6 @@ interface CodexFormFieldsProps {
   // Model Catalog
   catalogModels?: CodexCatalogModel[];
   onCatalogModelsChange?: (models: CodexCatalogModel[]) => void;
-
-  // Speed Test Endpoints
-  speedTestEndpoints: EndpointCandidate[];
 }
 
 type CodexCatalogRow = CodexCatalogModel & { rowId: string };
@@ -333,8 +317,6 @@ function ReasoningLevelsEditor({
 }
 
 export function CodexFormFields({
-  appId = "codex",
-  providerId,
   codexApiKey,
   onApiKeyChange,
   category,
@@ -347,11 +329,6 @@ export function CodexFormFields({
   onBaseUrlChange,
   isFullUrl,
   onFullUrlChange,
-  isEndpointModalOpen,
-  onEndpointModalToggle,
-  onCustomEndpointsChange,
-  autoSelect,
-  onAutoSelectChange,
   codexModel = "",
   onModelChange,
   apiFormat,
@@ -368,7 +345,6 @@ export function CodexFormFields({
   onPromptCacheRoutingChange,
   catalogModels = [],
   onCatalogModelsChange,
-  speedTestEndpoints,
 }: CodexFormFieldsProps) {
   const { t } = useTranslation();
 
@@ -625,7 +601,6 @@ export function CodexFormFields({
           showFullUrlToggle
           isFullUrl={isFullUrl}
           onFullUrlChange={onFullUrlChange}
-          onManageClick={() => onEndpointModalToggle(true)}
         />
       )}
 
@@ -1160,22 +1135,6 @@ export function CodexFormFields({
             )}
           </CollapsibleContent>
         </Collapsible>
-      )}
-
-      {/* 端点测速弹窗 - Codex */}
-      {shouldShowSpeedTest && isEndpointModalOpen && (
-        <EndpointSpeedTest
-          appId={appId}
-          providerId={providerId}
-          value={codexBaseUrl}
-          onChange={onBaseUrlChange}
-          initialEndpoints={speedTestEndpoints}
-          visible={isEndpointModalOpen}
-          onClose={() => onEndpointModalToggle(false)}
-          autoSelect={autoSelect}
-          onAutoSelectChange={onAutoSelectChange}
-          onCustomEndpointsChange={onCustomEndpointsChange}
-        />
       )}
     </>
   );

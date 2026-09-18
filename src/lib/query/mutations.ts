@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, sessionsApi, settingsApi, type AppId } from "@/lib/api";
+import { envDeliveryAdopt, parseEnvConflictError } from "@/lib/api/env";
 import type { DeleteSessionOptions } from "@/lib/api/sessions";
 import type { SwitchResult } from "@/lib/api/providers";
 import type { Provider, SessionMeta, Settings } from "@/types";
@@ -210,9 +211,41 @@ export const useSwitchProviderMutation = (appId: AppId) => {
         );
       }
     },
-    onError: (error: Error) => {
+    onError: (error: Error, providerId: string) => {
+      const conflicts = parseEnvConflictError(error);
+      if (conflicts && conflicts.length > 0) {
+        const names = conflicts.map((c) => c.name).join(", ");
+        toast.error(
+          t("notifications.envConflictTitle", {
+            defaultValue: "环境变量冲突",
+          }),
+          {
+            description: t("notifications.envConflictBody", {
+              defaultValue: "外来变量 {{names}}。接管后可继续切换。",
+              names,
+            }),
+            duration: 10000,
+            action: {
+              label: t("notifications.envConflictAdopt", {
+                defaultValue: "接管并重试",
+              }),
+              onClick: () => {
+                void envDeliveryAdopt(
+                  appId,
+                  providerId,
+                  conflicts.map((c) => c.name),
+                ).then(() =>
+                  queryClient.invalidateQueries({
+                    queryKey: ["providers", appId],
+                  }),
+                );
+              },
+            },
+          },
+        );
+        return;
+      }
       const detail = extractErrorMessage(error) || t("common.unknown");
-
       toast.error(
         t("notifications.switchFailedTitle", { defaultValue: "切换失败" }),
         {

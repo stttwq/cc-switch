@@ -40,9 +40,8 @@ impl ManagedEnvVars {
             .optional()
             .map_err(|e| AppError::Database(e.to_string()))?;
         match json {
-            Some(json) => serde_json::from_str(&json).map_err(|e| {
-                AppError::Config(format!("Failed to parse managed_env_vars: {e}"))
-            }),
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| AppError::Config(format!("Failed to parse managed_env_vars: {e}"))),
             None => Ok(Self::default()),
         }
     }
@@ -50,9 +49,8 @@ impl ManagedEnvVars {
     /// Load from settings DB
     pub fn load(db: &crate::database::Database) -> Result<Self, AppError> {
         match db.get_setting("managed_env_vars")? {
-            Some(json) => serde_json::from_str(&json).map_err(|e| {
-                AppError::Config(format!("Failed to parse managed_env_vars: {e}"))
-            }),
+            Some(json) => serde_json::from_str(&json)
+                .map_err(|e| AppError::Config(format!("Failed to parse managed_env_vars: {e}"))),
             None => Ok(Self::default()),
         }
     }
@@ -97,10 +95,11 @@ impl ManagedEnvVars {
 }
 
 /// Information about an environment variable conflict
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct EnvConflict {
     pub name: String,
-    pub owner: String, // "foreign" or app name
+    pub owner: String,        // "foreign" or app name
     pub masked_value: String, // last 4 chars only
 }
 
@@ -135,10 +134,11 @@ pub fn check_conflict(
 
 /// Mask a value, showing only last 4 characters
 fn mask_value(value: &str) -> String {
-    if value.len() <= 4 {
-        "*".repeat(value.len())
+    let n = value.chars().count();
+    if n <= 4 {
+        "*".repeat(n)
     } else {
-        format!("***{}", &value[value.len() - 4..])
+        format!("***{}", crate::secrets::last_chars(value, 4))
     }
 }
 

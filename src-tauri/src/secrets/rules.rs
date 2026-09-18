@@ -1,6 +1,5 @@
 /// 敏感配置键判定：显式黑名单 + 后缀匹配。
 /// 不用子串 contains，避免误伤 apiKeyHelper / includeCoAuthoredBy / MAX_OUTPUT_TOKENS。
-
 const EXACT_SECRET_KEYS: &[&str] = &[
     "ANTHROPIC_API_KEY",
     "ANTHROPIC_AUTH_TOKEN",
@@ -41,7 +40,9 @@ pub fn is_sensitive_config_key(key: &str) -> bool {
     if key_lower.ends_with("tokens") || key_lower.contains("max_output") {
         return false;
     }
-    SECRET_SUFFIXES.iter().any(|suffix| key_lower.ends_with(suffix))
+    SECRET_SUFFIXES
+        .iter()
+        .any(|suffix| key_lower.ends_with(suffix))
 }
 
 /// Check if a Pi apiKey or header value is a literal (not a variable reference)
@@ -64,9 +65,7 @@ pub fn is_literal_value(value: &str) -> bool {
 
 /// Unescape a literal value ($$VAR -> $VAR, $!VAR -> !VAR)
 pub fn unescape_literal(value: &str) -> String {
-    if value.starts_with("$$") {
-        value[1..].to_string()
-    } else if value.starts_with("$!") {
+    if value.starts_with("$$") || value.starts_with("$!") {
         value[1..].to_string()
     } else {
         value.to_string()
@@ -79,6 +78,14 @@ pub fn escape_literal(value: &str) -> String {
         format!("${}", value)
     } else {
         value.to_string()
+    }
+}
+
+/// 按 Unicode 标量取末 n 个字符，避免按字节切片 panic。
+pub fn last_chars(value: &str, n: usize) -> &str {
+    match value.char_indices().nth_back(n.saturating_sub(1)) {
+        Some((i, _)) if n > 0 => &value[i..],
+        _ => value,
     }
 }
 
@@ -102,6 +109,23 @@ pub fn normalize_env_key_segment(raw: &str) -> String {
     } else {
         trimmed.chars().take(64).collect()
     }
+}
+
+/// 附录 C：Pi API key 环境变量名。
+pub fn pi_api_key_env_name(provider_id: &str) -> String {
+    format!(
+        "CC_SWITCH_PI_{}_API_KEY",
+        normalize_env_key_segment(provider_id)
+    )
+}
+
+/// 附录 C：Pi 敏感 header 环境变量名。
+pub fn pi_header_env_name(provider_id: &str, header_name: &str) -> String {
+    format!(
+        "CC_SWITCH_PI_{}_HEADER_{}",
+        normalize_env_key_segment(provider_id),
+        normalize_env_key_segment(header_name)
+    )
 }
 
 #[cfg(test)]
@@ -163,5 +187,11 @@ mod tests {
         assert_eq!(normalize_env_key_segment("claude-1"), "CLAUDE_1");
         assert_eq!(normalize_env_key_segment("foo--bar"), "FOO_BAR");
         assert_eq!(normalize_env_key_segment("abc"), "ABC");
+    }
+
+    #[test]
+    fn last_chars_handles_non_ascii() {
+        assert_eq!(last_chars("密钥测试中文", 4), "测试中文");
+        assert_eq!(last_chars("ab", 4), "ab");
     }
 }

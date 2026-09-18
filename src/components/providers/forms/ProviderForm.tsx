@@ -31,7 +31,6 @@ import {
   applyTemplateValues,
   hasApiKeyField,
 } from "@/utils/providerConfigUtils";
-import { mergeProviderMeta } from "@/utils/providerMetaUtils";
 import {
   codexApiFormatFromWireApi,
   extractCodexWireApi,
@@ -61,7 +60,6 @@ import {
   useTemplateValues,
   useCommonConfigSnippet,
   useCodexCommonConfig,
-  useSpeedTestEndpoints,
   useCodexTomlValidation,
 } from "./hooks";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -266,19 +264,6 @@ function ProviderFormFull({
     isPartner?: boolean;
     partnerPromotionKey?: string;
   } | null>(null);
-  const [isEndpointModalOpen, setIsEndpointModalOpen] = useState(false);
-  const [isCodexEndpointModalOpen, setIsCodexEndpointModalOpen] =
-    useState(false);
-
-  const [draftCustomEndpoints, setDraftCustomEndpoints] = useState<string[]>(
-    () => {
-      if (initialData) return [];
-      return [];
-    },
-  );
-  const [endpointAutoSelect, setEndpointAutoSelect] = useState<boolean>(
-    () => initialData?.meta?.endpointAutoSelect ?? true,
-  );
   const supportsFullUrl = appId === "claude" || appId === "codex";
   const [localIsFullUrl, setLocalIsFullUrl] = useState<boolean>(() => {
     if (!supportsFullUrl) return false;
@@ -312,10 +297,6 @@ function ProviderFormFull({
     setSelectedPresetId(initialData ? null : "custom");
     setActivePreset(null);
 
-    if (!initialData) {
-      setDraftCustomEndpoints([]);
-    }
-    setEndpointAutoSelect(initialData?.meta?.endpointAutoSelect ?? true);
     setLocalIsFullUrl(
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
@@ -804,58 +785,10 @@ function ProviderFormFull({
       }
     }
 
-    if (!isEditMode && draftCustomEndpoints.length > 0) {
-      const customEndpointsToSave: Record<
-        string,
-        import("@/types").CustomEndpoint
-      > = draftCustomEndpoints.reduce(
-        (acc, url) => {
-          const now = Date.now();
-          acc[url] = { url, addedAt: now, lastUsed: undefined };
-          return acc;
-        },
-        {} as Record<string, import("@/types").CustomEndpoint>,
-      );
-
-      const hadEndpoints =
-        initialData?.meta?.custom_endpoints &&
-        Object.keys(initialData.meta.custom_endpoints).length > 0;
-      const needsClearEndpoints =
-        hadEndpoints && draftCustomEndpoints.length === 0;
-
-      let mergedMeta = needsClearEndpoints
-        ? mergeProviderMeta(initialData?.meta, {})
-        : mergeProviderMeta(initialData?.meta, customEndpointsToSave);
-
-      if (activePreset?.isPartner) {
-        mergedMeta = {
-          ...(mergedMeta ?? {}),
-          isPartner: true,
-        };
-      }
-
-      if (activePreset?.partnerPromotionKey) {
-        mergedMeta = {
-          ...(mergedMeta ?? {}),
-          partnerPromotionKey: activePreset.partnerPromotionKey,
-        };
-      }
-
-      if (mergedMeta !== undefined) {
-        payload.meta = mergedMeta;
-      }
-    }
-
     const metaSource = payload.meta ?? initialData?.meta;
     const baseMeta: ProviderMeta | undefined = metaSource
       ? { ...metaSource }
       : undefined;
-    // Existing-provider edits never own endpoint membership. The backend
-    // rejects endpoint-bearing update payloads; add/remove/touch use their
-    // dedicated commands and remain safe from stale form snapshots.
-    if (isEditMode && baseMeta) {
-      delete baseMeta.custom_endpoints;
-    }
 
     const nextMeta: ProviderMeta = {
       ...(baseMeta ?? {}),
@@ -865,7 +798,6 @@ function ProviderFormFull({
           : appId === "codex"
             ? useCodexCommonConfigFlag
             : undefined,
-      endpointAutoSelect,
       codexChatReasoning:
         appId === "codex" &&
         category !== "official" &&
@@ -958,16 +890,6 @@ function ProviderFormFull({
     selectedPresetId,
     presetEntries,
     formWebsiteUrl: form.watch("websiteUrl") || "",
-  });
-
-  // 使用端点测速候选 hook
-  const speedTestEndpoints = useSpeedTestEndpoints({
-    appId,
-    selectedPresetId,
-    presetEntries,
-    baseUrl,
-    codexBaseUrl,
-    initialData,
   });
 
   const handlePresetChange = (value: string) => {
@@ -1085,7 +1007,6 @@ function ProviderFormFull({
 
           {appId === "claude" && (
             <ClaudeFormFields
-              providerId={providerId}
               shouldShowApiKey={
                 (category !== "cloud_provider" ||
                   hasApiKeyField(form.getValues("settingsConfig"), "claude")) &&
@@ -1105,13 +1026,6 @@ function ProviderFormFull({
               shouldShowSpeedTest={shouldShowSpeedTest}
               baseUrl={baseUrl}
               onBaseUrlChange={handleClaudeBaseUrlChange}
-              isEndpointModalOpen={isEndpointModalOpen}
-              onEndpointModalToggle={setIsEndpointModalOpen}
-              onCustomEndpointsChange={
-                isEditMode ? undefined : setDraftCustomEndpoints
-              }
-              autoSelect={endpointAutoSelect}
-              onAutoSelectChange={setEndpointAutoSelect}
               showEndpointTools
               shouldShowModelSelector={category !== "official"}
               claudeModel={claudeModel}
@@ -1125,7 +1039,6 @@ function ProviderFormFull({
               defaultFableModelName={defaultFableModelName}
               subagentModel={subagentModel}
               onModelChange={handleModelChange}
-              speedTestEndpoints={speedTestEndpoints}
               apiFormat={localApiFormat}
               onApiFormatChange={handleApiFormatChange}
               apiKeyField={localApiKeyField}
@@ -1137,7 +1050,6 @@ function ProviderFormFull({
 
           {appId === "codex" && (
             <CodexFormFields
-              providerId={providerId}
               codexApiKey={codexApiKey}
               onApiKeyChange={handleCodexApiKeyChange}
               category={category}
@@ -1150,13 +1062,6 @@ function ProviderFormFull({
               onBaseUrlChange={handleCodexBaseUrlChange}
               isFullUrl={localIsFullUrl}
               onFullUrlChange={setLocalIsFullUrl}
-              isEndpointModalOpen={isCodexEndpointModalOpen}
-              onEndpointModalToggle={setIsCodexEndpointModalOpen}
-              onCustomEndpointsChange={
-                isEditMode ? undefined : setDraftCustomEndpoints
-              }
-              autoSelect={endpointAutoSelect}
-              onAutoSelectChange={setEndpointAutoSelect}
               codexModel={codexModel}
               onModelChange={handleCodexModelChange}
               apiFormat={localCodexApiFormat}
@@ -1173,7 +1078,6 @@ function ProviderFormFull({
               onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}
               onCatalogModelsChange={setCodexCatalogModels}
-              speedTestEndpoints={speedTestEndpoints}
             />
           )}
 

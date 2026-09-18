@@ -110,7 +110,8 @@ pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, Str
     let secrets = state.secrets.clone();
     let mut settings = require_enabled_webdav_settings()?;
 
-    let result = run_with_webdav_lock(webdav_sync_service::upload(&db, &secrets, &mut settings)).await;
+    let result =
+        run_with_webdav_lock(webdav_sync_service::upload(&db, &secrets, &mut settings)).await;
     map_sync_result(result, |error| {
         persist_sync_error(&mut settings, error, "manual")
     })

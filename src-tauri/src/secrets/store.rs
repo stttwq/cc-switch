@@ -35,6 +35,16 @@ pub trait SecretStore: Send + Sync {
     }
 }
 
+#[cfg(target_os = "windows")]
+fn windows_entry(target: &SecretTarget) -> Result<keyring::Entry, AppError> {
+    keyring::Entry::new_with_target(
+        &target.to_target_string(),
+        SecretTarget::service(),
+        &target.to_user_metadata(),
+    )
+    .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {e}")))
+}
+
 /// Windows Credential Manager implementation
 pub struct WindowsSecretStore {
     write_lock: Mutex<()>,
@@ -60,28 +70,21 @@ impl SecretStore for WindowsSecretStore {
     async fn set(&self, target: &SecretTarget, value: Zeroizing<String>) -> Result<(), AppError> {
         #[cfg(target_os = "windows")]
         {
-            use keyring::Entry;
-
-            // Check value length limit (1280 UTF-16 code units, ~2560 bytes for ASCII)
-            if value.len() > 2560 {
+            let field = target.to_target_string();
+            let utf16_len = value.encode_utf16().count();
+            if utf16_len > 1280 {
                 return Err(AppError::SecretStoreError(format!(
-                    "Secret value too long ({} bytes, max 2560)",
-                    value.len()
+                    "Secret value too long for {field} ({utf16_len} UTF-16 units, max 1280)"
                 )));
             }
-
-            let target_str = target.to_target_string();
-            // Check target length limit (32767 characters)
-            if target_str.len() > 32767 {
+            if field.chars().count() > 32767 {
                 return Err(AppError::SecretStoreError(format!(
-                    "Target string too long ({} chars, max 32767)",
-                    target_str.len()
+                    "Target string too long for {field} (max 32767 chars)"
                 )));
             }
 
             let _guard = self.write_lock.lock().unwrap();
-            let entry = Entry::new(&target_str, &target.to_user_metadata())
-                .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {}", e)))?;
+            let entry = windows_entry(target)?;
 
             entry
                 .set_password(&value)
@@ -102,10 +105,7 @@ impl SecretStore for WindowsSecretStore {
     async fn get(&self, target: &SecretTarget) -> Result<Option<Zeroizing<String>>, AppError> {
         #[cfg(target_os = "windows")]
         {
-            use keyring::Entry;
-
-            let entry = Entry::new(&target.to_target_string(), &target.to_user_metadata())
-                .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {}", e)))?;
+            let entry = windows_entry(target)?;
 
             match entry.get_password() {
                 Ok(password) => Ok(Some(Zeroizing::new(password))),
@@ -129,10 +129,7 @@ impl SecretStore for WindowsSecretStore {
     async fn delete(&self, target: &SecretTarget) -> Result<(), AppError> {
         #[cfg(target_os = "windows")]
         {
-            use keyring::Entry;
-
-            let entry = Entry::new(&target.to_target_string(), &target.to_user_metadata())
-                .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {}", e)))?;
+            let entry = windows_entry(target)?;
 
             match entry.delete_credential() {
                 Ok(()) => Ok(()),
@@ -213,10 +210,7 @@ impl Default for InMemorySecretStore {
 impl SecretStore for InMemorySecretStore {
     async fn set(&self, target: &SecretTarget, value: Zeroizing<String>) -> Result<(), AppError> {
         let key = target.to_target_string();
-        self.storage
-            .lock()
-            .unwrap()
-            .insert(key, value.to_string());
+        self.storage.lock().unwrap().insert(key, value.to_string());
         Ok(())
     }
 
@@ -268,7 +262,10 @@ mod tests {
 
         // Get
         let retrieved = store.get(&target).await.unwrap();
-        assert_eq!(retrieved.as_deref().map(|s| s.as_str()), Some("sk-test-key-12345"));
+        assert_eq!(
+            retrieved.as_deref().map(|s| s.as_str()),
+            Some("sk-test-key-12345")
+        );
 
         // Delete
         store.delete(&target).await.unwrap();
@@ -327,7 +324,10 @@ mod tests {
         let secret = Zeroizing::new("sk-fixture-roundtrip-0001".to_string());
         store.set(&target, secret.clone()).await.unwrap();
         let got = store.get(&target).await.unwrap();
-        assert_eq!(got.as_deref().map(|s| s.as_str()), Some("sk-fixture-roundtrip-0001"));
+        assert_eq!(
+            got.as_deref().map(|s| s.as_str()),
+            Some("sk-fixture-roundtrip-0001")
+        );
         store.delete(&target).await.unwrap();
         assert!(store.get(&target).await.unwrap().is_none());
     }

@@ -72,12 +72,23 @@ pub fn test_mutex() -> &'static Mutex<()> {
     MUTEX.get_or_init(|| Mutex::new(()))
 }
 
+/// 将 DB 中的明文凭据迁入内存 SecretStore（测试用：模拟启动时的自动迁移）。
+/// 在测试往 DB 直接插入供应商后调用，让切换路径能从 store 读到密钥。
+#[allow(dead_code)]
+pub fn seed_secrets_from_db(state: &AppState) {
+    let migrator =
+        cc_switch_lib::secrets::CredentialMigrator::new(&state.db, state.secrets.as_ref());
+    futures::executor::block_on(migrator.run_migration()).expect("seed secrets from db");
+}
+
 /// 创建测试用的 AppState，包含一个空的数据库
 #[allow(dead_code)]
 pub fn create_test_state() -> Result<AppState, Box<dyn std::error::Error>> {
     let db = Arc::new(Database::init()?);
     let secrets = Arc::new(cc_switch_lib::secrets::InMemorySecretStore::new());
-    Ok(AppState::new(db, secrets))
+    let state = AppState::new(db, secrets);
+    seed_secrets_from_db(&state);
+    Ok(state)
 }
 
 /// 创建测试用的 AppState，并从 MultiAppConfig 迁移数据
@@ -88,5 +99,7 @@ pub fn create_test_state_with_config(
     let db = Arc::new(Database::init()?);
     db.migrate_from_json(config)?;
     let secrets = Arc::new(cc_switch_lib::secrets::InMemorySecretStore::new());
-    Ok(AppState::new(db, secrets))
+    let state = AppState::new(db, secrets);
+    seed_secrets_from_db(&state);
+    Ok(state)
 }

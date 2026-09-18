@@ -30,6 +30,19 @@ pub(super) fn import_from_live(state: &AppState) -> Result<usize, AppError> {
     sync_native_locked(state, &native)
 }
 
+pub(super) fn reapply_live(state: &AppState) -> Result<usize, AppError> {
+    let native = crate::pi_config::read_pi_native_providers()?;
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
+    sync_native_locked(state, &native)?;
+    drop(_guard);
+    let mut applied = 0;
+    for id in native.keys() {
+        enable(state, id)?;
+        applied += 1;
+    }
+    Ok(applied)
+}
+
 pub(super) fn add(
     state: &AppState,
     mut provider: Provider,
@@ -70,10 +83,9 @@ pub(super) fn add(
 
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
         if native_inserted {
-            if let Err(rollback) = crate::pi_config::remove_pi_provider_if_matches(
-                &provider.id,
-                &live_config,
-            ) {
+            if let Err(rollback) =
+                crate::pi_config::remove_pi_provider_if_matches(&provider.id, &live_config)
+            {
                 return Err(AppError::Config(format!(
                     "failed to save Pi provider: {error}; native rollback failed: {rollback}"
                 )));
@@ -112,11 +124,9 @@ pub(super) fn update(
         crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config)?;
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
         if let Some(previous_native) = previous_native.as_ref() {
-            if let Err(rollback) = crate::pi_config::replace_pi_provider(
-                &original_id,
-                &live_config,
-                previous_native,
-            ) {
+            if let Err(rollback) =
+                crate::pi_config::replace_pi_provider(&original_id, &live_config, previous_native)
+            {
                 return Err(AppError::Config(format!(
                     "failed to save Pi provider: {error}; native rollback failed: {rollback}"
                 )));
@@ -137,6 +147,7 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
     // deleting the provider itself, supported field edits do not change that
     // intent; the latest native value is retained only for rollback.
     let removed = crate::pi_config::remove_pi_provider(id)?;
+    super::delete_provider_secrets(state, &app_type, id);
 
     if let Err(error) = state.db.delete_provider(app_type.as_str(), id) {
         if let Some(removed) = removed.as_ref() {
@@ -189,6 +200,7 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
     }
 
     ProviderService::validate_provider_settings(&app_type, &provider)?;
+    ProviderService::preflight_env_delivery(state, &app_type, &provider)?;
     crate::pi_config::insert_pi_provider(id, &provider.settings_config)?;
     let mut result = SwitchResult::default();
     ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut result)?;
@@ -216,6 +228,41 @@ fn sync_native_locked(
         let previous_name = provider.name.clone();
         let previous_config = provider.settings_config.clone();
         merge_native_config(&mut provider, config.clone());
+        let extractor =
+            SecretExtractor::new(state.secrets.as_ref(), AppType::Pi).with_db(state.db.as_ref());
+        let extracted =
+            SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
+        let live_rewritten =
+            crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+                &provider.id,
+                config,
+            )?;
+        if live_rewritten != *config {
+            match crate::pi_config::replace_pi_provider(id, config, &live_rewritten) {
+                Ok(()) => {
+                    if let Err(error) = futures::executor::block_on(
+                        extractor.extract_provider_secrets(&provider.id, config),
+                    ) {
+                        log::warn!("Pi native extract after live rewrite failed for {id}: {error}");
+                    }
+                    provider.settings_config = extracted.stripped;
+                }
+                Err(error) => {
+                    log::warn!(
+                        "Failed to rewrite Pi models.json for '{id}', keeping original: {error}"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            if let Err(error) = futures::executor::block_on(
+                extractor.extract_provider_secrets(&provider.id, &provider.settings_config),
+            ) {
+                log::warn!("Pi native extract failed for {id}: {error}");
+                continue;
+            }
+            provider.settings_config = extracted.stripped;
+        }
         if !is_new && provider.name == previous_name && provider.settings_config == previous_config
         {
             continue;
@@ -257,11 +304,11 @@ fn strip_unsupported_pi_metadata(provider: &mut Provider) {
 }
 
 fn strip_and_store_pi_secrets(state: &AppState, provider: &mut Provider) -> Result<(), AppError> {
-    let extractor = SecretExtractor::new(state.secrets.as_ref(), AppType::Pi);
-    let (stripped, _) = futures::executor::block_on(extractor.extract_provider_secrets(
-        &provider.id,
-        &provider.settings_config,
-    ))?;
+    let extractor =
+        SecretExtractor::new(state.secrets.as_ref(), AppType::Pi).with_db(state.db.as_ref());
+    let (stripped, _) = futures::executor::block_on(
+        extractor.extract_provider_secrets(&provider.id, &provider.settings_config),
+    )?;
     provider.settings_config = stripped;
     Ok(())
 }

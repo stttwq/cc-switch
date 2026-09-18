@@ -61,7 +61,10 @@ fn is_claude_env_secret(key: &str) -> bool {
         "ANTHROPIC_BASE_URL",
     ];
 
-    if CLAUDE_SECRET_ENV_KEYS.iter().any(|k| key.eq_ignore_ascii_case(k)) {
+    if CLAUDE_SECRET_ENV_KEYS
+        .iter()
+        .any(|k| key.eq_ignore_ascii_case(k))
+    {
         return true;
     }
 
@@ -134,8 +137,21 @@ fn is_sensitive_key_for_live(key: &str) -> bool {
         return false;
     }
 
-    // Use the standard sensitive key detection
-    is_sensitive_config_key(key)
+    if is_sensitive_config_key(key) {
+        return true;
+    }
+    let key_lower = key.to_lowercase();
+    if key_lower.contains("max_output") || key_lower.ends_with("tokens") {
+        return false;
+    }
+    if key_lower.contains("helper") {
+        return false;
+    }
+    key_lower.ends_with("_key")
+        || key_lower.ends_with("_token")
+        || key_lower.ends_with("token")
+        || key_lower.ends_with("_secret")
+        || key_lower.ends_with("_password")
 }
 
 #[cfg(test)]

@@ -11,7 +11,7 @@ use cc_switch_lib::{
 mod support;
 use support::{
     create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, test_mutex,
+    ensure_test_home, reset_test_fs, seed_secrets_from_db, test_mutex,
 };
 
 #[test]
@@ -31,7 +31,7 @@ fn sync_claude_provider_writes_live_settings() {
         }
     });
 
-    let provider = Provider::with_id(
+    let provider = Provider::from_parts(
         "prov-1".to_string(),
         "Test Claude".to_string(),
         provider_config.clone(),
@@ -54,14 +54,33 @@ fn sync_claude_provider_writes_live_settings() {
     );
 
     let live_value: serde_json::Value = read_json_file(&settings_path).expect("read live file");
-    assert_eq!(live_value, provider_config);
+    // Env-var delivery: live file must not contain plaintext auth
+    assert_eq!(
+        live_value
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN")),
+        None,
+        "live settings must not contain plaintext auth"
+    );
+    assert_eq!(
+        live_value.get("ui"),
+        provider_config.get("ui"),
+        "non-secret fields must be written verbatim"
+    );
 
     // 确认 SSOT 中的供应商也同步了最新内容
     let updated = config
         .get_manager(&AppType::Claude)
         .and_then(|m| m.providers.get("prov-1"))
         .expect("provider in config");
-    assert_eq!(updated.settings_config, provider_config);
+    assert_eq!(
+        updated
+            .settings_config
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_AUTH_TOKEN")),
+        None,
+        "sync write-back must not re-store plaintext auth"
+    );
 
     // 额外确认写入位置位于测试 HOME 下
     assert!(
@@ -88,7 +107,7 @@ fn sync_codex_provider_writes_config_without_touching_auth() {
         "config": r#"base_url = "https://codex.test""#
     });
 
-    let provider = Provider::with_id(
+    let provider = Provider::from_parts(
         "codex-1".to_string(),
         "Codex Test".to_string(),
         provider_config.clone(),
@@ -123,8 +142,9 @@ fn sync_codex_provider_writes_config_without_touching_auth() {
         "config.toml should contain base_url from provider config"
     );
     assert!(
-        toml_text.contains("experimental_bearer_token"),
-        "config.toml should contain provider-scoped bearer token"
+        !toml_text.contains("experimental_bearer_token")
+            && toml_text.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "config.toml should carry env_key (env-var delivery), not a bearer token"
     );
 
     let manager = config.get_manager(&AppType::Codex).expect("codex manager");
@@ -136,11 +156,11 @@ fn sync_codex_provider_writes_config_without_touching_auth() {
         .expect("config string");
     assert!(
         !synced_cfg.contains("experimental_bearer_token"),
-        "provider storage should not persist generated live bearer token"
+        "provider storage should not persist bearer tokens"
     );
     assert!(
-        toml_text.contains("experimental_bearer_token"),
-        "live config should include generated bearer token"
+        toml_text.contains("env_key"),
+        "live config should carry the env-var name"
     );
 }
 
@@ -165,7 +185,7 @@ requires_openai_auth = true
 experimental_bearer_token = "stored-bearer-key"
 "#;
 
-    let provider = Provider::with_id(
+    let provider = Provider::from_parts(
         "thirdparty-1".to_string(),
         "Thirdparty".to_string(),
         json!({
@@ -191,13 +211,13 @@ experimental_bearer_token = "stored-bearer-key"
         .get("thirdparty-1")
         .expect("provider survives sync");
 
+    // Env-var delivery: the stored bearer token is stripped from the stored
+    // config and the key lives in the SecretStore; the live config carries
+    // only the env-var name.
     assert_eq!(
-        synced
-            .settings_config
-            .pointer("/auth/OPENAI_API_KEY")
-            .and_then(|v| v.as_str()),
-        Some("stored-bearer-key"),
-        "config-only bearer token must be backfilled into stored auth.OPENAI_API_KEY"
+        synced.settings_config.pointer("/auth/OPENAI_API_KEY"),
+        None,
+        "stored config must not re-store plaintext auth"
     );
 
     let synced_cfg = synced
@@ -207,7 +227,7 @@ experimental_bearer_token = "stored-bearer-key"
         .expect("config string");
     assert!(
         !synced_cfg.contains("experimental_bearer_token"),
-        "live-only bearer token should not be persisted in stored provider config"
+        "stored provider config must not persist bearer tokens"
     );
 }
 
@@ -245,7 +265,7 @@ requires_openai_auth = true
 "#
     });
 
-    let provider = Provider::with_id(
+    let provider = Provider::from_parts(
         "codex-1".to_string(),
         "Codex Test".to_string(),
         provider_config,
@@ -539,7 +559,7 @@ fn sync_codex_provider_missing_auth_returns_error() {
     reset_test_fs();
 
     let mut config = MultiAppConfig::default();
-    let provider = Provider::with_id(
+    let provider = Provider::from_parts(
         "codex-missing-auth".to_string(),
         "No Auth".to_string(),
         json!({
@@ -1022,7 +1042,7 @@ fn export_sql_writes_to_target_path() {
         manager.current = "test-provider".to_string();
         manager.providers.insert(
             "test-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "test-provider".to_string(),
                 "Test Provider".to_string(),
                 json!({"env": {"ANTHROPIC_API_KEY": "test-key"}}),
@@ -1131,7 +1151,7 @@ fn import_sql_accepts_cc_switch_exported_backup() {
         manager.current = "test-provider".to_string();
         manager.providers.insert(
             "test-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "test-provider".to_string(),
                 "Test Provider".to_string(),
                 json!({"env": {"ANTHROPIC_API_KEY": "test-key"}}),

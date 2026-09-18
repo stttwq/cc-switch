@@ -64,7 +64,7 @@ fn fixture_root() -> PathBuf {
 }
 
 fn provider(id: &str, name: &str, settings_config: Value, meta: Option<ProviderMeta>) -> Provider {
-    let mut p = Provider::with_id(id.to_string(), name.to_string(), settings_config, None);
+    let mut p = Provider::from_parts(id.to_string(), name.to_string(), settings_config, None);
     p.meta = meta;
     p
 }

@@ -572,7 +572,31 @@ pub(crate) fn preflight_codex_live_write_for_state(
         .get("auth")
         .ok_or_else(|| AppError::Config("Codex 供应商配置缺少 'auth' 字段".to_string()))?;
     let config_str = obj.get("config").and_then(|v| v.as_str());
-    crate::codex_config::preflight_codex_live_write(effective.category.as_deref(), auth, config_str)
+    // Env-var delivery: the sanitizer injects `env_key` (the store holds the
+    // literal key). Preflight must judge the same text the write path
+    // produces, or a key-in-store legacy shape is mis-refused here. The
+    // injection is gated on the store actually holding the key, so a
+    // keyless provider keeps the fail-closed fallback gate.
+    let has_store_key = futures::executor::block_on(state.secrets.retrieve(
+        &crate::secrets::SecretTarget::provider_api_key(AppType::Codex, provider.id.clone()),
+    ))
+    .ok()
+    .flatten()
+    .is_some();
+    let config_for_preflight = config_str
+        .map(|text| {
+            crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write_preflight(
+                text,
+                has_store_key,
+            )
+        })
+        .transpose()?
+        .or(config_str.map(str::to_string));
+    crate::codex_config::preflight_codex_live_write(
+        effective.category.as_deref(),
+        auth,
+        config_for_preflight.as_deref(),
+    )
 }
 
 pub(crate) fn write_live_with_common_config(
@@ -847,19 +871,20 @@ pub(crate) fn write_live_snapshot(
             if let Some(obj) = live_auth.as_object_mut() {
                 obj.remove("OPENAI_API_KEY");
             }
-            let base_url = futures::executor::block_on(
-                state.secrets.retrieve(&crate::secrets::SecretTarget::provider_base_url(
+            let base_url = futures::executor::block_on(state.secrets.retrieve(
+                &crate::secrets::SecretTarget::provider_base_url(
                     AppType::Codex,
                     provider.id.clone(),
-                )),
-            )
+                ),
+            ))
             .ok()
             .flatten();
             let sanitized_config = if let Some(config_text) = config_str {
-                let sanitized = super::codex_sanitizer::sanitize_codex_config_for_live_write_with_base_url(
-                    config_text,
-                    base_url.as_deref(),
-                )?;
+                let sanitized =
+                    super::codex_sanitizer::sanitize_codex_config_for_live_write_with_base_url(
+                        config_text,
+                        base_url.as_deref(),
+                    )?;
                 Some(sanitized)
             } else {
                 None

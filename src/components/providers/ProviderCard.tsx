@@ -11,7 +11,6 @@ import { ProviderIcon } from "@/components/ProviderIcon";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
 import { ProviderStatusBadge } from "@/components/providers/ProviderStatusBadge";
-import { resolveProviderIcon } from "@/utils/providerIcon";
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -172,11 +171,7 @@ export function ProviderCard({
 
           <div className="h-8 w-8 flex-shrink-0 rounded-lg bg-muted flex items-center justify-center border border-border group-hover:scale-105 transition-transform duration-300">
             <ProviderIcon
-              icon={resolveProviderIcon(
-                appId,
-                provider.icon,
-                provider.iconColor,
-              )}
+              icon={provider.icon}
               name={provider.name}
               color={provider.iconColor}
               size={20}

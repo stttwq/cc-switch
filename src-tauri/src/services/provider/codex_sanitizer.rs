@@ -14,11 +14,29 @@ use crate::error::AppError;
 /// - Remove any existing experimental_bearer_token
 /// - Inject env_key at the appropriate level (top-level or active provider)
 pub fn sanitize_codex_config_for_live_write(toml_text: &str) -> Result<String, AppError> {
-    sanitize_codex_config_for_live_write_with_base_url(toml_text, None)
+    sanitize_codex_config_for_live_write_with_has_key(toml_text, true, None)
+}
+
+/// Preflight variant: the injection only happens when the store actually
+/// holds the provider's key (the env var will be set). A keyless provider
+/// must NOT gain an `env_key`, or the fail-closed fallback gate is bypassed.
+pub fn sanitize_codex_config_for_live_write_preflight(
+    toml_text: &str,
+    has_store_key: bool,
+) -> Result<String, AppError> {
+    sanitize_codex_config_for_live_write_with_has_key(toml_text, has_store_key, None)
 }
 
 pub fn sanitize_codex_config_for_live_write_with_base_url(
     toml_text: &str,
+    base_url: Option<&str>,
+) -> Result<String, AppError> {
+    sanitize_codex_config_for_live_write_with_has_key(toml_text, true, base_url)
+}
+
+fn sanitize_codex_config_for_live_write_with_has_key(
+    toml_text: &str,
+    has_store_key: bool,
     base_url: Option<&str>,
 ) -> Result<String, AppError> {
     use toml_edit::DocumentMut;
@@ -36,37 +54,38 @@ pub fn sanitize_codex_config_for_live_write_with_base_url(
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
 
-    match active_provider {
-        Some(provider_id) => {
-            // Inject env_key into the active provider section
-            if let Some(providers_table) = doc
-                .get_mut("model_providers")
+    // Inject into the active provider's table when it exists; otherwise
+    // (no table yet — e.g. a legacy `openai` reroute that the live-write
+    // path normalizes afterwards) fall back to a top-level env_key so the
+    // safety gates recognize the config as key-carrying.
+    let injected_table = active_provider
+        .as_deref()
+        .and_then(|provider_id| {
+            doc.get_mut("model_providers")
                 .and_then(|v| v.as_table_like_mut())
-            {
-                if let Some(provider_table) = providers_table
-                    .get_mut(&provider_id)
-                    .and_then(|v| v.as_table_like_mut())
-                {
-                    // Remove experimental_bearer_token from provider
-                    provider_table.remove("experimental_bearer_token");
-
-                    provider_table.insert(
-                        "env_key",
-                        toml_edit::value("CC_SWITCH_CODEX_API_KEY"),
-                    );
-                    if let Some(url) = base_url {
-                        provider_table.insert("base_url", toml_edit::value(url));
-                    }
-                }
+                .and_then(|providers_table| {
+                    providers_table
+                        .get_mut(provider_id)
+                        .and_then(|v| v.as_table_like_mut())
+                })
+        })
+        .map(|provider_table| {
+            // Remove experimental_bearer_token from provider
+            provider_table.remove("experimental_bearer_token");
+            if has_store_key {
+                provider_table.insert("env_key", toml_edit::value("CC_SWITCH_CODEX_API_KEY"));
             }
-        }
-        None => {
-            // No active provider - inject env_key at top level
-            doc.insert(
-                "env_key",
-                toml_edit::Item::Value(toml_edit::Value::from("CC_SWITCH_CODEX_API_KEY")),
-            );
-        }
+            if let Some(url) = base_url {
+                provider_table.insert("base_url", toml_edit::value(url));
+            }
+        })
+        .is_some();
+
+    if !injected_table && has_store_key {
+        doc.insert(
+            "env_key",
+            toml_edit::Item::Value(toml_edit::Value::from("CC_SWITCH_CODEX_API_KEY")),
+        );
     }
 
     Ok(doc.to_string())

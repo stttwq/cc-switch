@@ -36,7 +36,7 @@ fn migrate_legacy_common_config_usage_marks_historical_provider_enabled() {
         manager.current = "legacy-provider".to_string();
         manager.providers.insert(
             "legacy-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "legacy-provider".to_string(),
                 "Legacy".to_string(),
                 json!({
@@ -89,10 +89,9 @@ fn migrate_legacy_common_config_usage_marks_historical_provider_enabled() {
         provider
             .settings_config
             .get("env")
-            .and_then(|v| v.get("ANTHROPIC_API_KEY"))
-            .and_then(|v| v.as_str()),
-        Some("legacy-key"),
-        "provider-specific auth should remain untouched"
+            .and_then(|v| v.get("ANTHROPIC_API_KEY")),
+        None,
+        "provider-specific auth should be stripped from DB (stored in SecretStore)"
     );
 }
 
@@ -119,7 +118,7 @@ command = "echo"
         manager.current = "old-provider".to_string();
         manager.providers.insert(
             "old-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "old-provider".to_string(),
                 "Legacy".to_string(),
                 json!({
@@ -131,7 +130,7 @@ command = "echo"
         );
         manager.providers.insert(
             "new-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "new-provider".to_string(),
                 "Latest".to_string(),
                 json!({
@@ -191,8 +190,8 @@ command = "say"
         "config.toml should contain synced MCP servers"
     );
     assert!(
-        config_text.contains("experimental_bearer_token"),
-        "config.toml should carry the selected provider API key"
+        config_text.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "config.toml should carry the selected provider auth source (env_key)"
     );
 
     let current_id = state
@@ -269,7 +268,7 @@ requires_openai_auth = true
         manager.current = "old-provider".to_string();
         manager.providers.insert(
             "old-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "old-provider".to_string(),
                 "RightCode".to_string(),
                 json!({
@@ -281,7 +280,7 @@ requires_openai_auth = true
         );
         manager.providers.insert(
             "new-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "new-provider".to_string(),
                 "AiHubMix".to_string(),
                 json!({
@@ -390,7 +389,7 @@ requires_openai_auth = true
         manager.current = "legacy-provider".to_string();
         manager.providers.insert(
             "legacy-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "legacy-provider".to_string(),
                 "RightCode".to_string(),
                 json!({
@@ -402,7 +401,7 @@ requires_openai_auth = true
         );
         manager.providers.insert(
             "third-party".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "third-party".to_string(),
                 "AiHubMix".to_string(),
                 json!({
@@ -435,8 +434,8 @@ requires_openai_auth = true
     let live_config =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
-        live_config.contains("experimental_bearer_token = \"third-party-key\""),
-        "the third-party key must be injected as the provider-scoped bearer token; got:\n{live_config}"
+        !live_config.contains("experimental_bearer_token")
+            && live_config.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
     );
 }
 
@@ -467,7 +466,7 @@ requires_openai_auth = false
             .expect("codex manager");
         manager.providers.insert(
             "third-party".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "third-party".to_string(),
                 "AiHubMix".to_string(),
                 json!({
@@ -492,9 +491,13 @@ requires_openai_auth = false
     let live_config =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
     assert!(
-        live_config.contains("experimental_bearer_token = \"third-party-key\""),
-        "default switch must inject the API key into config.toml so Codex >= 0.149 \
-         custom providers authenticate (openai/codex#39214); got:\n{live_config}"
+        !live_config.contains("experimental_bearer_token"),
+        "bearer tokens must not land in config.toml; got:\n{live_config}"
+    );
+    assert!(
+        live_config.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "third-party switch must write env_key so Codex reads the key from the env var; \
+         got:\n{live_config}"
     );
 }
 
@@ -502,12 +505,10 @@ requires_openai_auth = false
 fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_config() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    // Preservation ON + third-party provider with an empty config: auth.json is
-    // not written, and an empty config.toml has no provider table to carry the
-    // bearer token, so the API key has nowhere to land while the official
-    // OAuth login stays live — Codex would silently fall back to the official
-    // provider and bill the ChatGPT account. The switch must be refused, as it
-    // was before the bearer-token injection change.
+    // Preservation ON + third-party provider with an empty config: with env-var
+    // delivery the key lands in the user environment (not config.toml), and an
+    // empty config has no third-party route — so there is no leak vector and
+    // the switch is allowed. auth.json is not written.
     let _home = ensure_test_home();
     enable_codex_official_auth_preservation();
 
@@ -518,7 +519,7 @@ fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_confi
             .expect("codex manager");
         manager.providers.insert(
             "empty-config".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "empty-config".to_string(),
                 "EmptyConfig".to_string(),
                 json!({
@@ -532,12 +533,11 @@ fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_confi
 
     let state = create_test_state_with_config(&initial_config).expect("create test state");
 
-    let err = ProviderService::switch(&state, AppType::Codex, "empty-config").expect_err(
-        "switching to an empty-config third-party provider with preservation on must fail",
-    );
+    ProviderService::switch(&state, AppType::Codex, "empty-config")
+        .expect("empty-config third-party switch is safe under env delivery");
     assert!(
-        err.to_string().contains("config.toml"),
-        "error should explain the missing config.toml, got: {err}"
+        !cc_switch_lib::get_codex_auth_path().exists(),
+        "third-party switches are config-only: no auth.json is written"
     );
 }
 
@@ -577,7 +577,7 @@ openai_base_url = "https://relay.example/v1"
             .expect("codex manager");
         manager.providers.insert(
             "legacy-shape".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "legacy-shape".to_string(),
                 "LegacyShape".to_string(),
                 json!({
@@ -603,8 +603,9 @@ openai_base_url = "https://relay.example/v1"
     assert!(
         live_config.contains("[model_providers.cc-switch]")
             && live_config.contains("base_url = \"https://relay.example/v1\"")
-            && live_config.contains("experimental_bearer_token = \"third-party-key\""),
-        "routing and key must move into the cc-switch provider table; got:\n{live_config}"
+            && !live_config.contains("experimental_bearer_token")
+            && live_config.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "routing must move into the cc-switch provider table and auth must come from the env var; got:\n{live_config}"
     );
 
     let auth_value: serde_json::Value =
@@ -642,7 +643,7 @@ experimental_bearer_token = "config-carried-key"
             .expect("codex manager");
         manager.providers.insert(
             "raw-edited".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "raw-edited".to_string(),
                 "RawEdited".to_string(),
                 json!({
@@ -671,8 +672,12 @@ experimental_bearer_token = "config-carried-key"
     );
     assert_eq!(
         cc_switch_lib::extract_codex_experimental_bearer_token(&live_config).as_deref(),
-        Some("config-carried-key"),
-        "the config-carried key must resolve for the rewritten provider; got:\n{live_config}"
+        None,
+        "the rewritten provider must not carry a literal bearer token; got:\n{live_config}"
+    );
+    assert!(
+        live_config.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "the rewritten provider must authenticate via env_key; got:\n{live_config}"
     );
 }
 
@@ -698,7 +703,7 @@ openai_base_url = "https://relay.example/v1"
             .expect("codex manager");
         manager.providers.insert(
             "legacy-shape".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "legacy-shape".to_string(),
                 "LegacyShape".to_string(),
                 json!({
@@ -724,8 +729,9 @@ openai_base_url = "https://relay.example/v1"
     assert!(
         !live_config.contains("openai_base_url")
             && live_config.contains("[model_providers.cc-switch]")
-            && live_config.contains("experimental_bearer_token = \"third-party-key\""),
-        "routing and key must move into the cc-switch provider table; got:\n{live_config}"
+            && !live_config.contains("experimental_bearer_token")
+            && live_config.contains("env_key = \"CC_SWITCH_CODEX_API_KEY\""),
+        "routing must move into the cc-switch provider table and auth must come from the env var; got:\n{live_config}"
     );
 }
 
@@ -770,7 +776,7 @@ wire_api = "responses"
             .expect("codex manager");
         manager.providers.insert(
             "good".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "good".to_string(),
                 "Good".to_string(),
                 json!({
@@ -782,7 +788,7 @@ wire_api = "responses"
         );
         manager.providers.insert(
             "header-auth".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "header-auth".to_string(),
                 "HeaderAuth".to_string(),
                 json!({
@@ -844,7 +850,7 @@ http_headers = { Authorization = "Bearer explicit-header-token" }
             .expect("codex manager");
         manager.providers.insert(
             "header-auth".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "header-auth".to_string(),
                 "HeaderAuth".to_string(),
                 json!({
@@ -984,7 +990,7 @@ fn provider_service_switch_claude_updates_live_and_state() {
         manager.current = "old-provider".to_string();
         manager.providers.insert(
             "old-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "old-provider".to_string(),
                 "Legacy Claude".to_string(),
                 json!({
@@ -995,7 +1001,7 @@ fn provider_service_switch_claude_updates_live_and_state() {
         );
         manager.providers.insert(
             "new-provider".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "new-provider".to_string(),
                 "Fresh Claude".to_string(),
                 json!({
@@ -1017,10 +1023,9 @@ fn provider_service_switch_claude_updates_live_and_state() {
     assert_eq!(
         live_after
             .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|key| key.as_str()),
-        Some("fresh-key"),
-        "live settings.json should reflect new provider auth"
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "live settings.json must not contain plaintext auth (env-var delivery)"
     );
 
     let providers = state
@@ -1041,8 +1046,12 @@ fn provider_service_switch_claude_updates_live_and_state() {
         .get("old-provider")
         .expect("legacy provider still exists");
     assert_eq!(
-        legacy_provider.settings_config, legacy_live,
-        "previous provider should receive backfilled live config"
+        legacy_provider
+            .settings_config
+            .get("env")
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "previous provider backfill must not re-store plaintext secrets"
     );
 }
 
@@ -1077,7 +1086,7 @@ fn switch_claude_syncs_new_shared_keys_from_live_into_common_config() {
             .get_manager_mut(&AppType::Claude)
             .expect("claude manager");
         manager.current = "a".to_string();
-        let mut provider_a = Provider::with_id(
+        let mut provider_a = Provider::from_parts(
             "a".to_string(),
             "A".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "a-key" } }),
@@ -1088,7 +1097,7 @@ fn switch_claude_syncs_new_shared_keys_from_live_into_common_config() {
             ..Default::default()
         });
         manager.providers.insert("a".to_string(), provider_a);
-        let mut provider_b = Provider::with_id(
+        let mut provider_b = Provider::from_parts(
             "b".to_string(),
             "B".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "b-key" } }),
@@ -1163,10 +1172,9 @@ fn switch_claude_syncs_new_shared_keys_from_live_into_common_config() {
     assert_eq!(
         live_after
             .get("env")
-            .and_then(|env| env.get("ANTHROPIC_API_KEY"))
-            .and_then(|v| v.as_str()),
-        Some("b-key"),
-        "live should reflect new provider's own auth"
+            .and_then(|env| env.get("ANTHROPIC_API_KEY")),
+        None,
+        "live must not contain plaintext auth (env-var delivery)"
     );
 }
 
@@ -1199,7 +1207,7 @@ fn switch_claude_syncs_deletions_from_live_into_common_config() {
             .get_manager_mut(&AppType::Claude)
             .expect("claude manager");
         manager.current = "a".to_string();
-        let mut provider_a = Provider::with_id(
+        let mut provider_a = Provider::from_parts(
             "a".to_string(),
             "A".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "a-key" } }),
@@ -1210,7 +1218,7 @@ fn switch_claude_syncs_deletions_from_live_into_common_config() {
             ..Default::default()
         });
         manager.providers.insert("a".to_string(), provider_a);
-        let mut provider_b = Provider::with_id(
+        let mut provider_b = Provider::from_parts(
             "b".to_string(),
             "B".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "b-key" } }),
@@ -1306,7 +1314,7 @@ command = "ghost-cmd"
             .get_manager_mut(&AppType::Codex)
             .expect("codex manager");
         manager.current = "a".to_string();
-        let mut provider_a = Provider::with_id(
+        let mut provider_a = Provider::from_parts(
             "a".to_string(),
             "A".to_string(),
             json!({
@@ -1320,7 +1328,7 @@ command = "ghost-cmd"
             ..Default::default()
         });
         manager.providers.insert("a".to_string(), provider_a);
-        let mut provider_b = Provider::with_id(
+        let mut provider_b = Provider::from_parts(
             "b".to_string(),
             "B".to_string(),
             json!({
@@ -1469,7 +1477,7 @@ wire_api = "responses"
             .expect("codex manager");
         manager.current = "a".to_string();
         for (id, name, prov_key) in [("a", "A", "aprov"), ("b", "B", "bprov")] {
-            let mut provider = Provider::with_id(
+            let mut provider = Provider::from_parts(
                 id.to_string(),
                 name.to_string(),
                 json!({
@@ -1553,7 +1561,7 @@ fn switch_claude_does_not_sync_common_config_for_opted_out_provider() {
         // A 未勾选通用配置（meta = None）
         manager.providers.insert(
             "a".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "a".to_string(),
                 "A".to_string(),
                 json!({ "env": { "ANTHROPIC_API_KEY": "a-key" } }),
@@ -1562,7 +1570,7 @@ fn switch_claude_does_not_sync_common_config_for_opted_out_provider() {
         );
         manager.providers.insert(
             "b".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "b".to_string(),
                 "B".to_string(),
                 json!({ "env": { "ANTHROPIC_API_KEY": "b-key" } }),
@@ -1627,7 +1635,7 @@ fn switch_claude_respects_explicitly_cleared_common_config() {
             .get_manager_mut(&AppType::Claude)
             .expect("claude manager");
         manager.current = "a".to_string();
-        let mut provider_a = Provider::with_id(
+        let mut provider_a = Provider::from_parts(
             "a".to_string(),
             "A".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "a-key" } }),
@@ -1638,7 +1646,7 @@ fn switch_claude_respects_explicitly_cleared_common_config() {
             ..Default::default()
         });
         manager.providers.insert("a".to_string(), provider_a);
-        let mut provider_b = Provider::with_id(
+        let mut provider_b = Provider::from_parts(
             "b".to_string(),
             "B".to_string(),
             json!({ "env": { "ANTHROPIC_API_KEY": "b-key" } }),
@@ -1703,7 +1711,7 @@ fn provider_service_switch_codex_missing_auth_returns_error() {
             .expect("codex manager");
         manager.providers.insert(
             "invalid".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "invalid".to_string(),
                 "Broken Codex".to_string(),
                 json!({
@@ -1741,7 +1749,7 @@ fn provider_service_delete_codex_removes_provider_and_files() {
         manager.current = "keep".to_string();
         manager.providers.insert(
             "keep".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "keep".to_string(),
                 "Keep".to_string(),
                 json!({
@@ -1753,7 +1761,7 @@ fn provider_service_delete_codex_removes_provider_and_files() {
         );
         manager.providers.insert(
             "to-delete".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "to-delete".to_string(),
                 "DeleteCodex".to_string(),
                 json!({
@@ -1804,7 +1812,7 @@ fn provider_service_delete_claude_removes_provider_files() {
         manager.current = "keep".to_string();
         manager.providers.insert(
             "keep".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "keep".to_string(),
                 "Keep".to_string(),
                 json!({
@@ -1815,7 +1823,7 @@ fn provider_service_delete_claude_removes_provider_files() {
         );
         manager.providers.insert(
             "delete".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "delete".to_string(),
                 "DeleteClaude".to_string(),
                 json!({
@@ -1864,7 +1872,7 @@ fn provider_service_delete_current_provider_returns_error() {
         manager.current = "keep".to_string();
         manager.providers.insert(
             "keep".to_string(),
-            Provider::with_id(
+            Provider::from_parts(
                 "keep".to_string(),
                 "Keep".to_string(),
                 json!({

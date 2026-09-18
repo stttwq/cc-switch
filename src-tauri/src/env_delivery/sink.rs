@@ -9,6 +9,25 @@ use crate::error::AppError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+/// 返回当前环境应使用的 EnvSink。
+///
+/// 集成测试（设置了 `CC_SWITCH_TEST_HOME`）返回内存实现，避免读写真实的
+/// `HKCU\Environment`；生产环境返回平台实现。
+pub fn default_sink() -> Arc<dyn EnvSink> {
+    if std::env::var_os("CC_SWITCH_TEST_HOME").is_some() {
+        Arc::new(InMemoryEnvSink::default())
+    } else {
+        #[cfg(target_os = "windows")]
+        {
+            Arc::new(WindowsUserEnvSink::new())
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            Arc::new(UnsupportedEnvSink::new())
+        }
+    }
+}
+
 /// Trait for writing user-level environment variables
 pub trait EnvSink: Send + Sync {
     /// Set an environment variable
@@ -25,6 +44,18 @@ pub trait EnvSink: Send + Sync {
 }
 
 /// Validate environment variable name against whitelist
+fn is_env_sink_secret_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.ends_with("_api_key")
+        || lower.ends_with("_auth_token")
+        || lower.ends_with("_access_token")
+        || lower.ends_with("_secret")
+        || lower.ends_with("_password")
+        || lower.ends_with("_bearer_token")
+        || lower.ends_with("_key")
+        || lower.ends_with("_token")
+}
+
 fn validate_env_name(name: &str) -> Result<(), AppError> {
     // Forbidden system variables (case-insensitive)
     const FORBIDDEN: &[&str] = &[
@@ -54,11 +85,11 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
         }
     }
 
-    // Whitelist patterns (case-sensitive for actual check)
+    // 附录 C：独立白名单，不复用提取规则。
     if name.starts_with("ANTHROPIC_")
         || name.starts_with("CC_SWITCH_")
         || name == "OPENAI_API_KEY"
-        || crate::secrets::is_sensitive_config_key(name)
+        || is_env_sink_secret_name(name)
     {
         return Ok(());
     }
@@ -71,26 +102,28 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
 // ─── In-memory implementation for testing ────────────────────
 
 /// In-memory environment variable sink for testing
+///
+/// 当进程环境存在 `CC_SWITCH_TEST_HOME` 时，`default_sink()` 会返回此实现，
+/// 保证集成测试不会读写真实的 HKCU\Environment。
 #[derive(Clone, Default)]
 pub struct InMemoryEnvSink {
     vars: Arc<Mutex<HashMap<String, String>>>,
 }
 
 impl InMemoryEnvSink {
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
-    }
-
-    /// Read all stored variables (test helper)
-    pub fn snapshot(&self) -> HashMap<String, String> {
-        self.vars.lock().unwrap().clone()
     }
 }
 
 impl EnvSink for InMemoryEnvSink {
     fn set(&self, name: &str, value: &str) -> Result<(), AppError> {
         validate_env_name(name)?;
-        self.vars.lock().unwrap().insert(name.to_string(), value.to_string());
+        self.vars
+            .lock()
+            .unwrap()
+            .insert(name.to_string(), value.to_string());
         Ok(())
     }
 
@@ -258,6 +291,8 @@ mod tests {
         assert!(validate_env_name("CC_SWITCH_CODEX_API_KEY").is_ok());
         assert!(validate_env_name("CC_SWITCH_PI_DEFAULT_API_KEY").is_ok());
         assert!(validate_env_name("OPENAI_API_KEY").is_ok());
+        assert!(validate_env_name("OPENROUTER_API_KEY").is_ok());
+        assert!(validate_env_name("MY_KEY").is_ok());
     }
 
     #[test]
@@ -280,7 +315,10 @@ mod tests {
     fn in_memory_sink_roundtrip() {
         let sink = InMemoryEnvSink::new();
         assert!(sink.set("CC_SWITCH_TEST", "value1").is_ok());
-        assert_eq!(sink.get("CC_SWITCH_TEST").unwrap(), Some("value1".to_string()));
+        assert_eq!(
+            sink.get("CC_SWITCH_TEST").unwrap(),
+            Some("value1".to_string())
+        );
 
         sink.remove("CC_SWITCH_TEST").unwrap();
         assert_eq!(sink.get("CC_SWITCH_TEST").unwrap(), None);

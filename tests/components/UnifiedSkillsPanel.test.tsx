@@ -89,7 +89,7 @@ vi.mock("@/hooks/useSkills", () => ({
         directory: "shared-skill",
         name: "Shared Skill",
         description: "Imported from Grok Build",
-        foundIn: ["grokbuild"],
+        foundIn: ["pi"],
         path: "/tmp/shared-skill",
       },
     ],
@@ -122,11 +122,6 @@ const makeInstalledSkill = (
   const defaultApps: InstalledSkill["apps"] = {
     claude: false,
     codex: false,
-    gemini: false,
-    grokbuild: false,
-    opencode: false,
-    openclaw: false,
-    hermes: false,
     pi: false,
   };
   const { apps, ...skillOverrides } = overrides;
@@ -166,7 +161,7 @@ describe("UnifiedSkillsPanel", () => {
           directory: "shared-skill",
           name: "Shared Skill",
           description: "Imported from Grok Build",
-          foundIn: ["grokbuild"],
+          foundIn: ["pi"],
           path: "/tmp/shared-skill",
         },
       ],
@@ -222,7 +217,7 @@ describe("UnifiedSkillsPanel", () => {
       expect(importSkillsMock).toHaveBeenCalledWith([
         {
           directory: "shared-skill",
-          apps: expect.objectContaining({ grokbuild: true }),
+          apps: expect.objectContaining({ pi: true }),
         },
       ]);
     });
@@ -490,9 +485,9 @@ describe("UnifiedSkillsPanel", () => {
       const row = screen.getByText("Alpha Skill").closest(".group");
       const appToggleButtons = Array.from(
         row!.querySelectorAll<HTMLButtonElement>("button"),
-      ).slice(0, 7);
+      ).slice(0, 3);
 
-      expect(appToggleButtons).toHaveLength(7);
+      expect(appToggleButtons).toHaveLength(3);
       appToggleButtons.forEach((button) => expect(button).toBeDisabled());
       expect(screen.getByTitle("skills.uninstall")).toBeDisabled();
       await userEvent.setup().click(appToggleButtons[0]);

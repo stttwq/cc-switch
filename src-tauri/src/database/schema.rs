@@ -44,20 +44,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 2. Provider Endpoints 表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS provider_endpoints (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                provider_id TEXT NOT NULL,
-                app_type TEXT NOT NULL,
-                url TEXT NOT NULL,
-                added_at INTEGER,
-                FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
         // 3. MCP Servers 表
         conn.execute(
             "CREATE TABLE IF NOT EXISTS mcp_servers (
@@ -121,220 +107,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        // 8. Proxy Config 表（三行结构，app_type 主键）
-        conn.execute("CREATE TABLE IF NOT EXISTS proxy_config (
-            app_type TEXT PRIMARY KEY CHECK (app_type IN ('claude','codex','gemini','grokbuild')),
-            proxy_enabled INTEGER NOT NULL DEFAULT 0, listen_address TEXT NOT NULL DEFAULT '127.0.0.1',
-            listen_port INTEGER NOT NULL DEFAULT 15721, enable_logging INTEGER NOT NULL DEFAULT 1,
-            enabled INTEGER NOT NULL DEFAULT 0, auto_failover_enabled INTEGER NOT NULL DEFAULT 0,
-            max_retries INTEGER NOT NULL DEFAULT 3, streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60,
-            streaming_idle_timeout INTEGER NOT NULL DEFAULT 120, non_streaming_timeout INTEGER NOT NULL DEFAULT 600,
-            circuit_failure_threshold INTEGER NOT NULL DEFAULT 4, circuit_success_threshold INTEGER NOT NULL DEFAULT 2,
-            circuit_timeout_seconds INTEGER NOT NULL DEFAULT 60, circuit_error_rate_threshold REAL NOT NULL DEFAULT 0.6,
-            circuit_min_requests INTEGER NOT NULL DEFAULT 10,
-            default_cost_multiplier TEXT NOT NULL DEFAULT '1',
-            pricing_model_source TEXT NOT NULL DEFAULT 'response',
-            created_at TEXT NOT NULL DEFAULT (datetime('now')), updated_at TEXT NOT NULL DEFAULT (datetime('now'))
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 初始化三行数据（每应用不同默认值）
-        //
-        // 兼容旧数据库：
-        // - 老版本 proxy_config 是单例表（没有 app_type 列），此时不能执行三行 seed insert；
-        // - 旧表会在 apply_schema_migrations() 中迁移为三行结构后再插入。
-        if Self::has_column(conn, "proxy_config", "app_type")? {
-            conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('claude', 6, 90, 180, 600, 8, 3, 90, 0.7, 15)",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-            conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('codex', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-            conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('gemini', 5, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-            conn.execute(
-                "INSERT OR IGNORE INTO proxy_config (app_type, max_retries,
-                streaming_first_byte_timeout, streaming_idle_timeout, non_streaming_timeout,
-                circuit_failure_threshold, circuit_success_threshold, circuit_timeout_seconds,
-                circuit_error_rate_threshold, circuit_min_requests)
-                VALUES ('grokbuild', 3, 60, 120, 600, 4, 2, 60, 0.6, 10)",
-                [],
-            )
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        }
-
-        // 9. Provider Health 表
-        conn.execute("CREATE TABLE IF NOT EXISTS provider_health (
-            provider_id TEXT NOT NULL, app_type TEXT NOT NULL, is_healthy INTEGER NOT NULL DEFAULT 1,
-            consecutive_failures INTEGER NOT NULL DEFAULT 0, last_success_at TEXT, last_failure_at TEXT,
-            last_error TEXT, updated_at TEXT NOT NULL,
-            PRIMARY KEY (provider_id, app_type),
-            FOREIGN KEY (provider_id, app_type) REFERENCES providers(id, app_type) ON DELETE CASCADE
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 10. Proxy Request Logs 表
-        // pricing_model = 写入时实际用于计价的模型名（pricing_model_source 解析结果），
-        // 回填按它重算；NULL 表示 v11 之前的历史行，'' 表示未计价的错误行。
-        conn.execute("CREATE TABLE IF NOT EXISTS proxy_request_logs (
-            request_id TEXT PRIMARY KEY, provider_id TEXT NOT NULL, app_type TEXT NOT NULL, model TEXT NOT NULL,
-            request_model TEXT,
-            pricing_model TEXT,
-            input_tokens INTEGER NOT NULL DEFAULT 0, output_tokens INTEGER NOT NULL DEFAULT 0,
-            cache_read_tokens INTEGER NOT NULL DEFAULT 0, cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-            input_token_semantics INTEGER NOT NULL DEFAULT 0,
-            input_cost_usd TEXT NOT NULL DEFAULT '0', output_cost_usd TEXT NOT NULL DEFAULT '0',
-            cache_read_cost_usd TEXT NOT NULL DEFAULT '0', cache_creation_cost_usd TEXT NOT NULL DEFAULT '0',
-            total_cost_usd TEXT NOT NULL DEFAULT '0', latency_ms INTEGER NOT NULL, first_token_ms INTEGER,
-            duration_ms INTEGER, status_code INTEGER NOT NULL, error_message TEXT, session_id TEXT,
-            provider_type TEXT, is_streaming INTEGER NOT NULL DEFAULT 0,
-            cost_multiplier TEXT NOT NULL DEFAULT '1.0', created_at INTEGER NOT NULL,
-            data_source TEXT NOT NULL DEFAULT 'proxy'
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_provider ON proxy_request_logs(provider_id, app_type)", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_request_logs_created_at ON proxy_request_logs(created_at)", [])
-            .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_model ON proxy_request_logs(model)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_session ON proxy_request_logs(session_id)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_request_logs_status ON proxy_request_logs(status_code)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        Self::create_request_logs_usage_indexes_if_supported(conn)?;
-
-        // 11. Model Pricing 表
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS model_pricing (
-            model_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
-            input_cost_per_million TEXT NOT NULL, output_cost_per_million TEXT NOT NULL,
-            cache_read_cost_per_million TEXT NOT NULL DEFAULT '0',
-            cache_creation_cost_per_million TEXT NOT NULL DEFAULT '0'
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 12. Stream Check Logs 表
-        conn.execute("CREATE TABLE IF NOT EXISTS stream_check_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT, provider_id TEXT NOT NULL, provider_name TEXT NOT NULL,
-            app_type TEXT NOT NULL, status TEXT NOT NULL, success INTEGER NOT NULL, message TEXT NOT NULL,
-            response_time_ms INTEGER, http_status INTEGER, model_used TEXT,
-            retry_count INTEGER DEFAULT 0, tested_at INTEGER NOT NULL
-        )", []).map_err(|e| AppError::Database(e.to_string()))?;
-
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_stream_check_logs_provider
-             ON stream_check_logs(app_type, provider_id, tested_at DESC)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 注意：circuit_breaker_config 已合并到 proxy_config 表中
-
-        // 16. Proxy Live Backup 表 (Live 配置备份)
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS proxy_live_backup (
-            app_type TEXT PRIMARY KEY, original_config TEXT NOT NULL, backed_up_at TEXT NOT NULL
-        )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 17. Usage Daily Rollups 表 (日聚合统计)
-        // request_model 保留路由接管的「客户端别名 → 真实模型」映射维度，
-        // pricing_model 保留写入时的计价基准（request 计价模式下与 model 分叉），
-        // 否则明细被 prune 后接管计费不可审计；历史行迁移时填 ''（未知）。
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS usage_daily_rollups (
-                date TEXT NOT NULL,
-                app_type TEXT NOT NULL,
-                provider_id TEXT NOT NULL,
-                model TEXT NOT NULL,
-                request_model TEXT NOT NULL DEFAULT '',
-                pricing_model TEXT NOT NULL DEFAULT '',
-                request_count INTEGER NOT NULL DEFAULT 0,
-                success_count INTEGER NOT NULL DEFAULT 0,
-                input_tokens INTEGER NOT NULL DEFAULT 0,
-                output_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-                cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-                input_token_semantics INTEGER NOT NULL DEFAULT 0,
-                total_cost_usd TEXT NOT NULL DEFAULT '0',
-                avg_latency_ms INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (date, app_type, provider_id, model, request_model, pricing_model)
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // 18. Session Log Sync 表 (会话日志同步状态)
-        //
-        // last_byte_offset：Claude 路径的字节游标（seek 增量读）；NULL 表示
-        // 尚无字节游标（旧行号游标或非 Claude 路径行），此时回退全量读。
-        // last_tail_fingerprint：游标边界前尾部字节的指纹，用于识别文件被
-        // 外部重写（同尺寸/更大的替换无法靠 size 检测）；NULL 表示无指纹
-        // 可校验，按纯追加处理。
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_log_sync (
-                file_path TEXT PRIMARY KEY,
-                last_modified INTEGER NOT NULL,
-                last_line_offset INTEGER NOT NULL DEFAULT 0,
-                last_synced_at INTEGER NOT NULL,
-                last_byte_offset INTEGER,
-                last_tail_fingerprint INTEGER
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
-        // Session detail rows are pruned after rollup, so request IDs needed
-        // for fork/rewrite deduplication live in a compact durable ledger.
-        conn.execute(
-            "CREATE TABLE IF NOT EXISTS session_usage_dedup (
-                data_source TEXT NOT NULL,
-                request_id TEXT NOT NULL,
-                semantic_id TEXT NOT NULL,
-                has_entry_id INTEGER NOT NULL DEFAULT 0,
-                PRIMARY KEY (data_source, request_id)
-            )",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-        conn.execute(
-            "CREATE INDEX IF NOT EXISTS idx_session_usage_dedup_semantic
-             ON session_usage_dedup(data_source, semantic_id, has_entry_id)",
-            [],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
-
         // 19. Profiles 表（全应用共享的项目实体，payload 按 app 分槽快照
         //     供应商/MCP/Skills/Prompt；各应用分组的 current 标记在 settings 表）
         conn.execute(
@@ -362,52 +134,6 @@ impl Database {
             .is_ok()
         {
             let _ = conn.execute("DELETE FROM settings WHERE key = 'current_profile_id'", []);
-        }
-
-        // 尝试添加 live_takeover_active 列到 proxy_config 表
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN live_takeover_active INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-
-        // 尝试添加基础配置列到 proxy_config 表（兼容 v3.9.0-2 升级）
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN proxy_enabled INTEGER NOT NULL DEFAULT 0",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN listen_address TEXT NOT NULL DEFAULT '127.0.0.1'",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN listen_port INTEGER NOT NULL DEFAULT 15721",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN enable_logging INTEGER NOT NULL DEFAULT 1",
-            [],
-        );
-
-        // 尝试添加超时配置列到 proxy_config 表
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN streaming_first_byte_timeout INTEGER NOT NULL DEFAULT 60",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN streaming_idle_timeout INTEGER NOT NULL DEFAULT 120",
-            [],
-        );
-        let _ = conn.execute(
-            "ALTER TABLE proxy_config ADD COLUMN non_streaming_timeout INTEGER NOT NULL DEFAULT 600",
-            [],
-        );
-
-        // 兼容：若旧版 proxy_config 仍为单例结构（无 app_type），则在启动时直接转换为三行结构
-        // 说明：user_version=2 时不会再触发 v1->v2 迁移，但新代码查询依赖 app_type 列。
-        if Self::table_exists(conn, "proxy_config")?
-            && !Self::has_column(conn, "proxy_config", "app_type")?
-        {
-            Self::migrate_proxy_config_to_per_app(conn)?;
         }
 
         Ok(())
@@ -1667,11 +1393,13 @@ impl Database {
         conn.execute("DROP INDEX IF EXISTS idx_providers_failover", [])
             .map_err(|e| AppError::Database(format!("删除 failover 索引失败: {e}")))?;
 
-        conn.execute(
-            "DELETE FROM providers WHERE app_type NOT IN ('claude','codex','pi')",
-            [],
-        )
-        .map_err(|e| AppError::Database(format!("删除非目标应用供应商失败: {e}")))?;
+        if Self::table_exists(conn, "providers")? {
+            conn.execute(
+                "DELETE FROM providers WHERE app_type NOT IN ('claude','codex','pi')",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("删除非目标应用供应商失败: {e}")))?;
+        }
 
         if Self::has_column(conn, "mcp_servers", "enabled_gemini")? {
             conn.execute(
@@ -3683,9 +3411,7 @@ impl Database {
         Self::validate_identifier(column, "列名")?;
 
         if !Self::table_exists(conn, table)? {
-            return Err(AppError::Database(format!(
-                "表 {table} 不存在，无法添加列 {column}"
-            )));
+            return Ok(false);
         }
         if Self::has_column(conn, table, column)? {
             return Ok(false);
@@ -3704,6 +3430,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[ignore = "v19 drops proxy_request_logs / usage_daily_rollups"]
     fn migrate_v12_to_v13_adds_input_token_semantics_columns() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         conn.execute(
@@ -3741,6 +3468,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "v19 drops proxy_config"]
     fn migrate_v13_to_v14_adds_grokbuild_proxy_row_and_preserves_values() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::create_tables_on_conn(&conn)?;
@@ -3819,6 +3547,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "v19 drops proxy_request_logs / usage_daily_rollups / session_log_sync"]
     fn migrate_v15_to_v16_resets_only_codex_session_usage() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::create_tables_on_conn(&conn)?;
@@ -3860,6 +3589,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "v19 drops session_usage_dedup"]
     fn migrate_v16_to_v17_creates_session_usage_dedup_ledger() -> Result<(), AppError> {
         let conn = Connection::open_in_memory()?;
         Database::set_user_version(&conn, 16)?;
@@ -3878,6 +3608,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "v19 drops session_log_sync"]
     fn migrate_v17_to_v18_adds_byte_cursor_to_existing_sync_table() -> Result<(), AppError> {
         // 真实升级路径：v17 库带旧 DDL 的 session_log_sync（无字节游标列，
         // 字节游标曾短暂搭 v17 车、已执行过 v17 的开发库正是这个形状）

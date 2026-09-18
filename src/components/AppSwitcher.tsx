@@ -9,14 +9,13 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { Monitor, MoreHorizontal, Terminal } from "lucide-react";
+import { MoreHorizontal, Terminal } from "lucide-react";
 import { APP_IDS } from "@/config/appConfig";
 
 const APP_BADGE_ICON: Partial<
   Record<AppId, { icon: typeof Terminal; offsetY?: number }>
 > = {
   claude: { icon: Terminal },
-  "claude-desktop": { icon: Monitor, offsetY: 0.5 },
 };
 
 interface AppSwitcherProps {
@@ -29,25 +28,13 @@ const STORAGE_KEY = "cc-switch-last-app";
 
 const APP_ICON_NAME: Record<AppId, string> = {
   claude: "claude",
-  "claude-desktop": "claude",
   codex: "openai",
-  gemini: "gemini",
-  grokbuild: "grok",
-  opencode: "opencode",
-  openclaw: "openclaw",
-  hermes: "hermes",
   pi: "pi",
 };
 
 const APP_DISPLAY_NAME: Record<AppId, string> = {
   claude: "Claude Code",
-  "claude-desktop": "Claude Desktop",
   codex: "Codex",
-  gemini: "Gemini",
-  grokbuild: "Grok Build",
-  opencode: "OpenCode",
-  openclaw: "OpenClaw",
-  hermes: "Hermes",
   pi: "Pi",
 };
 

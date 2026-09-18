@@ -17,7 +17,8 @@ pub fn get_providers(
     app: String,
 ) -> Result<IndexMap<String, ProviderForFrontend>, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let providers = ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
+    let providers =
+        ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
     let mut sanitized = IndexMap::new();
     for (id, provider) in providers {
         let mut front = provider.to_frontend();
@@ -28,18 +29,15 @@ pub fn get_providers(
 }
 
 fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -> SecretStatus {
-    let api = futures::executor::block_on(
-        state
-            .secrets
-            .retrieve(&SecretTarget::provider_api_key(app_type.clone(), provider_id)),
-    )
+    let api = futures::executor::block_on(state.secrets.retrieve(&SecretTarget::provider_api_key(
+        app_type.clone(),
+        provider_id,
+    )))
     .ok()
     .flatten();
-    let base = futures::executor::block_on(
-        state
-            .secrets
-            .retrieve(&SecretTarget::provider_base_url(app_type.clone(), provider_id)),
-    )
+    let base = futures::executor::block_on(state.secrets.retrieve(
+        &SecretTarget::provider_base_url(app_type.clone(), provider_id),
+    ))
     .ok()
     .flatten();
     SecretStatus {
@@ -48,15 +46,29 @@ fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -
             hint: api.as_deref().and_then(hint_last4),
         },
         base_url: base,
-        extra_env: Vec::new(),
+        extra_env: extra_env_keys(state, app_type, provider_id),
     }
 }
 
+fn extra_env_keys(state: &AppState, app_type: &AppType, provider_id: &str) -> Vec<String> {
+    let prefix = format!(
+        "cc-switch/v1/provider/{}/{}/env/",
+        app_type.as_str(),
+        provider_id
+    );
+    crate::secrets::load_known_targets(state.db.as_ref())
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|t| t.strip_prefix(&prefix).map(str::to_string))
+        .filter(|k| !k.is_empty())
+        .collect()
+}
+
 fn hint_last4(value: &str) -> Option<String> {
-    if value.len() < 8 {
+    if value.chars().count() < 8 {
         None
     } else {
-        Some(value[value.len() - 4..].to_string())
+        Some(crate::secrets::last_chars(value, 4).to_string())
     }
 }
 
@@ -228,4 +240,3 @@ pub fn update_providers_sort_order(
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::update_sort_order(state.inner(), app_type, updates).map_err(|e| e.to_string())
 }
-

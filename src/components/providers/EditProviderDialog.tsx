@@ -236,7 +236,13 @@ export function EditProviderDialog({
     }
 
     return base;
-  }, [liveSettings, provider?.settingsConfig, provider?.secretStatus, provider?.category, appId]);
+  }, [
+    liveSettings,
+    provider?.settingsConfig,
+    provider?.secretStatus,
+    provider?.category,
+    appId,
+  ]);
 
   // 固定 initialData，防止 provider 对象更新时重置表单
   const initialData = useMemo(() => {
@@ -270,8 +276,7 @@ export function EditProviderDialog({
         unknown
       >;
       const nextProviderId =
-        (appId === "opencode" || appId === "openclaw" || appId === "pi") &&
-        values.providerKey?.trim()
+        appId === "pi" && values.providerKey?.trim()
           ? values.providerKey.trim()
           : provider.id;
 

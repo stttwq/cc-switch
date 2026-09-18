@@ -65,6 +65,7 @@ pub async fn import_config_from_file(
                 let _skill_state_guard = skill_state_write_guard();
                 db.import_sql(&path_buf)?
             };
+            app_state_for_sync.scrub_imported_plaintext()?;
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
             if let Some(msg) = warning.as_ref() {
@@ -181,6 +182,7 @@ pub async fn restore_db_backup(
                 let _skill_state_guard = skill_state_write_guard();
                 db.restore_from_backup(&filename)?
             };
+            app_state_for_sync.scrub_imported_plaintext()?;
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
             if let Some(message) = warning {

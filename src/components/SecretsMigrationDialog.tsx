@@ -77,7 +77,12 @@ export function SecretsMigrationDialog() {
   if (!report) return null;
 
   return (
-    <Dialog open onOpenChange={(open) => { if (!open) void confirm(); }}>
+    <Dialog
+      open
+      onOpenChange={(open) => {
+        if (!open) void confirm();
+      }}
+    >
       <DialogContent className="max-w-lg" zIndex="top">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -99,7 +104,9 @@ export function SecretsMigrationDialog() {
           </ul>
           {backups.length > 0 && (
             <div className="space-y-2">
-              <p className="text-sm">仍含明文的历史数据库备份（回滚用，可稍后删）：</p>
+              <p className="text-sm">
+                仍含明文的历史数据库备份（回滚用，可稍后删）：
+              </p>
               <ul className="max-h-24 overflow-auto text-xs break-all list-disc pl-5">
                 {backups.map((b) => (
                   <li key={b.path}>{b.path}</li>
@@ -110,7 +117,11 @@ export function SecretsMigrationDialog() {
         </div>
         <DialogFooter>
           {backups.length > 0 && (
-            <Button variant="destructive" disabled={busy} onClick={() => void deleteBackups()}>
+            <Button
+              variant="destructive"
+              disabled={busy}
+              onClick={() => void deleteBackups()}
+            >
               全部删除备份
             </Button>
           )}

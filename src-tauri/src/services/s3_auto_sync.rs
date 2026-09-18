@@ -108,7 +108,8 @@ async fn run_auto_sync_upload(
     };
 
     let secrets = crate::store::get_app_state(app)?.secrets.clone();
-    let result = s3_sync::run_with_sync_lock(s3_sync::upload(db, &secrets, &mut sync_settings)).await;
+    let result =
+        s3_sync::run_with_sync_lock(s3_sync::upload(db, &secrets, &mut sync_settings)).await;
     match result {
         Ok(_) => {
             emit_auto_sync_status_updated(app, "success", None);

@@ -91,15 +91,15 @@ pub fn get_secrets_migration_report(
         .get_setting("secrets_migration_report")
         .map_err(|e| e.to_string())?;
     match raw {
-        Some(json) => serde_json::from_str(&json).map(Some).map_err(|e| e.to_string()),
+        Some(json) => serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|e| e.to_string()),
         None => Ok(None),
     }
 }
 
 #[tauri::command]
-pub fn confirm_secrets_migration(
-    state: State<'_, crate::store::AppState>,
-) -> Result<(), String> {
+pub fn confirm_secrets_migration(state: State<'_, crate::store::AppState>) -> Result<(), String> {
     state
         .db
         .set_setting("secrets_migration_confirmed", "1")
@@ -107,13 +107,19 @@ pub fn confirm_secrets_migration(
 }
 
 #[tauri::command]
-pub fn list_plaintext_backups() -> Result<Vec<crate::secrets::cleanup::PlaintextBackupInfo>, String> {
+pub fn list_plaintext_backups() -> Result<Vec<crate::secrets::cleanup::PlaintextBackupInfo>, String>
+{
     crate::secrets::cleanup::list_plaintext_db_backups().map_err(|e| e.to_string())
 }
 
 #[tauri::command]
 pub fn delete_plaintext_backups() -> Result<usize, String> {
     crate::secrets::cleanup::delete_plaintext_db_backups().map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn secrets_cleanup_orphans(state: State<'_, crate::store::AppState>) -> Result<usize, String> {
+    crate::services::provider::cleanup_orphan_secrets(state.inner()).map_err(|e| e.to_string())
 }
 
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
@@ -3559,7 +3565,7 @@ fn launch_terminal_with_env(
     #[cfg(target_os = "windows")]
     {
         launch_windows_terminal(&env_vars, cwd)?;
-        return Ok(());
+        Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -6227,7 +6233,12 @@ mod tests {
     fn build_tool_search_paths_includes_standalone_installer_dirs() {
         // Non-npm installer locations must be scanned even when the process PATH
         // dropped them (regression guard for #6061 / #6278 / #6047).
-        let local_data = dirs::data_local_dir().expect("LOCALAPPDATA should resolve");
+        // 并行测试中其它用例会在同进程操作环境变量（Windows 上非线程安全），
+        // LOCALAPPDATA 读取可能偶发失败 —— 环境不可用时跳过而非误报。
+        let Some(local_data) = dirs::data_local_dir() else {
+            eprintln!("LOCALAPPDATA unavailable; skipping installer-dir scan test");
+            return;
+        };
 
         let codex_paths = build_tool_search_paths("codex");
         assert!(codex_paths.contains(

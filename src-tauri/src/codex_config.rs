@@ -2207,6 +2207,29 @@ fn codex_provider_table_declares_auth(table: &dyn toml_edit::TableLike) -> bool 
                 || table_declares_authorization_header(table.get("env_http_headers"))))
 }
 
+/// Whether the config already declares an `env_key` (top-level or on the
+/// active custom provider table). With env-var delivery the key lives in
+/// the store and the live config carries only the env-var NAME — this
+/// counts as "the provider has its own credential source" for the safety
+/// gates, even though no literal key sits in the TOML.
+fn codex_config_declares_env_key(config_text: &str) -> bool {
+    let Ok(doc) = config_text.parse::<DocumentMut>() else {
+        return false;
+    };
+    if doc.get("env_key").is_some() {
+        return true;
+    }
+    match active_codex_model_provider_id(&doc) {
+        Some(id) if is_custom_codex_model_provider_id(&id) => doc
+            .get("model_providers")
+            .and_then(|item| item.as_table_like())
+            .and_then(|table| table.get(&id))
+            .and_then(|item| item.as_table_like())
+            .is_some_and(|table| table.get("env_key").is_some()),
+        _ => false,
+    }
+}
+
 /// Whether a config routes requests away from the official provider while
 /// offering no custom provider table to carry a bearer token: a custom
 /// `model_provider` whose table is missing, or a built-in/unset provider
@@ -2616,6 +2639,9 @@ fn normalize_codex_legacy_openai_reroute(config_text: &str) -> Result<Option<Str
         provider_table.insert("name", "Custom".into());
         provider_table.insert("base_url", base_url.into());
         provider_table.insert("wire_api", "responses".into());
+        // Env-var delivery: the key lives in the SecretStore, the config
+        // carries only the env-var name.
+        provider_table.insert("env_key", "CC_SWITCH_CODEX_API_KEY".into());
         model_providers.insert(
             &migrated_id,
             toml_edit::Item::Value(toml_edit::Value::InlineTable(provider_table)),
@@ -2625,6 +2651,7 @@ fn normalize_codex_legacy_openai_reroute(config_text: &str) -> Result<Option<Str
         provider_table.insert("name", toml_edit::value("Custom"));
         provider_table.insert("base_url", toml_edit::value(base_url));
         provider_table.insert("wire_api", toml_edit::value("responses"));
+        provider_table.insert("env_key", toml_edit::value("CC_SWITCH_CODEX_API_KEY"));
         model_providers.insert(&migrated_id, toml_edit::Item::Table(provider_table));
     }
 
@@ -3129,6 +3156,10 @@ fn plan_codex_live_write(
     // text (e.g. `auth = {}` raw-edited providers) — mirror
     // prepare_codex_provider_live_config's token sources.
     let carried_key = extract_codex_api_key(Some(auth), config_text);
+    // With env-var delivery the key may live only in the SecretStore; an
+    // `env_key` in the config is the credential source then.
+    let has_carried_auth =
+        carried_key.is_some() || config_text.is_some_and(codex_config_declares_env_key);
 
     // Stale reserved tables are migrated BEFORE the safety gates so the
     // gates judge the same text prepare will write (a mixed stale-table +
@@ -3146,7 +3177,7 @@ fn plan_codex_live_write(
     // prepare_codex_provider_live_config normalizes again internally
     // (idempotent); the gates need the normalized text here.
     let normalized = match config_text {
-        Some(text) if carried_key.is_some() => normalize_codex_legacy_openai_reroute(text)?,
+        Some(text) if has_carried_auth => normalize_codex_legacy_openai_reroute(text)?,
         _ => None,
     };
     let config_text = normalized.as_deref().or(config_text);
@@ -3166,16 +3197,14 @@ fn plan_codex_live_write(
             // resolves for a third-party route must never come from
             // auth.json (official OAuth under preservation, nothing at all
             // otherwise — either way the switch would be broken or unsafe).
-            if carried_key.is_some() && codex_config_routes_third_party_without_token_slot(text) {
+            if has_carried_auth && codex_config_routes_third_party_without_token_slot(text) {
                 return Err(AppError::localized(
                     "provider.codex.config.no_custom_provider",
                     "Codex 第三方配置必须包含自定义 model_providers 条目以承载 API 密钥（Codex 不识别顶层 experimental_bearer_token）",
                     "A Codex third-party config must define a custom model_providers entry to carry the API key (Codex ignores a top-level experimental_bearer_token)",
                 ));
             }
-            if carried_key.is_none()
-                && codex_config_falls_back_to_official_auth_for_third_party(text)
-            {
+            if !has_carried_auth && codex_config_falls_back_to_official_auth_for_third_party(text) {
                 return Err(AppError::localized(
                     "provider.codex.config.official_auth_fallback",
                     "该 Codex 配置没有可用的 API 密钥，而 requires_openai_auth = true（或顶层 openai_base_url）会让 Codex 回退使用 auth.json 里的登录凭据访问第三方地址。请为供应商填写 API 密钥，或移除该回退指令",

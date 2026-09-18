@@ -70,10 +70,18 @@ impl SecretTarget {
     pub fn to_target_string(&self) -> String {
         match self {
             Self::ProviderApiKey { app, provider_id } => {
-                format!("cc-switch/v1/provider/{}/{}/api_key", app.as_str(), provider_id)
+                format!(
+                    "cc-switch/v1/provider/{}/{}/api_key",
+                    app.as_str(),
+                    provider_id
+                )
             }
             Self::ProviderBaseUrl { app, provider_id } => {
-                format!("cc-switch/v1/provider/{}/{}/base_url", app.as_str(), provider_id)
+                format!(
+                    "cc-switch/v1/provider/{}/{}/base_url",
+                    app.as_str(),
+                    provider_id
+                )
             }
             Self::ProviderEnv {
                 app,
@@ -99,7 +107,9 @@ impl SecretTarget {
         match self {
             Self::ProviderApiKey { app, provider_id }
             | Self::ProviderBaseUrl { app, provider_id }
-            | Self::ProviderEnv { app, provider_id, .. } => {
+            | Self::ProviderEnv {
+                app, provider_id, ..
+            } => {
                 format!("{}/{}", app.as_str(), provider_id)
             }
             Self::AppSecret { app, .. } => app.clone(),
@@ -138,7 +148,8 @@ mod tests {
 
     #[test]
     fn test_provider_env_target() {
-        let target = SecretTarget::provider_env(AppType::Claude, "provider-1", "OPENROUTER_API_KEY");
+        let target =
+            SecretTarget::provider_env(AppType::Claude, "provider-1", "OPENROUTER_API_KEY");
         assert_eq!(
             target.to_target_string(),
             "cc-switch/v1/provider/claude/provider-1/env/OPENROUTER_API_KEY"
@@ -148,7 +159,10 @@ mod tests {
     #[test]
     fn test_app_secret_target() {
         let target = SecretTarget::app("webdav", "password");
-        assert_eq!(target.to_target_string(), "cc-switch/v1/app/webdav/password");
+        assert_eq!(
+            target.to_target_string(),
+            "cc-switch/v1/app/webdav/password"
+        );
         assert_eq!(target.to_user_metadata(), "webdav");
     }
 

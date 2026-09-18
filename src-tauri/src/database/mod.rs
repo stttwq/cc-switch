@@ -128,7 +128,9 @@ impl Database {
                 // v18→v19 is the secrets migration, use special naming
                 if version == 18 {
                     if let Err(e) = db.backup_database_file_for_secrets_migration() {
-                        log::warn!("Pre-secrets-migration backup failed, continuing migration: {e}");
+                        log::warn!(
+                            "Pre-secrets-migration backup failed, continuing migration: {e}"
+                        );
                     }
                 } else {
                     if let Err(e) = db.backup_database_file() {
@@ -250,7 +252,6 @@ impl Database {
             conn: Mutex::new(conn),
         };
         db.create_tables()?;
-        db.ensure_model_pricing_seeded()?;
 
         Ok(db)
     }

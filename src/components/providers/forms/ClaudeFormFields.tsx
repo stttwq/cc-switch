@@ -24,7 +24,6 @@ import {
   Loader2,
   Wand2,
 } from "lucide-react";
-import EndpointSpeedTest from "./EndpointSpeedTest";
 import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import {
   fetchModelsForConfig,
@@ -47,12 +46,7 @@ import {
   type TemplateValueConfig,
 } from "@/config/claudeProviderPresets";
 
-interface EndpointCandidate {
-  url: string;
-}
-
 interface ClaudeFormFieldsProps {
-  providerId?: string;
   // API Key
   shouldShowApiKey: boolean;
   apiKey: string;
@@ -73,11 +67,6 @@ interface ClaudeFormFieldsProps {
   shouldShowSpeedTest: boolean;
   baseUrl: string;
   onBaseUrlChange: (url: string) => void;
-  isEndpointModalOpen: boolean;
-  onEndpointModalToggle: (open: boolean) => void;
-  onCustomEndpointsChange?: (endpoints: string[]) => void;
-  autoSelect: boolean;
-  onAutoSelectChange: (checked: boolean) => void;
   showEndpointTools?: boolean;
 
   // Model Selector
@@ -94,9 +83,6 @@ interface ClaudeFormFieldsProps {
   subagentModel: string;
   onModelChange: (field: ClaudeModelEnvField, value: string) => void;
 
-  // Speed Test Endpoints
-  speedTestEndpoints: EndpointCandidate[];
-
   // API Format (for Claude-compatible providers that need request/response conversion)
   apiFormat: ClaudeApiFormat;
   onApiFormatChange: (format: ClaudeApiFormat) => void;
@@ -111,7 +97,6 @@ interface ClaudeFormFieldsProps {
 }
 
 export function ClaudeFormFields({
-  providerId,
   shouldShowApiKey,
   apiKey,
   onApiKeyChange,
@@ -127,11 +112,6 @@ export function ClaudeFormFields({
   shouldShowSpeedTest,
   baseUrl,
   onBaseUrlChange,
-  isEndpointModalOpen,
-  onEndpointModalToggle,
-  onCustomEndpointsChange,
-  autoSelect,
-  onAutoSelectChange,
   showEndpointTools = true,
   shouldShowModelSelector,
   claudeModel,
@@ -145,7 +125,6 @@ export function ClaudeFormFields({
   defaultFableModelName,
   subagentModel,
   onModelChange,
-  speedTestEndpoints,
   apiFormat,
   onApiFormatChange,
   apiKeyField,
@@ -402,28 +381,9 @@ export function ClaudeFormFields({
               : undefined
           }
           showManageButton={showEndpointTools}
-          onManageClick={
-            showEndpointTools ? () => onEndpointModalToggle(true) : undefined
-          }
           showFullUrlToggle={showEndpointTools}
           isFullUrl={isFullUrl}
           onFullUrlChange={onFullUrlChange}
-        />
-      )}
-
-      {/* 端点测速弹窗 */}
-      {shouldShowSpeedTest && showEndpointTools && isEndpointModalOpen && (
-        <EndpointSpeedTest
-          appId="claude"
-          providerId={providerId}
-          value={baseUrl}
-          onChange={onBaseUrlChange}
-          initialEndpoints={speedTestEndpoints}
-          visible={isEndpointModalOpen}
-          onClose={() => onEndpointModalToggle(false)}
-          autoSelect={autoSelect}
-          onAutoSelectChange={onAutoSelectChange}
-          onCustomEndpointsChange={onCustomEndpointsChange}
         />
       )}
 

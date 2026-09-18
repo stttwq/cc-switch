@@ -31,22 +31,6 @@ describe("Kimi For Coding Provider Preset", () => {
   });
 });
 
-describe("Codex Provider Preset", () => {
-  const codex = providerPresets.find((p) => p.name === "Codex");
-
-  it("should include the Codex preset", () => {
-    expect(codex).toBeDefined();
-  });
-
-  // 预设直接钉 Codex 目录的 372K 窗口（openai/codex#31860），不暴露表单输入框
-  it("should pin the Codex-catalog 372K window without exposing form fields", () => {
-    const env = (codex!.settingsConfig as any).env;
-    expect(env.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe("372000");
-    expect(env.CLAUDE_CODE_AUTO_COMPACT_WINDOW).toBe("372000");
-    expect(codex!.templateValues).toBeUndefined();
-  });
-});
-
 describe("OpenCode Go Provider Preset", () => {
   const openCodeGo = providerPresets.find((p) => p.name === "OpenCode Go");
 

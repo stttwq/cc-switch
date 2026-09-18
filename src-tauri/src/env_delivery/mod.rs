@@ -7,10 +7,15 @@ mod ownership;
 mod sink;
 
 pub use ownership::{check_conflict, EnvConflict, ManagedEnvVars};
-pub use sink::{EnvSink, InMemoryEnvSink};
+pub use sink::default_sink;
+pub use sink::EnvSink;
+
+#[cfg(test)]
+pub use sink::InMemoryEnvSink;
 
 #[cfg(target_os = "windows")]
-pub use sink::WindowsUserEnvSink;
 
 #[cfg(not(target_os = "windows"))]
 pub use sink::UnsupportedEnvSink;
+#[allow(unused_imports)]
+pub use sink::WindowsUserEnvSink;

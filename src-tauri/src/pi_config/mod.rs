@@ -122,10 +122,11 @@ pub(crate) fn insert_pi_provider(provider_key: &str, config: &Value) -> Result<b
     validate_provider_node(provider_key, config)?;
 
     // Phase 4: Sanitize config to use environment variable references
-    let sanitized_config = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
-        provider_key,
-        config,
-    )?;
+    let sanitized_config =
+        crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+            provider_key,
+            config,
+        )?;
 
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
@@ -155,10 +156,11 @@ pub(crate) fn replace_pi_provider(
     validate_provider_node(provider_key, replacement)?;
 
     // Phase 4: Sanitize replacement config to use environment variable references
-    let sanitized_replacement = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
-        provider_key,
-        replacement,
-    )?;
+    let sanitized_replacement =
+        crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+            provider_key,
+            replacement,
+        )?;
 
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
@@ -188,10 +190,11 @@ pub(crate) fn replace_pi_provider_if_present(
     validate_provider_node(provider_key, replacement)?;
 
     // Phase 4: Sanitize replacement config to use environment variable references
-    let sanitized_replacement = crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
-        provider_key,
-        replacement,
-    )?;
+    let sanitized_replacement =
+        crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
+            provider_key,
+            replacement,
+        )?;
 
     let _guard = lock_models_file()?;
     let path = get_pi_models_path()?;
@@ -276,25 +279,6 @@ pub(crate) fn validate_provider_node(provider_key: &str, config: &Value) -> Resu
         AppError::InvalidInput("Pi provider configuration must be an object".to_string())
     })?;
     Ok(())
-}
-
-pub(crate) fn provider_base_url(config: &Value) -> Result<String, AppError> {
-    let provider = config.as_object().ok_or_else(|| {
-        AppError::InvalidInput("Pi provider configuration must be an object".to_string())
-    })?;
-    nonempty_string(provider.get("baseUrl"))
-        .or_else(|| {
-            provider
-                .get("models")
-                .and_then(Value::as_array)
-                .and_then(|models| {
-                    models
-                        .iter()
-                        .find_map(|model| nonempty_string(model.get("baseUrl")))
-                })
-        })
-        .map(str::to_string)
-        .ok_or_else(|| AppError::InvalidInput("Pi provider has no request URL".to_string()))
 }
 
 fn lock_models_file() -> Result<MutexGuard<'static, ()>, AppError> {
@@ -484,12 +468,6 @@ fn optional_string(
             path.display()
         ))),
     }
-}
-
-fn nonempty_string(value: Option<&Value>) -> Option<&str> {
-    value
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
 }
 
 #[cfg(test)]

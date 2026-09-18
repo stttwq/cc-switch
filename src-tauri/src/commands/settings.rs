@@ -9,19 +9,12 @@ fn merge_settings_for_save(
     // WebDAV and S3 secrets are now stored in SecretStore, not in settings struct
     // These merge branches are removed as part of Phase 2A cleanup
 
-    match (&mut incoming.webdav_sync, &existing.webdav_sync) {
-        // incoming 没有 webdav → 保留现有
-        (None, _) => {
-            incoming.webdav_sync = existing.webdav_sync.clone();
-        }
-        _ => {}
+    // incoming 没有 webdav / s3 → 保留现有
+    if incoming.webdav_sync.is_none() {
+        incoming.webdav_sync = existing.webdav_sync.clone();
     }
-    match (&mut incoming.s3_sync, &existing.s3_sync) {
-        // incoming 没有 s3 → 保留现有
-        (None, _) => {
-            incoming.s3_sync = existing.s3_sync.clone();
-        }
-        _ => {}
+    if incoming.s3_sync.is_none() {
+        incoming.s3_sync = existing.s3_sync.clone();
     }
     // local_migrations 是纯后端状态（迁移完成标记），前端没有合法的修改场景，
     // 无条件取现有值。若按 incoming 透传：后端清掉 marker（如关闭统一会话

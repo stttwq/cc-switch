@@ -664,8 +664,7 @@ fn migrate_codex_provider_templates_to_custom(
     let mut migrated_provider_ids = Vec::new();
 
     for (_, provider) in providers {
-        if provider.category.as_deref() == Some("official") || is_official_seed_id(&provider.id)
-        {
+        if provider.category.as_deref() == Some("official") || is_official_seed_id(&provider.id) {
             continue;
         }
 
@@ -707,8 +706,7 @@ fn collect_source_model_provider_ids(db: &Database) -> Result<BTreeSet<String>, 
     let mut ids = BTreeSet::new();
 
     for provider in providers.values() {
-        if provider.category.as_deref() == Some("official") || is_official_seed_id(&provider.id)
-        {
+        if provider.category.as_deref() == Some("official") || is_official_seed_id(&provider.id) {
             continue;
         }
 
@@ -1440,7 +1438,8 @@ base_url = "https://proxy.example/v1"
 
         let mut official = Provider::with_id("codex-official".to_string());
         official.name = "OpenAI Official".to_string();
-        official.settings_config = serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
+        official.settings_config =
+            serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
         official.category = Some("official".to_string());
         db.save_provider("codex", &official).expect("save official");
 
@@ -2156,7 +2155,8 @@ base_url = "https://proxy.example/v1"
 
         let mut official = Provider::with_id("codex-official".to_string());
         official.name = "OpenAI Official".to_string();
-        official.settings_config = serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
+        official.settings_config =
+            serde_json::json!({"auth": {}, "config": "model_provider = \"openai\""});
         official.category = Some("official".to_string());
 
         db.save_provider("codex", &third_party)

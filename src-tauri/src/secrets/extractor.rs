@@ -5,7 +5,7 @@ use crate::codex_config::{
 };
 use crate::error::AppError;
 use crate::secrets::rules::{
-    is_literal_value, is_sensitive_config_key, normalize_env_key_segment, unescape_literal,
+    is_literal_value, is_sensitive_config_key, pi_header_env_name, unescape_literal,
 };
 use crate::secrets::store::SecretStore;
 use crate::secrets::target::SecretTarget;
@@ -18,11 +18,21 @@ use toml_edit::DocumentMut;
 pub struct SecretExtractor<'a> {
     store: &'a dyn SecretStore,
     app: AppType,
+    db: Option<&'a crate::database::Database>,
 }
 
 impl<'a> SecretExtractor<'a> {
     pub fn new(store: &'a dyn SecretStore, app: AppType) -> Self {
-        Self { store, app }
+        Self {
+            store,
+            app,
+            db: None,
+        }
+    }
+
+    pub fn with_db(mut self, db: &'a crate::database::Database) -> Self {
+        self.db = Some(db);
+        self
     }
 
     /// 纯提取：剥密钥与 Base URL，不写凭据管理器。
@@ -60,7 +70,7 @@ impl<'a> SecretExtractor<'a> {
         api_key_field: Option<&str>,
     ) -> Result<(Value, ProviderSecrets), AppError> {
         let extracted = Self::extract_with_meta(provider_id, &self.app, config, api_key_field)?;
-        persist_secrets(self.store, &self.app, provider_id, &extracted.secrets).await?;
+        persist_extracted_secrets(self, provider_id, &extracted.secrets).await?;
         Ok((extracted.stripped, extracted.secrets))
     }
 
@@ -181,6 +191,64 @@ async fn persist_secrets(
     Ok(())
 }
 
+pub(crate) async fn persist_extracted_secrets(
+    extractor: &SecretExtractor<'_>,
+    provider_id: &str,
+    secrets: &ProviderSecrets,
+) -> Result<(), AppError> {
+    persist_secrets(extractor.store, &extractor.app, provider_id, secrets).await?;
+    if let Some(db) = extractor.db {
+        record_known_targets(db, &extractor.app, provider_id, secrets)?;
+    }
+    Ok(())
+}
+
+fn record_known_targets(
+    db: &crate::database::Database,
+    app: &AppType,
+    provider_id: &str,
+    secrets: &ProviderSecrets,
+) -> Result<(), AppError> {
+    let mut targets = load_known_targets(db)?;
+    let mut push = |t: SecretTarget| {
+        let s = t.to_target_string();
+        if !targets.iter().any(|x| x == &s) {
+            targets.push(s);
+        }
+    };
+    if secrets.api_key.is_some() {
+        push(SecretTarget::provider_api_key(app.clone(), provider_id));
+    }
+    if secrets.base_url.is_some() {
+        push(SecretTarget::provider_base_url(app.clone(), provider_id));
+    }
+    for name in secrets.extra_env.keys() {
+        push(SecretTarget::provider_env(app.clone(), provider_id, name));
+    }
+    save_known_targets(db, &targets)
+}
+
+pub fn load_known_targets(db: &crate::database::Database) -> Result<Vec<String>, AppError> {
+    match db.get_setting("known_secret_targets")? {
+        Some(raw) if !raw.is_empty() => serde_json::from_str(&raw)
+            .map_err(|e| AppError::Config(format!("known_secret_targets 解析失败: {e}"))),
+        _ => Ok(Vec::new()),
+    }
+}
+
+pub fn save_known_targets(
+    db: &crate::database::Database,
+    targets: &[String],
+) -> Result<(), AppError> {
+    let json = serde_json::to_string(targets)
+        .map_err(|e| AppError::Config(format!("known_secret_targets 序列化失败: {e}")))?;
+    db.set_setting("known_secret_targets", &json)
+}
+
+pub fn provider_target_prefix(app: &AppType, provider_id: &str) -> String {
+    format!("cc-switch/v1/provider/{}/{}/", app.as_str(), provider_id)
+}
+
 async fn load_secrets(
     store: &dyn SecretStore,
     app: &AppType,
@@ -236,10 +304,7 @@ pub fn hydrate(app: &AppType, stripped: &Value, secrets: &ProviderSecrets) -> Va
                         .and_then(Value::as_object)
                         .cloned()
                         .unwrap_or_default();
-                    auth.insert(
-                        "OPENAI_API_KEY".to_string(),
-                        Value::String(key.to_string()),
-                    );
+                    auth.insert("OPENAI_API_KEY".to_string(), Value::String(key.to_string()));
                     obj.insert("auth".to_string(), Value::Object(auth));
                 }
             }
@@ -392,13 +457,8 @@ fn extract_pi(provider_id: &str, raw: &Value) -> Result<Extracted, AppError> {
                 }
             })
             .collect();
-        let key_seg = normalize_env_key_segment(provider_id);
         for (name, value) in sensitive {
-            let var = format!(
-                "CC_SWITCH_PI_{}_HEADER_{}",
-                key_seg,
-                normalize_env_key_segment(&name)
-            );
+            let var = pi_header_env_name(provider_id, &name);
             headers.insert(name.clone(), Value::String(format!("${var}")));
             secrets = secrets.with_extra_env(name, value);
         }
@@ -503,7 +563,10 @@ mod tests {
             Some("ANTHROPIC_API_KEY"),
         )
         .unwrap();
-        assert_eq!(extracted.secrets.api_key.as_ref().unwrap().as_str(), "sk-api");
+        assert_eq!(
+            extracted.secrets.api_key.as_ref().unwrap().as_str(),
+            "sk-api"
+        );
         let env = extracted.stripped["env"].as_object().unwrap();
         assert!(!env.contains_key("ANTHROPIC_AUTH_TOKEN"));
         assert!(!env.contains_key("ANTHROPIC_API_KEY"));
@@ -584,7 +647,11 @@ mod tests {
         assert!(sanitized["env"].get("OPENROUTER_API_KEY").is_none());
         assert_eq!(sanitized["env"]["LOG_LEVEL"], "debug");
         assert_eq!(
-            secrets.extra_env.get("OPENROUTER_API_KEY").unwrap().as_str(),
+            secrets
+                .extra_env
+                .get("OPENROUTER_API_KEY")
+                .unwrap()
+                .as_str(),
             "secret-token"
         );
     }

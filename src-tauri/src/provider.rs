@@ -92,7 +92,10 @@ impl Provider {
             id: self.id.clone(),
             name: self.name.clone(),
             has_config: !self.settings_config.is_null()
-                && self.settings_config.as_object().map_or(false, |obj| !obj.is_empty()),
+                && self
+                    .settings_config
+                    .as_object()
+                    .is_some_and(|obj| !obj.is_empty()),
             settings_config: self.settings_config.clone(),
             website_url: self.website_url.clone(),
             category: self.category.clone(),
@@ -111,7 +114,7 @@ impl Provider {
         Self {
             id,
             name: String::new(),
-            settings_config: serde_json::Value::Object(serde_json::Map::new()),
+            settings_config: Value::Object(serde_json::Map::new()),
             website_url: None,
             category: None,
             created_at: None,
@@ -121,6 +124,20 @@ impl Provider {
             icon: None,
             icon_color: None,
         }
+    }
+
+    /// Test/helper constructor used by integration tests.
+    pub fn from_parts(
+        id: String,
+        name: String,
+        settings_config: Value,
+        website_url: Option<String>,
+    ) -> Self {
+        let mut provider = Self::with_id(id);
+        provider.name = name;
+        provider.settings_config = settings_config;
+        provider.website_url = website_url;
+        provider
     }
 }
 
@@ -143,7 +160,10 @@ pub struct ProviderMeta {
     #[serde(rename = "apiFormat", skip_serializing_if = "Option::is_none")]
     pub api_format: Option<String>,
     /// Whether common config is enabled
-    #[serde(rename = "commonConfigEnabled", skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "commonConfigEnabled",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub common_config_enabled: Option<bool>,
     /// Whether live config is managed by cc-switch
     #[serde(rename = "liveConfigManaged", skip_serializing_if = "Option::is_none")]
@@ -151,11 +171,7 @@ pub struct ProviderMeta {
     /// Claude: ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY
     #[serde(rename = "apiKeyField", skip_serializing_if = "Option::is_none")]
     pub api_key_field: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProviderSortUpdate {
-    pub id: String,
-    #[serde(rename = "sortIndex")]
-    pub sort_index: usize,
+    /// 仅用于 v18 夹具序列化；v19 迁移会剥离。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage_script: Option<Value>,
 }

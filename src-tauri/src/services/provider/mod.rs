@@ -2,11 +2,11 @@
 //!
 //! Handles provider CRUD operations, switching, and configuration management.
 
+pub(crate) mod codex_sanitizer;
 mod live;
 mod live_sanitizer;
-pub(crate) mod codex_sanitizer;
-pub(crate) mod pi_sanitizer;
 mod pi;
+pub(crate) mod pi_sanitizer;
 
 use indexmap::IndexMap;
 use serde::Deserialize;
@@ -18,6 +18,7 @@ use crate::provider::Provider;
 use crate::secrets::SecretExtractor;
 use crate::services::mcp::McpService;
 use crate::store::AppState;
+use std::str::FromStr;
 
 // Re-export sub-module functions for external access
 pub use live::{
@@ -27,6 +28,40 @@ pub use live::{
 
 pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
     pi::import_from_live(state)
+}
+
+pub fn reapply_pi_live(state: &AppState) -> Result<usize, AppError> {
+    pi::reapply_live(state)
+}
+
+pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
+    let mut targets = crate::secrets::load_known_targets(state.db.as_ref())?;
+    let mut expected = Vec::new();
+    for app in [AppType::Claude, AppType::Codex, AppType::Pi] {
+        let providers = state.db.get_all_providers(app.as_str())?;
+        for id in providers.keys() {
+            expected.push(crate::secrets::provider_target_prefix(&app, id));
+        }
+    }
+    let mut removed = 0;
+    let mut kept = Vec::new();
+    for target_str in targets.drain(..) {
+        let still_needed = expected.iter().any(|prefix| target_str.starts_with(prefix));
+        if still_needed {
+            kept.push(target_str);
+            continue;
+        }
+        if let Some(target) = parse_secret_target(&target_str) {
+            if let Err(e) = futures::executor::block_on(state.secrets.delete(&target)) {
+                log::warn!("清理孤儿凭据失败 {target_str}: {e}");
+                kept.push(target_str);
+                continue;
+            }
+        }
+        removed += 1;
+    }
+    crate::secrets::save_known_targets(state.db.as_ref(), &kept)?;
+    Ok(removed)
 }
 
 // Internal re-exports (pub(crate))
@@ -308,6 +343,7 @@ impl ProviderService {
             ));
         }
 
+        delete_provider_secrets(state, &app_type, id);
         state.db.delete_provider(app_type.as_str(), id)
     }
 
@@ -425,6 +461,8 @@ impl ProviderService {
             if matches!(app_type, AppType::Codex) {
                 live::preflight_codex_live_write_for_state(state, provider)?;
             }
+
+            Self::preflight_env_delivery(state, &app_type, provider)?;
 
             // Additive mode apps skip setting is_current (no such concept).
             if !app_type.is_additive_mode() {
@@ -560,6 +598,44 @@ impl ProviderService {
         Self::deliver_env_credentials(state, app_type, provider, result)
     }
 
+    pub(crate) fn preflight_env_delivery(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
+        let mut warnings = SwitchResult::default();
+        let pending = Self::collect_pending_env(state, app_type, provider, &mut warnings)?;
+        Self::reject_if_env_conflicts(state, app_type, &pending)
+    }
+
+    fn reject_if_env_conflicts(
+        state: &AppState,
+        app_type: &AppType,
+        pending: &[(String, String)],
+    ) -> Result<(), AppError> {
+        use crate::env_delivery::ManagedEnvVars;
+        let sink = crate::env_delivery::default_sink();
+        let sink = sink.as_ref();
+        let managed = ManagedEnvVars::load(&state.db)?;
+        let mut conflicts = Vec::new();
+        for (name, value) in pending {
+            if let Some(conflict) =
+                crate::env_delivery::check_conflict(sink, &managed, name, value)?
+            {
+                conflicts.push(conflict);
+            }
+        }
+        if conflicts.is_empty() {
+            return Ok(());
+        }
+        let payload = serde_json::json!({
+            "code": "ENV_CONFLICT",
+            "app": app_type.as_str(),
+            "conflicts": conflicts,
+        });
+        Err(AppError::Message(payload.to_string()))
+    }
+
     /// Deliver credentials via environment variables after switching provider
     fn deliver_env_credentials(
         state: &AppState,
@@ -567,27 +643,51 @@ impl ProviderService {
         provider: &Provider,
         result: &mut SwitchResult,
     ) -> Result<(), AppError> {
-        use crate::env_delivery::{EnvSink, ManagedEnvVars};
-        use crate::secrets::SecretTarget;
+        use crate::env_delivery::ManagedEnvVars;
 
-        #[cfg(target_os = "windows")]
-        let sink = crate::env_delivery::WindowsUserEnvSink::new();
-        #[cfg(not(target_os = "windows"))]
-        let sink = crate::env_delivery::UnsupportedEnvSink::new();
+        let sink = crate::env_delivery::default_sink();
+        let sink = sink.as_ref();
 
         let mut managed = ManagedEnvVars::load(&state.db)?;
+        let old_vars = if matches!(app_type, AppType::Pi) {
+            Vec::new()
+        } else {
+            managed.vars_for_app(app_type.as_str())
+        };
 
-        if !matches!(app_type, AppType::Pi) {
-            let old_vars = managed.vars_for_app(app_type.as_str());
-            for var_name in &old_vars {
-                if let Err(e) = sink.remove(var_name) {
-                    log::warn!("Failed to remove env var {}: {}", var_name, e);
-                    result.warnings.push(format!("env_cleanup_failed:{}", var_name));
-                }
-                managed.unregister(var_name);
+        let pending = Self::collect_pending_env(state, app_type, provider, result)?;
+        Self::reject_if_env_conflicts(state, app_type, &pending)?;
+
+        for var_name in &old_vars {
+            if let Err(e) = sink.remove(var_name) {
+                log::warn!("Failed to remove env var {var_name}: {e}");
+                result
+                    .warnings
+                    .push(format!("env_cleanup_failed:{var_name}"));
             }
+            managed.unregister(var_name);
         }
 
+        for (name, value) in pending {
+            sink.set(&name, &value)?;
+            managed.register(&name, app_type.as_str(), &provider.id);
+        }
+
+        managed.save(&state.db)?;
+        if let Err(e) = sink.broadcast() {
+            log::warn!("Failed to broadcast WM_SETTINGCHANGE: {e}");
+        }
+
+        Ok(())
+    }
+
+    fn collect_pending_env(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        result: &mut SwitchResult,
+    ) -> Result<Vec<(String, String)>, AppError> {
+        use crate::secrets::SecretTarget;
         let mut pending: Vec<(String, String)> = Vec::new();
         match app_type {
             AppType::Claude => {
@@ -608,14 +708,14 @@ impl ProviderService {
                 )) {
                     pending.push(("ANTHROPIC_BASE_URL".to_string(), url));
                 }
+                pending.extend(load_extra_env_pending(state, app_type, &provider.id));
             }
             AppType::Codex => {
                 let key = futures::executor::block_on(state.secrets.retrieve(
                     &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
                 ))
                 .ok()
-                .flatten()
-                .ok_or_else(|| AppError::Message("请先补全密钥".to_string()))?;
+                .flatten();
                 let official = provider.category.as_deref() == Some("official")
                     || crate::codex_config::is_codex_official_provider(provider);
                 let name = if official {
@@ -623,53 +723,105 @@ impl ProviderService {
                 } else {
                     "CC_SWITCH_CODEX_API_KEY"
                 };
-                pending.push((name.to_string(), key));
+                match key {
+                    Some(key) => pending.push((name.to_string(), key)),
+                    None => {
+                        // 无密钥供应商（header 认证 / preserved login）合法：
+                        // 活性安全由 live 写入门控保证，这里只降级为告警。
+                        log::warn!(
+                            "Codex provider {} has no api_key in SecretStore; \
+                             relying on config-carried auth",
+                            provider.id
+                        );
+                        result
+                            .warnings
+                            .push(format!("codex_missing_api_key:{}", provider.id));
+                    }
+                }
             }
             AppType::Pi => {
                 match futures::executor::block_on(state.secrets.retrieve(
                     &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
                 )) {
                     Ok(Some(api_key)) => {
-                        let var_name = format!(
-                            "CC_SWITCH_PI_{}_API_KEY",
-                            crate::secrets::normalize_env_key_segment(&provider.id)
-                        );
-                        pending.push((var_name, api_key));
+                        pending.push((crate::secrets::pi_api_key_env_name(&provider.id), api_key));
                     }
                     Ok(None) => {
                         log::warn!("Pi provider {} has no api_key in SecretStore", provider.id);
-                        result.warnings.push(format!("pi_missing_api_key:{}", provider.id));
+                        result
+                            .warnings
+                            .push(format!("pi_missing_api_key:{}", provider.id));
                     }
                     Err(e) => {
                         log::warn!("Pi retrieve api_key failed for {}: {}", provider.id, e);
-                        result.warnings.push(format!("pi_retrieve_failed:{}", provider.id));
+                        result
+                            .warnings
+                            .push(format!("pi_retrieve_failed:{}", provider.id));
+                    }
+                }
+                if let Some(headers) = provider
+                    .settings_config
+                    .get("headers")
+                    .and_then(Value::as_object)
+                {
+                    for (header_name, header_value) in headers {
+                        if !crate::secrets::is_sensitive_config_key(header_name) {
+                            continue;
+                        }
+                        let Some(val) = header_value.as_str() else {
+                            continue;
+                        };
+                        if crate::secrets::is_literal_value(val) {
+                            continue;
+                        }
+                        match futures::executor::block_on(state.secrets.retrieve(
+                            &SecretTarget::provider_env(
+                                app_type.clone(),
+                                provider.id.clone(),
+                                header_name,
+                            ),
+                        )) {
+                            Ok(Some(secret)) => {
+                                pending.push((
+                                    crate::secrets::pi_header_env_name(&provider.id, header_name),
+                                    secret,
+                                ));
+                            }
+                            Ok(None) => {
+                                result.warnings.push(format!(
+                                    "pi_missing_header:{}:{header_name}",
+                                    provider.id
+                                ));
+                            }
+                            Err(e) => {
+                                log::warn!(
+                                    "Pi retrieve header {header_name} failed for {}: {e}",
+                                    provider.id
+                                );
+                            }
+                        }
                     }
                 }
             }
         }
+        Ok(pending)
+    }
 
-        for (name, value) in &pending {
-            if let Some(conflict) =
-                crate::env_delivery::check_conflict(&sink, &managed, name, value)?
-            {
-                return Err(AppError::Message(format!(
-                    "环境变量冲突: {} (外来值 {})",
-                    conflict.name, conflict.masked_value
-                )));
-            }
+    pub fn adopt_env_vars(
+        state: &AppState,
+        app_type: &AppType,
+        provider_id: &str,
+        names: &[String],
+    ) -> Result<(), AppError> {
+        use crate::env_delivery::ManagedEnvVars;
+        let sink = crate::env_delivery::default_sink();
+        let sink = sink.as_ref();
+        let mut managed = ManagedEnvVars::load(&state.db)?;
+        for name in names {
+            managed.register(name, app_type.as_str(), provider_id);
+            let _ = sink.get(name)?;
         }
-
-        for (name, value) in pending {
-            sink.set(&name, &value)?;
-            managed.register(&name, app_type.as_str(), &provider.id);
-        }
-
-        // Save managed registry and broadcast
         managed.save(&state.db)?;
-        if let Err(e) = sink.broadcast() {
-            log::warn!("Failed to broadcast WM_SETTINGCHANGE: {}", e);
-        }
-
         Ok(())
     }
 
@@ -1229,21 +1381,104 @@ pub(crate) fn normalize_claude_models_in_value(settings: &mut Value) -> bool {
     changed
 }
 
+pub(super) fn delete_provider_secrets(state: &AppState, app_type: &AppType, id: &str) {
+    let prefix = crate::secrets::provider_target_prefix(app_type, id);
+    let mut targets = crate::secrets::load_known_targets(state.db.as_ref()).unwrap_or_default();
+    let related: Vec<String> = targets
+        .iter()
+        .filter(|t| t.starts_with(&prefix))
+        .cloned()
+        .collect();
+    let fallback = [
+        crate::secrets::SecretTarget::provider_api_key(app_type.clone(), id).to_target_string(),
+        crate::secrets::SecretTarget::provider_base_url(app_type.clone(), id).to_target_string(),
+    ];
+    let mut to_delete = related;
+    for t in fallback {
+        if !to_delete.iter().any(|x| x == &t) {
+            to_delete.push(t);
+        }
+    }
+    for target_str in &to_delete {
+        if let Some(target) = parse_secret_target(target_str) {
+            if let Err(e) = futures::executor::block_on(state.secrets.delete(&target)) {
+                log::warn!("删除凭据失败 {target_str}: {e}");
+            }
+        }
+    }
+    targets.retain(|t| !t.starts_with(&prefix));
+    if let Err(e) = crate::secrets::save_known_targets(state.db.as_ref(), &targets) {
+        log::warn!("更新 known_secret_targets 失败: {e}");
+    }
+}
+
+fn parse_secret_target(target: &str) -> Option<crate::secrets::SecretTarget> {
+    let rest = target.strip_prefix("cc-switch/v1/provider/")?;
+    let mut parts = rest.splitn(3, '/');
+    let app = AppType::from_str(parts.next()?).ok()?;
+    let provider_id = parts.next()?;
+    let field = parts.next()?;
+    match field {
+        "api_key" => Some(crate::secrets::SecretTarget::provider_api_key(
+            app,
+            provider_id,
+        )),
+        "base_url" => Some(crate::secrets::SecretTarget::provider_base_url(
+            app,
+            provider_id,
+        )),
+        other => other
+            .strip_prefix("env/")
+            .map(|var| crate::secrets::SecretTarget::provider_env(app, provider_id, var)),
+    }
+}
+
+fn load_extra_env_pending(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+) -> Vec<(String, String)> {
+    let prefix = format!(
+        "cc-switch/v1/provider/{}/{}/env/",
+        app_type.as_str(),
+        provider_id
+    );
+    let Ok(targets) = crate::secrets::load_known_targets(state.db.as_ref()) else {
+        return Vec::new();
+    };
+    let mut pending = Vec::new();
+    for target_str in targets {
+        let Some(var) = target_str.strip_prefix(&prefix) else {
+            continue;
+        };
+        if var.is_empty() {
+            continue;
+        }
+        let target = crate::secrets::SecretTarget::provider_env(app_type.clone(), provider_id, var);
+        if let Ok(Some(value)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
+            pending.push((var.to_string(), value));
+        }
+    }
+    pending
+}
+
 fn strip_and_store_provider_secrets(
     state: &AppState,
     app_type: &AppType,
     provider: &mut Provider,
 ) -> Result<(), AppError> {
-    let extractor = SecretExtractor::new(state.secrets.as_ref(), app_type.clone());
+    let extractor =
+        SecretExtractor::new(state.secrets.as_ref(), app_type.clone()).with_db(state.db.as_ref());
     let field = provider
         .meta
         .as_ref()
         .and_then(|m| m.api_key_field.as_deref());
-    let (stripped, _) = futures::executor::block_on(extractor.extract_provider_secrets_with_field(
-        &provider.id,
-        &provider.settings_config,
-        field,
-    ))?;
+    let (stripped, _) =
+        futures::executor::block_on(extractor.extract_provider_secrets_with_field(
+            &provider.id,
+            &provider.settings_config,
+            field,
+        ))?;
     provider.settings_config = stripped;
     Ok(())
 }
@@ -1254,4 +1489,3 @@ pub struct ProviderSortUpdate {
     #[serde(rename = "sortIndex")]
     pub sort_index: usize,
 }
-
