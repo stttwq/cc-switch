@@ -1401,6 +1401,66 @@ impl Database {
             .map_err(|e| AppError::Database(format!("删除非目标应用供应商失败: {e}")))?;
         }
 
+        if Self::table_exists(conn, "prompts")? {
+            conn.execute(
+                "DELETE FROM prompts WHERE app_type NOT IN ('claude','codex','pi')",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("删除非目标应用提示词失败: {e}")))?;
+        }
+
+        if Self::has_column(conn, "skills", "enabled_gemini")? {
+            conn.execute(
+                "UPDATE skills SET enabled_gemini = 0, enabled_grokbuild = 0, enabled_opencode = 0, enabled_hermes = 0",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("清 skills 非目标启用位失败: {e}")))?;
+        }
+
+        if Self::table_exists(conn, "profiles")? {
+            // payload 按 app 分槽，引用已删应用的槽位在 Rust 侧过滤，不依赖 JSON1
+            let rows: Vec<(String, String)> = conn
+                .prepare("SELECT id, payload FROM profiles")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| AppError::Database(format!("读取 profiles.payload 失败: {e}")))?;
+            let mut update_stmt = conn
+                .prepare("UPDATE profiles SET payload = ?1 WHERE id = ?2")
+                .map_err(|e| AppError::Database(format!("准备 payload 清理语句失败: {e}")))?;
+            for (id, payload) in rows {
+                let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&payload) else {
+                    continue;
+                };
+                let mut changed = false;
+                if let Some(sections) = value.as_object_mut() {
+                    for section in ["providers", "mcp", "skills", "prompts"] {
+                        let Some(slots) = sections.get_mut(section).and_then(|s| s.as_object_mut())
+                        else {
+                            continue;
+                        };
+                        let before = slots.len();
+                        slots.retain(|app, _| matches!(app.as_str(), "claude" | "codex" | "pi"));
+                        changed |= slots.len() != before;
+                    }
+                }
+                if changed {
+                    let Ok(cleaned) = serde_json::to_string(&value) else {
+                        continue;
+                    };
+                    update_stmt.execute(params![cleaned, id]).map_err(|e| {
+                        AppError::Database(format!("清理 profiles.payload 失败: {e}"))
+                    })?;
+                }
+            }
+        }
+
+        conn.execute(
+            "DELETE FROM settings WHERE key LIKE 'current_profile_id_%'
+                AND key NOT IN ('current_profile_id_claude','current_profile_id_codex','current_profile_id_pi')",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("清非目标应用 profile 标记失败: {e}")))?;
+
         if Self::has_column(conn, "mcp_servers", "enabled_gemini")? {
             conn.execute(
                 "UPDATE mcp_servers SET enabled_gemini = 0, enabled_grokbuild = 0, enabled_opencode = 0, enabled_hermes = 0",
@@ -1427,11 +1487,30 @@ impl Database {
         .map_err(|e| AppError::Database(format!("清理废弃 settings 键失败: {e}")))?;
 
         if Self::has_column(conn, "providers", "meta")? {
-            conn.execute(
-                "UPDATE providers SET meta = json_remove(meta, '$.usage_script') WHERE json_type(meta, '$.usage_script') IS NOT NULL",
-                [],
-            )
-            .map_err(|e| AppError::Database(format!("剥离 meta.usage_script 失败: {e}")))?;
+            // 规划 §5.2.4：在 Rust 侧剥离，避免依赖 JSON1 扩展的行为差异。
+            let rows: Vec<(i64, String)> = conn
+                .prepare("SELECT rowid, meta FROM providers WHERE meta IS NOT NULL")?
+                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+                .collect::<Result<_, _>>()
+                .map_err(|e| AppError::Database(format!("读取 meta 失败: {e}")))?;
+            let mut strip_stmt = conn
+                .prepare("UPDATE providers SET meta = ?1 WHERE rowid = ?2")
+                .map_err(|e| AppError::Database(format!("准备剥离语句失败: {e}")))?;
+            for (rowid, meta) in rows {
+                let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&meta) else {
+                    continue;
+                };
+                if value.get_mut("usage_script").is_none() {
+                    continue;
+                }
+                value.as_object_mut().map(|obj| obj.remove("usage_script"));
+                let Ok(cleaned) = serde_json::to_string(&value) else {
+                    continue;
+                };
+                strip_stmt
+                    .execute(params![cleaned, rowid])
+                    .map_err(|e| AppError::Database(format!("剥离 meta.usage_script 失败: {e}")))?;
+            }
         }
 
         conn.execute(
@@ -3428,6 +3507,107 @@ impl Database {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn migrate_v18_to_v19_cleans_non_target_app_data() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::create_tables_on_conn(&conn)?;
+        Database::set_user_version(&conn, 18)?;
+
+        conn.execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta) VALUES
+             ('g1','gemini','G','{}','{\"usage_script\":{\"api_key\":\"sk-g\"}}'),
+             ('c1','claude','C','{}','{\"usage_script\":{\"api_key\":\"sk-c\"},\"api_key_field\":\"ANTHROPIC_API_KEY\"}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO prompts (id, app_type, name, content) VALUES
+             ('p1','gemini','GP','x'), ('p2','claude','CP','y')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO skills (id, name, directory, enabled_claude, enabled_gemini)
+             VALUES ('s1','S','/tmp/skills',1,1)",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO profiles (id, name, payload) VALUES
+             ('pr1','P','{\"providers\":{\"claude\":\"c1\",\"gemini\":\"g1\"},\"mcp\":{\"hermes\":[]},\"skills\":{\"codex\":null},\"prompts\":{\"pi\":\"p2\"}}')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO settings (key, value) VALUES
+             ('current_profile_id_gemini','pr1'), ('current_profile_id_claude','pr1')",
+            [],
+        )?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+
+        let claude_meta: String =
+            conn.query_row("SELECT meta FROM providers WHERE id='c1'", [], |r| r.get(0))?;
+        assert!(
+            !claude_meta.contains("usage_script"),
+            "usage_script should be stripped on the Rust side: {claude_meta}"
+        );
+        assert!(claude_meta.contains("api_key_field"));
+        let gemini_left: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM providers WHERE app_type='gemini'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(gemini_left, 0);
+
+        let prompts_left: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM prompts WHERE app_type='gemini'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(prompts_left, 0);
+
+        let enabled_gemini: i64 =
+            conn.query_row("SELECT enabled_gemini FROM skills WHERE id='s1'", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!(enabled_gemini, 0);
+        let enabled_claude: i64 =
+            conn.query_row("SELECT enabled_claude FROM skills WHERE id='s1'", [], |r| {
+                r.get(0)
+            })?;
+        assert_eq!(enabled_claude, 1);
+
+        let payload: String =
+            conn.query_row("SELECT payload FROM profiles WHERE id='pr1'", [], |r| {
+                r.get(0)
+            })?;
+        let value: serde_json::Value =
+            serde_json::from_str(&payload).map_err(|e| AppError::Database(e.to_string()))?;
+        assert_eq!(value["providers"].get("gemini"), None);
+        assert_eq!(
+            value["providers"].get("claude"),
+            Some(&serde_json::json!("c1"))
+        );
+        assert_eq!(value["mcp"].as_object().map(|m| m.len()), Some(0));
+        assert!(value["skills"].get("codex").is_some());
+        assert!(value["prompts"].get("pi").is_some());
+
+        let stale_scope: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='current_profile_id_gemini'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(stale_scope, None);
+        let kept_scope: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='current_profile_id_claude'",
+                [],
+                |r| r.get(0),
+            )
+            .ok();
+        assert_eq!(kept_scope.as_deref(), Some("pr1"));
+        Ok(())
+    }
 
     #[test]
     #[ignore = "v19 drops proxy_request_logs / usage_daily_rollups"]

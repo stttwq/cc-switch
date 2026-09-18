@@ -501,8 +501,33 @@ pub fn run() {
                 }
             }
 
-            let secrets: Arc<dyn crate::secrets::SecretStore> =
-                Arc::new(crate::secrets::WindowsSecretStore::new()?);
+            let secrets: Arc<dyn crate::secrets::SecretStore> = loop {
+                let store = Arc::new(match crate::secrets::WindowsSecretStore::new() {
+                    Ok(store) => store,
+                    Err(e) => {
+                        log::error!("创建凭据存储失败: {e}");
+                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                            log::info!("用户选择退出程序");
+                            std::process::exit(1);
+                        }
+                        continue;
+                    }
+                });
+                let probe_result = match tokio::runtime::Runtime::new() {
+                    Ok(rt) => rt.block_on(crate::secrets::SecretStore::probe(&*store)),
+                    Err(e) => Err(AppError::Config(format!("创建 tokio runtime 失败: {e}"))),
+                };
+                match probe_result {
+                    Ok(()) => break store,
+                    Err(e) => {
+                        log::error!("凭据管理器自检失败: {e}");
+                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                            log::info!("用户选择退出程序");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            };
             let app_state = AppState::new(db, secrets);
 
             match app_state.db.get_setting("live_reapply_pending") {
@@ -1459,6 +1484,58 @@ fn show_database_init_error_dialog(
             Click 'Retry' to attempt initialization again\n\
             Click 'Exit' to close the program",
             db = db_path.display()
+        )
+    };
+
+    let retry_text = if is_chinese_locale() {
+        "重试"
+    } else {
+        "Retry"
+    };
+    let exit_text = if is_chinese_locale() {
+        "退出"
+    } else {
+        "Exit"
+    };
+
+    app.dialog()
+        .message(&message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            retry_text.to_string(),
+            exit_text.to_string(),
+        ))
+        .blocking_show()
+}
+
+/// 显示凭据管理器自检失败对话框（施工方案 §6.6）。
+/// 返回 true 表示用户选择重试，false 表示用户选择退出。
+/// 刻意不提供「跳过」：跳过等于退回明文存储，违反 fail-closed 原则。
+fn show_secrets_probe_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {
+    let (title, message) = if is_chinese_locale() {
+        (
+            "无法访问 Windows 凭据管理器",
+            format!(
+                "凭据管理器自检（写入-读取-删除探针条目）失败：\n\n{error}\n\n\
+                本版本的 API 密钥与 Base URL 只保存在 Windows 凭据管理器中，\n\
+                无法访问时应用不会退回明文存储。\n\
+                常见原因包括：凭据管理器服务被禁用、组策略限制、磁盘或注册表权限不足。\n\n\
+                点击「重试」重新自检\n\
+                点击「退出」关闭程序"
+            ),
+        )
+    } else {
+        (
+            "Cannot Access Windows Credential Manager",
+            format!(
+                "The Credential Manager self-check (write-read-delete a probe entry) failed:\n\n{error}\n\n\
+                This build stores API keys and Base URLs exclusively in the Windows Credential Manager.\n\
+                The app will NOT fall back to plaintext storage when it is unavailable.\n\
+                Common causes: the Credential Manager service is disabled, group policy restrictions, or insufficient permissions.\n\n\
+                Click 'Retry' to run the self-check again\n\
+                Click 'Exit' to close the program"
+            ),
         )
     };
 

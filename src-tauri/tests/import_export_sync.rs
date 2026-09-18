@@ -11,7 +11,7 @@ use cc_switch_lib::{
 mod support;
 use support::{
     create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, seed_secrets_from_db, test_mutex,
+    ensure_test_home, reset_test_fs, test_mutex,
 };
 
 #[test]

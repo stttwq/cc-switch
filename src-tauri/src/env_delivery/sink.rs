@@ -8,6 +8,7 @@
 use crate::error::AppError;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
+use zeroize::Zeroizing;
 
 /// 返回当前环境应使用的 EnvSink。
 ///
@@ -30,8 +31,8 @@ pub fn default_sink() -> Arc<dyn EnvSink> {
 
 /// Trait for writing user-level environment variables
 pub trait EnvSink: Send + Sync {
-    /// Set an environment variable
-    fn set(&self, name: &str, value: &str) -> Result<(), AppError>;
+    /// Set an environment variable (value is zeroized by the caller's `Zeroizing` on drop)
+    fn set(&self, name: &str, value: &Zeroizing<String>) -> Result<(), AppError>;
 
     /// Remove an environment variable
     fn remove(&self, name: &str) -> Result<(), AppError>;
@@ -107,7 +108,7 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
 /// 保证集成测试不会读写真实的 HKCU\Environment。
 #[derive(Clone, Default)]
 pub struct InMemoryEnvSink {
-    vars: Arc<Mutex<HashMap<String, String>>>,
+    vars: Arc<Mutex<HashMap<String, Zeroizing<String>>>>,
 }
 
 impl InMemoryEnvSink {
@@ -118,12 +119,12 @@ impl InMemoryEnvSink {
 }
 
 impl EnvSink for InMemoryEnvSink {
-    fn set(&self, name: &str, value: &str) -> Result<(), AppError> {
+    fn set(&self, name: &str, value: &Zeroizing<String>) -> Result<(), AppError> {
         validate_env_name(name)?;
         self.vars
             .lock()
             .unwrap()
-            .insert(name.to_string(), value.to_string());
+            .insert(name.to_string(), value.clone());
         Ok(())
     }
 
@@ -134,7 +135,7 @@ impl EnvSink for InMemoryEnvSink {
     }
 
     fn get(&self, name: &str) -> Result<Option<String>, AppError> {
-        Ok(self.vars.lock().unwrap().get(name).cloned())
+        Ok(self.vars.lock().unwrap().get(name).map(|v| v.to_string()))
     }
 
     fn broadcast(&self) -> Result<(), AppError> {
@@ -157,7 +158,7 @@ impl WindowsUserEnvSink {
 
 #[cfg(target_os = "windows")]
 impl EnvSink for WindowsUserEnvSink {
-    fn set(&self, name: &str, value: &str) -> Result<(), AppError> {
+    fn set(&self, name: &str, value: &Zeroizing<String>) -> Result<(), AppError> {
         validate_env_name(name)?;
 
         use winreg::enums::*;
@@ -169,11 +170,11 @@ impl EnvSink for WindowsUserEnvSink {
             .map_err(|e| AppError::Config(format!("Failed to open HKCU\\Environment: {e}")))?;
 
         // Write as REG_SZ (not REG_EXPAND_SZ, values may contain %)
-        env.set_value(name, &value)
+        env.set_value(name, &value.as_str().to_string())
             .map_err(|e| AppError::Config(format!("Failed to set {name}: {e}")))?;
 
         // Update current process environment so cc-switch spawned processes see it
-        std::env::set_var(name, value);
+        std::env::set_var(name, value.as_str());
 
         Ok(())
     }
@@ -255,7 +256,7 @@ impl UnsupportedEnvSink {
 
 #[cfg(not(target_os = "windows"))]
 impl EnvSink for UnsupportedEnvSink {
-    fn set(&self, _name: &str, _value: &str) -> Result<(), AppError> {
+    fn set(&self, _name: &str, _value: &Zeroizing<String>) -> Result<(), AppError> {
         Err(AppError::Config(
             "Environment variable delivery not supported on this platform".to_string(),
         ))
@@ -314,7 +315,9 @@ mod tests {
     #[test]
     fn in_memory_sink_roundtrip() {
         let sink = InMemoryEnvSink::new();
-        assert!(sink.set("CC_SWITCH_TEST", "value1").is_ok());
+        assert!(sink
+            .set("CC_SWITCH_TEST", &Zeroizing::new("value1".to_string()))
+            .is_ok());
         assert_eq!(
             sink.get("CC_SWITCH_TEST").unwrap(),
             Some("value1".to_string())
@@ -327,7 +330,11 @@ mod tests {
     #[test]
     fn in_memory_sink_enforces_whitelist() {
         let sink = InMemoryEnvSink::new();
-        assert!(sink.set("PATH", "bad").is_err());
-        assert!(sink.set("RANDOM_VAR", "bad").is_err());
+        assert!(sink
+            .set("PATH", &Zeroizing::new("bad".to_string()))
+            .is_err());
+        assert!(sink
+            .set("RANDOM_VAR", &Zeroizing::new("bad".to_string()))
+            .is_err());
     }
 }

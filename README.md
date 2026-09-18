@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### The All-in-One Manager for Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw & Hermes Agent
+### The All-in-One Manager for Claude Code, Codex & Pi
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -207,13 +207,13 @@ TeamoRouter also offers enterprise features including centralized billing, team 
 
 ## Why CC Switch?
 
-Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
+Modern AI-powered coding relies on tools like Claude Code, Codex, and Pi — but each has its own configuration format. Switching API providers means manually editing JSON, TOML, or `.env` files, and there is no unified way to manage MCP and Skills across multiple tools.
 
 **CC Switch** gives you a single desktop app to manage all supported AI tools. Instead of editing config files by hand, you get a visual interface to import providers with one click, switch between them instantly, with 50+ built-in provider presets, unified MCP and Skills management, and system tray quick switching — all backed by a reliable SQLite database with atomic writes that protect your configs from corruption.
 
-- **One App, Eight Tools** — Manage Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, and Hermes from a single interface
+- **One App, Three Tools** — Manage Claude Code, Codex, and Pi from a single interface
 - **No More Manual Editing** — 50+ provider presets including AWS Bedrock, NVIDIA NIM, and community relays; just pick and switch
-- **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes with bidirectional sync
+- **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude and Codex with bidirectional sync
 - **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
 - **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
 - **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
@@ -241,38 +241,32 @@ Modern AI-powered coding relies on tools like Claude Code, Claude Desktop, Codex
 
 ### MCP, Prompts & Skills
 
-- **Unified MCP panel** — Manage MCP servers across Claude, Codex, Gemini, Grok Build, OpenCode, and Hermes with bidirectional sync and Deep Link import
-- **Prompts** — Markdown editor with cross-app sync (CLAUDE.md / AGENTS.md / GEMINI.md) and backfill protection
+- **Unified MCP panel** — Manage MCP servers across Claude and Codex with bidirectional sync
+- **Prompts** — Markdown editor with cross-app sync (CLAUDE.md / AGENTS.md) and backfill protection
 - **Skills** — One-click install from GitHub repos or ZIP files, custom repository management, with symlink and file copy support
 
-### Usage & Cost Tracking
-
-- **Usage dashboard** — Track spending, requests, and tokens with trend charts, detailed request logs, and custom per-model pricing
-
-### Session Manager & Workspace
+### Session Manager
 
 - Browse, search, and restore conversation history across supported session sources
-- **Workspace editor** (OpenClaw) — Edit agent files (AGENTS.md, SOUL.md, etc.) with Markdown preview
 
 ### System & Platform
 
 - **Cloud sync** — Custom config directory (Dropbox, OneDrive, iCloud, NAS) and WebDAV server sync
-- **Deep Link** (`ccswitch://`) — Import providers, MCP servers, prompts, and skills via URL
-- Dark / Light / System theme, auto-launch, auto-updater, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
+- Dark / Light / System theme, auto-launch, atomic writes, auto-backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ
 
 <details>
 <summary><strong>Which AI tools does CC Switch support?</strong></summary>
 
-CC Switch supports eight tools: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw**, and **Hermes**. Each tool has dedicated provider presets and configuration management.
+CC Switch supports three tools: **Claude Code**, **Codex**, and **Pi**. Each tool has dedicated provider presets and configuration management.
 
 </details>
 
 <details>
 <summary><strong>Do I need to restart the terminal after switching providers?</strong></summary>
 
-For most tools, yes — restart your terminal or the CLI tool for changes to take effect. The exception is **Claude Code**, which currently supports hot-switching of provider data without a restart.
+Yes — CC Switch delivers credentials through user environment variables, so restart the terminal (or the CLI tool) after switching providers for the new values to take effect. Providers launched from CC Switch's built-in "open terminal" action always pick up the current values immediately.
 
 </details>
 
@@ -330,7 +324,7 @@ If you launch from a desktop icon, add it to the `.desktop` `Exec=` line (e.g. `
 
 ## Documentation
 
-For detailed guides on every feature, check out the **[User Manual](docs/user-manual/en/README.md)** — covering provider management, MCP/Prompts/Skills, proxy & failover, and more.
+For detailed guides on every feature, check out the **[User Manual](docs/user-manual/en/README.md)** — covering provider management, credentials, MCP/Prompts/Skills, and more.
 
 ## Quick Start
 
@@ -340,7 +334,7 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 2. **Switch Provider**:
    - Main UI: Select provider → Click "Enable"
    - System Tray: Click provider name directly (instant effect)
-3. **Takes Effect**: Restart your terminal or the corresponding CLI tool to apply changes (Claude Code does not require a restart)
+3. **Takes Effect**: Restart your terminal or the corresponding CLI tool so the new environment variables take effect
 4. **Back to Official**: Add an "Official Login" preset, restart the CLI tool, then follow its login/OAuth flow
 
 ### MCP, Prompts, Skills & Sessions
@@ -438,10 +432,9 @@ Download the latest Linux build from the [Releases](../../releases) page:
 
 - **ProviderService**: Provider CRUD, switching, backfill, sorting
 - **McpService**: MCP server management, import/export, live file sync
-- **ProxyService**: Local proxy mode with hot-switching and format conversion
+- **SecretStore / EnvDelivery**: Windows Credential Manager storage and user environment variable delivery
 - **SessionManager**: Conversation history browsing across supported session sources
 - **ConfigService**: Config import/export, backup rotation
-- **SpeedtestService**: API endpoint latency measurement
 
 </details>
 
@@ -532,7 +525,7 @@ pnpm test:unit --coverage
 
 **Frontend**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
 
-**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
+**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-process/dialog/store/log
 
 **Testing**: vitest · MSW · @testing-library/react
 
@@ -549,13 +542,8 @@ pnpm test:unit --coverage
 │   │   ├── prompts/            # Prompts management
 │   │   ├── skills/             # Skills management
 │   │   ├── sessions/           # Session Manager
-│   │   ├── proxy/              # Proxy mode panel
-│   │   ├── openclaw/           # OpenClaw config panels
 │   │   ├── settings/           # Settings (Terminal/Backup/About)
-│   │   ├── deeplink/           # Deep Link import
 │   │   ├── env/                # Environment variable management
-│   │   ├── universal/          # Cross-app configuration
-│   │   ├── usage/              # Usage statistics
 │   │   └── ui/                 # shadcn/ui component library
 │   ├── hooks/                  # Custom hooks (business logic)
 │   ├── lib/
@@ -570,9 +558,9 @@ pnpm test:unit --coverage
 │       ├── commands/           # Tauri command layer (by domain)
 │       ├── services/           # Business logic layer
 │       ├── database/           # SQLite DAO layer
-│       ├── proxy/              # Proxy module
+│       ├── secrets/            # Credential Manager storage & extraction
+│       ├── env_delivery/       # User environment variable delivery
 │       ├── session_manager/    # Session management
-│       ├── deeplink/           # Deep Link handling
 │       └── mcp/                # MCP sync module
 ├── tests/                      # Frontend tests
 └── assets/                     # Screenshots & partner resources

@@ -40,9 +40,9 @@ The bundled WebView renderer is treated as a trusted component. This is a **scop
 
 **它排除什么、不排除什么。** 不在范围内的是：抵达 IPC 接口的**唯一途径**为**从 DevTools 或本地改造过的前端直接调用**的报告。处于该位置的人已经控制了这台机器。
 
-**Still in scope:** any complete, demonstrable chain in which an *untrusted* source — a `ccswitch://` deep link, a remote sync payload, remote data, an inbound proxy request, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
+**Still in scope:** any complete, demonstrable chain in which an *untrusted* source — a remote sync payload, remote data, or an XSS — reaches a high-privilege IPC command. The trust placed in the renderer covers the code we ship, not arbitrary values that flow through it.
 
-**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——`ccswitch://` deeplink、远程同步载荷、远程数据、代理入站请求或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
+**仍在范围内**：任何完整、可演示的利用链，其中**不可信来源**——远程同步载荷、远程数据或 XSS——抵达高权限 IPC 命令。对渲染进程的信任覆盖的是我们发布的代码，而非流经其中的任意值。
 
 ### Invalidation triggers / 声明失效条件
 
@@ -82,12 +82,12 @@ Inputs that genuinely cross a trust boundary:
   抵达 IPC 接口的唯一途径为从 DevTools 或本地改造过的前端直接调用的问题——见威胁模型
 - **Ordinary file operations the user directs.** Reading or writing a file whose path *and* content the user chose through the local UI, with no untrusted input participating.
   **用户主动指示的常规文件操作。** 读写路径**与**内容均由用户经本地界面选定、且无不可信输入参与的文件。
-  → Not excluded: cases where a deep link, sync payload, proxy request or other untrusted source controls the path or the content. Having the same filesystem permissions as the user does not make it the user's decision — that is a confused-deputy attack and is **in scope**.
-  → 不属豁免：路径或内容由 deeplink、同步载荷、代理请求等不可信来源控制的情形。攻击者与用户拥有相同的文件系统权限，并不等于该操作出自用户的决定——那是 confused deputy 攻击，**在范围内**。
-- **User-authored integrations executing by design.** MCP servers, terminal launch and usage scripts run commands because that is their purpose. Where the user typed the command themselves and enabled it themselves, execution is the feature, not the bug.
-  **用户亲手编写的集成按设计执行命令。** MCP server、终端启动、用量脚本执行命令是其本职。命令由用户自己输入、并由用户自己启用时，执行本身是功能而非缺陷。
-  → Not excluded: the same integrations when they **arrive through import or a deep link**. There the required security property is *informed consent*, and the following are **in scope**: the command, arguments, environment or script body being hidden, truncated or misrepresented in the confirmation UI; and any integration carrying executable content being enabled without an explicit user decision.
-  → 不属豁免：同样的集成**经导入或 deeplink 抵达**时。此时所要求的安全属性是**知情同意**，下列情形**在范围内**：确认界面隐藏、截断或错误展示命令、参数、环境变量或脚本正文；以及任何携带可执行内容的集成在缺少用户明确决定的情况下被启用。
+  → Not excluded: cases where a sync payload or other untrusted source controls the path or the content. Having the same filesystem permissions as the user does not make it the user's decision — that is a confused-deputy attack and is **in scope**.
+  → 不属豁免：路径或内容由同步载荷等不可信来源控制的情形。攻击者与用户拥有相同的文件系统权限，并不等于该操作出自用户的决定——那是 confused deputy 攻击，**在范围内**。
+- **User-authored integrations executing by design.** MCP servers and terminal launch run commands because that is their purpose. Where the user typed the command themselves and enabled it themselves, execution is the feature, not the bug.
+  **用户亲手编写的集成按设计执行命令。** MCP server、终端启动执行命令是其本职。命令由用户自己输入、并由用户自己启用时，执行本身是功能而非缺陷。
+  → Not excluded: the same integrations when they **arrive through import**. There the required security property is *informed consent*, and the following are **in scope**: the command, arguments, environment or script body being hidden, truncated or misrepresented in the confirmation UI; and any integration carrying executable content being enabled without an explicit user decision.
+  → 不属豁免：同样的集成**经导入抵达**时。此时所要求的安全属性是**知情同意**，下列情形**在范围内**：确认界面隐藏、截断或错误展示命令、参数、环境变量或脚本正文；以及任何携带可执行内容的集成在缺少用户明确决定的情况下被启用。
 - Denial of service against the user's own local instance
   针对用户自己本地实例的拒绝服务
 - Automated scanner output without a demonstrated exploitation path on a currently supported release

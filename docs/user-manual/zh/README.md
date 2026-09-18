@@ -39,7 +39,6 @@
 └── 5. 常见问题
     ├── 5.1 配置文件说明
     ├── 5.2 FAQ
-    ├── 5.3 深度链接协议
     └── 5.4 环境变量冲突
 ```
 
@@ -59,7 +58,7 @@
 
 | 文件 | 内容 |
 |------|------|
-| [2.1-add.md](./2-providers/2.1-add.md) | 使用预设、自定义配置、统一供应商 |
+| [2.1-add.md](./2-providers/2.1-add.md) | 使用预设、自定义配置 |
 | [2.2-switch.md](./2-providers/2.2-switch.md) | 主界面切换、托盘切换、生效方式 |
 | [2.3-edit.md](./2-providers/2.3-edit.md) | 编辑配置、修改 API Key、回填机制 |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | 拖拽排序、复制供应商、删除 |
@@ -86,7 +85,6 @@
 |------|------|
 | [5.1-config-files.md](./5-faq/5.1-config-files.md) | CC Switch 存储、CLI 配置文件格式 |
 | [5.2-questions.md](./5-faq/5.2-questions.md) | 常见问题解答 |
-| [5.3-deeplink.md](./5-faq/5.3-deeplink.md) | 深度链接协议、生成和使用方法 |
 | [5.4-env-conflict.md](./5-faq/5.4-env-conflict.md) | 环境变量冲突检测与处理 |
 
 ## 快速链接

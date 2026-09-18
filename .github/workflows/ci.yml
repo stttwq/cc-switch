@@ -152,6 +152,20 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Secret scan (test home)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $testHome = Join-Path $env:TEMP "cc-switch-test-home"
+          if (-not (Test-Path $testHome)) {
+            New-Item -ItemType Directory -Path $testHome | Out-Null
+          }
+          & scripts/secret-scan.ps1 -Path $testHome
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "secret-scan detected plaintext fixtures in the test home"
+            exit 1
+          }
+
   backend-windows-wsl2:
     name: Backend Checks (Windows + WSL2 home)
     runs-on: windows-2025

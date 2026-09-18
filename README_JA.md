@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes Agent のオールインワン管理ツール
+### Claude Code、Codex、Pi のオールインワン管理ツール
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -207,13 +207,13 @@ TeamoRouter は、集中請求、チーム管理、BYOK、スマートルーテ�
 
 ## CC Switch を選ぶ理由
 
-最新の AI コーディングは Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes などのツールに依存していますが、各ツールの設定形式はバラバラです。API プロバイダを切り替えるたびに JSON、TOML、`.env` ファイルを手動で編集する必要があり、複数ツール間で MCP や Skills を統一的に管理する手段もありません。
+最新の AI コーディングは Claude Code、Codex、Pi などのツールに依存していますが、各ツールの設定形式はバラバラです。API プロバイダを切り替えるたびに JSON、TOML、`.env` ファイルを手動で編集する必要があり、複数ツール間で MCP や Skills を統一的に管理する手段もありません。
 
 **CC Switch** は、対応する AI ツールを 1 つのデスクトップアプリで一元管理できます。設定ファイルを手作業で編集する代わりに、ワンクリックでプロバイダをインポートし、瞬時に切り替えられるビジュアルインターフェースを提供します。50 以上の組み込みプリセット、統一 MCP・Skills 管理、システムトレイからの即時切り替え機能を搭載。すべてはアトミック書き込みによる信頼性の高い SQLite データベースに支えられており、設定の破損を防ぎます。
 
-- **1 つのアプリで 8 つのツール** -- Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes を単一インターフェースで管理
+- **1 つのアプリで 3 つのツール** -- Claude Code、Codex、Pi を単一インターフェースで管理
 - **手動編集は不要** -- AWS Bedrock、NVIDIA NIM、コミュニティリレーなど 50 以上のプロバイダプリセットを内蔵。選んで切り替えるだけ
-- **統一 MCP・Skills 管理** -- 1 つのパネルで Claude、Codex、Gemini、Grok Build、OpenCode、Hermes の MCP サーバーと Skills を双方向同期で管理
+- **統一 MCP・Skills 管理** -- 1 つのパネルで Claude と Codex の MCP サーバーと Skills を双方向同期で管理
 - **システムトレイでクイック切り替え** -- トレイメニューから即座にプロバイダを切り替え。アプリを開く必要なし
 - **クラウド同期** -- Dropbox、OneDrive、iCloud、または WebDAV サーバー経由でデバイス間のプロバイダデータを同期
 - **クロスプラットフォーム** -- Tauri 2 で構築された Windows、macOS、Linux 対応のネイティブデスクトップアプリ
@@ -231,49 +231,43 @@ TeamoRouter は、集中請求、チーム管理、BYOK、スマートルーテ�
 
 ### プロバイダ管理
 
-- **8 つの対応ツール、50 以上のプリセット** -- Claude Code、Claude Desktop、Codex、Gemini CLI、Grok Build、OpenCode、OpenClaw、Hermes。キーをコピーしてワンクリックでインポート
-- **ユニバーサルプロバイダ** -- 1 つの設定を Claude Code、Codex、Gemini CLI に同期
+- **3 つの対応ツール、50 以上のプリセット** -- Claude Code、Codex、Pi。キーをコピーしてワンクリックでインポート
 - ワンクリック切り替え、システムトレイクイックアクセス、ドラッグ＆ドロップ並び替え、インポート/エクスポート
 
-### プロキシ & フェイルオーバー
+### 認証情報の安全な管理
 
-- **ローカルプロキシのホットスイッチ** -- フォーマット変換、自動フェイルオーバー、サーキットブレーカー、プロバイダヘルスモニタリング、リクエストレクティファイア
-- **アプリレベルのテイクオーバー** -- Claude、Codex、Gemini、Grok Build を個別にプロキシ経由でルーティング、プロバイダ単位で設定可能
+- API キーと Base URL は **Windows 資格情報マネージャー** にのみ保存され、SQLite に平文で書き込まれません
+- **ユーザー環境変数**（`HKCU\Environment`）経由で CLI に引き渡します。切り替え後はターミナルを開き直してください
+- live 設定ファイルにキー値は書きません（Codex/Pi は CLI の仕様上、有効なプロバイダの Base URLのみ書き込まれます）
 
 ### MCP、Prompts & Skills
 
-- **統一 MCP パネル** -- Claude、Codex、Gemini、Grok Build、OpenCode、Hermes の MCP サーバーを管理、双方向同期、Deep Link インポート対応
-- **Prompts** -- Markdown エディタ、クロスアプリ同期（CLAUDE.md / AGENTS.md / GEMINI.md）、バックフィル保護
+- **統一 MCP パネル** -- Claude と Codex の MCP サーバーを管理、双方向同期
+- **Prompts** -- Markdown エディタ、クロスアプリ同期（CLAUDE.md / AGENTS.md）、バックフィル保護
 - **Skills** -- GitHub リポジトリまたは ZIP ファイルからワンクリックインストール、カスタムリポジトリ管理、シンボリックリンクとファイルコピーに対応
 
-### 使用量 & コストトラッキング
-
-- **使用量ダッシュボード** -- プロバイダ横断で支出・リクエスト数・トークン使用量を追跡、トレンドチャート、詳細リクエストログ、カスタムモデル価格設定
-
-### Session Manager & ワークスペース
+### Session Manager
 
 - 対応するセッションソースの会話履歴を閲覧・検索・復元
-- **ワークスペースエディタ**（OpenClaw）-- エージェントファイル（AGENTS.md、SOUL.md など）を Markdown プレビュー付きで編集
 
 ### システム & プラットフォーム
 
 - **クラウド同期** -- カスタム設定ディレクトリ（Dropbox、OneDrive、iCloud、NAS）および WebDAV サーバー同期
-- **Deep Link** (`ccswitch://`) -- URL 経由でプロバイダ、MCP サーバー、Prompts、Skills をワンクリックインポート
-- ダーク / ライト / システムテーマ、自動起動、自動アップデーター、アトミック書き込み、自動バックアップ、多言語対応（簡体中文/繁體中文/英/日）
+- ダーク / ライト / システムテーマ、自動起動、アトミック書き込み、自動バックアップ、多言語対応（簡体中文/繁體中文/英/日）
 
 ## よくある質問
 
 <details>
 <summary><strong>CC Switch はどの AI ツールに対応していますか？</strong></summary>
 
-CC Switch は **Claude Code**、**Claude Desktop**、**Codex**、**Gemini CLI**、**Grok Build**、**OpenCode**、**OpenClaw**、**Hermes** の 8 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
+CC Switch は **Claude Code**、**Codex**、**Pi** の 3 つのツールに対応しています。各ツールに専用のプロバイダプリセットと設定管理が用意されています。
 
 </details>
 
 <details>
 <summary><strong>プロバイダを切り替えた後、ターミナルの再起動は必要ですか？</strong></summary>
 
-ほとんどのツールでは、はい。変更を反映するにはターミナルまたは CLI ツールを再起動してください。ただし **Claude Code** は例外で、現在プロバイダデータのホットスイッチに対応しており、再起動は不要です。
+はい。CC Switch は認証情報をユーザー環境変数経由で引き渡すため、プロバイダ切り替え後はターミナル（または CLI ツール）の再起動が必要です。CC Switch 内蔵の「ターミナルを開く」から起動したプロセスは最新の値を即座に受け取ります。
 
 </details>
 
@@ -331,7 +325,7 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ## ドキュメント
 
-各機能の詳しい使い方については、**[ユーザーマニュアル](docs/user-manual/ja/README.md)** をご覧ください。プロバイダ管理、MCP/Prompts/Skills、プロキシとフェイルオーバーなど、すべての機能を網羅しています。
+各機能の詳しい使い方については、**[ユーザーマニュアル](docs/user-manual/ja/README.md)** をご覧ください。プロバイダ管理、認証情報の安全な管理、MCP/Prompts/Skills など、すべての機能を網羅しています。
 
 ## クイックスタート
 
@@ -341,7 +335,7 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 2. **プロバイダ切り替え**:
    - メイン UI: プロバイダを選択 → 「Enable」をクリック
    - システムトレイ: プロバイダ名をクリック（即時反映）
-3. **反映**: ターミナルまたは対応する CLI ツールを再起動して適用（Claude Code は再起動不要）
+3. **反映**: ターミナルまたは対応する CLI ツールを再起動し、新しい環境変数を反映
 4. **公式設定に戻す**: 「Official Login」プリセットを追加し、CLI ツールを再起動してログイン/OAuth フローを実行
 
 ### MCP、Prompts、Skills & Sessions
@@ -439,10 +433,9 @@ paru -S cc-switch-bin
 
 - **ProviderService**: プロバイダの CRUD、切り替え、バックフィル、ソート
 - **McpService**: MCP サーバー管理、インポート/エクスポート、ライブファイル同期
-- **ProxyService**: ローカル Proxy モードのホットスイッチとフォーマット変換
+- **SecretStore / EnvDelivery**: Windows 資格情報マネージャーとユーザー環境変数による引き渡し
 - **SessionManager**: 対応する全アプリの会話履歴閲覧
 - **ConfigService**: 設定のインポート/エクスポート、バックアップローテーション
-- **SpeedtestService**: API エンドポイントの遅延計測
 
 </details>
 
@@ -533,7 +526,7 @@ pnpm test:unit --coverage
 
 **フロントエンド**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
 
-**バックエンド**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
+**バックエンド**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-process/dialog/store/log
 
 **テスト**: vitest · MSW · @testing-library/react
 
@@ -550,13 +543,8 @@ pnpm test:unit --coverage
 │   │   ├── prompts/            # Prompts 管理
 │   │   ├── skills/             # Skills 管理
 │   │   ├── sessions/           # Session Manager
-│   │   ├── proxy/              # Proxy モードパネル
-│   │   ├── openclaw/           # OpenClaw 設定パネル
 │   │   ├── settings/           # 設定 (Terminal/Backup/About)
-│   │   ├── deeplink/           # Deep Link インポート
 │   │   ├── env/                # 環境変数管理
-│   │   ├── universal/          # クロスアプリ設定
-│   │   ├── usage/              # 使用量統計
 │   │   └── ui/                 # shadcn/ui コンポーネントライブラリ
 │   ├── hooks/                  # カスタムフック（ビジネスロジック）
 │   ├── lib/
@@ -571,9 +559,9 @@ pnpm test:unit --coverage
 │       ├── commands/           # Tauri コマンド層（ドメイン別）
 │       ├── services/           # ビジネスロジック層
 │       ├── database/           # SQLite DAO 層
-│       ├── proxy/              # Proxy モジュール
+│       ├── secrets/            # 資格情報マネージャー保存と抽出
+│       ├── env_delivery/       # ユーザー環境変数による引き渡し
 │       ├── session_manager/    # セッション管理
-│       ├── deeplink/           # Deep Link 処理
 │       └── mcp/                # MCP 同期モジュール
 ├── tests/                      # フロントエンドテスト
 └── assets/                     # スクリーンショット & パートナーリソース

@@ -2,7 +2,7 @@
 
 # CC Switch
 
-### Der All-in-One-Manager für Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw & Hermes Agent
+### Der All-in-One-Manager für Claude Code, Codex & Pi
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
@@ -207,13 +207,13 @@ TeamoRouter bietet außerdem Enterprise-Funktionen wie zentrale Abrechnung, Team
 
 ## Warum CC Switch?
 
-Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw und Hermes — doch jedes hat sein eigenes Konfigurationsformat. Der Wechsel des API-Anbieters bedeutet, JSON-, TOML- oder `.env`-Dateien von Hand zu bearbeiten, und es gibt keine einheitliche Möglichkeit, MCP und Skills über mehrere Werkzeuge hinweg zu verwalten.
+Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code, Codex und Pi — doch jedes hat sein eigenes Konfigurationsformat. Der Wechsel des API-Anbieters bedeutet, JSON-, TOML- oder `.env`-Dateien von Hand zu bearbeiten, und es gibt keine einheitliche Möglichkeit, MCP und Skills über mehrere Werkzeuge hinweg zu verwalten.
 
 **CC Switch** gibt Ihnen eine einzige Desktop-App, um alle unterstützten KI-Werkzeuge zu verwalten. Statt Konfigurationsdateien von Hand zu bearbeiten, erhalten Sie eine visuelle Oberfläche, um Anbieter mit einem Klick zu importieren und sofort zwischen ihnen zu wechseln — mit 50+ integrierten Anbieter-Presets, einheitlicher MCP- und Skills-Verwaltung und schnellem Umschalten über das System-Tray. Das Ganze gestützt auf eine zuverlässige SQLite-Datenbank mit atomaren Schreibvorgängen, die Ihre Konfigurationen vor Beschädigung schützen.
 
-- **Eine App, acht Werkzeuge** — Verwalten Sie Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw und Hermes über eine einzige Oberfläche
+- **Eine App, drei Werkzeuge** — Verwalten Sie Claude Code, Codex und Pi über eine einzige Oberfläche
 - **Kein manuelles Bearbeiten mehr** — 50+ Anbieter-Presets einschließlich AWS Bedrock, NVIDIA NIM und Community-Relays; einfach auswählen und umschalten
-- **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude, Codex, Gemini, Grok Build, OpenCode und Hermes mit bidirektionaler Synchronisierung
+- **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude und Codex mit bidirektionaler Synchronisierung
 - **Schnellumschaltung über System-Tray** — Wechseln Sie Anbieter sofort über das Tray-Menü, ohne die vollständige App öffnen zu müssen
 - **Cloud-Synchronisierung** — Synchronisieren Sie Anbieterdaten geräteübergreifend über Dropbox, OneDrive, iCloud oder WebDAV-Server
 - **Plattformübergreifend** — Native Desktop-App für Windows, macOS und Linux, gebaut mit Tauri 2
@@ -231,49 +231,43 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 
 ### Anbieterverwaltung
 
-- **8 unterstützte Werkzeuge, 50+ Presets** — Claude Code, Claude Desktop, Codex, Gemini CLI, Grok Build, OpenCode, OpenClaw, Hermes; Schlüssel kopieren und mit einem Klick importieren
-- **Universelle Anbieter** — Eine Konfiguration synchronisiert sich mit Claude Code, Codex und Gemini CLI
+- **3 unterstützte Werkzeuge, 50+ Presets** — Claude Code, Codex, Pi; Schlüssel kopieren und mit einem Klick importieren
 - Umschaltung mit einem Klick, Schnellzugriff über System-Tray, Sortierung per Drag-and-drop, Import/Export
 
-### Proxy & Failover
+### Sichere Aufbewahrung der Zugangsdaten
 
-- **Lokaler Proxy mit Hot-Switching** — Formatkonvertierung, automatisches Failover, Circuit Breaker, Anbieter-Health-Monitoring und Request-Rectifier
-- **Übernahme auf App-Ebene** — Claude, Codex, Gemini oder Grok Build unabhängig über den Proxy leiten, bis hinunter auf einzelne Anbieter
+- API-Schlüssel und Base-URLs leben ausschließlich im **Windows Credential Manager**, nicht in SQLite
+- Auslieferung über **Benutzer-Umgebungsvariablen** (`HKCU\Environment`); nach einem Wechsel Terminals neu öffnen
+- Live-Konfigurationsdateien enthalten keine Schlüsselwerte (Codex/Pi schreiben wegen der CLI-Vorgaben nur die Base-URL des aktiven Anbieters)
 
 ### MCP, Prompts & Skills
 
-- **Einheitliches MCP-Panel** — Verwalten Sie MCP-Server für Claude, Codex, Gemini, Grok Build, OpenCode und Hermes mit bidirektionaler Synchronisierung und Deep-Link-Import
-- **Prompts** — Markdown-Editor mit App-übergreifender Synchronisierung (CLAUDE.md / AGENTS.md / GEMINI.md) und Backfill-Schutz
+- **Einheitliches MCP-Panel** — Verwalten Sie MCP-Server für Claude und Codex mit bidirektionaler Synchronisierung
+- **Prompts** — Markdown-Editor mit App-übergreifender Synchronisierung (CLAUDE.md / AGENTS.md) und Backfill-Schutz
 - **Skills** — Installation mit einem Klick aus GitHub-Repositorys oder ZIP-Dateien, Verwaltung eigener Repositorys, mit Unterstützung für Symlinks und Dateikopien
 
-### Nutzungs- & Kostenverfolgung
-
-- **Nutzungs-Dashboard** — Verfolgen Sie Ausgaben, Anfragen und Token mit Trenddiagrammen, detaillierten Anfrageprotokollen und eigener Preisgestaltung pro Modell
-
-### Session Manager & Workspace
+### Session Manager
 
 - Gesprächsverlauf aus unterstützten Sitzungsquellen durchsuchen, suchen und wiederherstellen
-- **Workspace-Editor** (OpenClaw) — Bearbeiten Sie Agent-Dateien (AGENTS.md, SOUL.md usw.) mit Markdown-Vorschau
 
 ### System & Plattform
 
 - **Cloud-Synchronisierung** — Eigenes Konfigurationsverzeichnis (Dropbox, OneDrive, iCloud, NAS) und WebDAV-Server-Synchronisierung
-- **Deep Link** (`ccswitch://`) — Importieren Sie Anbieter, MCP-Server, Prompts und Skills per URL
-- Dunkles / Helles / System-Theme, automatischer Start, automatischer Updater, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
+- Dunkles / Helles / System-Theme, automatischer Start, atomare Schreibvorgänge, automatische Backups, i18n (zh/zh-TW/en/ja)
 
 ## FAQ
 
 <details>
 <summary><strong>Welche KI-Werkzeuge unterstützt CC Switch?</strong></summary>
 
-CC Switch unterstützt acht Werkzeuge: **Claude Code**, **Claude Desktop**, **Codex**, **Gemini CLI**, **Grok Build**, **OpenCode**, **OpenClaw** und **Hermes**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
+CC Switch unterstützt drei Werkzeuge: **Claude Code**, **Codex** und **Pi**. Jedes Werkzeug verfügt über dedizierte Anbieter-Presets und Konfigurationsverwaltung.
 
 </details>
 
 <details>
 <summary><strong>Muss ich das Terminal nach einem Anbieterwechsel neu starten?</strong></summary>
 
-Bei den meisten Werkzeugen ja — starten Sie Ihr Terminal oder das CLI-Werkzeug neu, damit die Änderungen wirksam werden. Die Ausnahme ist **Claude Code**, das derzeit das Hot-Switching von Anbieterdaten ohne Neustart unterstützt.
+Ja — CC Switch liefert Zugangsdaten über Benutzer-Umgebungsvariablen, daher starten Sie das Terminal (oder das CLI-Werkzeug) nach einem Anbieterwechsel neu. Über das integrierte „Terminal öffnen" von CC Switch gestartete Prozesse erhalten die aktuellen Werte sofort.
 
 </details>
 
@@ -331,7 +325,7 @@ Wenn Sie über ein Desktop-Symbol starten, fügen Sie es der `Exec=`-Zeile der `
 
 ## Dokumentation
 
-Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](docs/user-manual/en/README.md)** — es deckt Anbieterverwaltung, MCP/Prompts/Skills, Proxy & Failover und mehr ab.
+Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](docs/user-manual/en/README.md)** — es deckt Anbieterverwaltung, sichere Aufbewahrung der Zugangsdaten, MCP/Prompts/Skills und mehr ab.
 
 ## Schnellstart
 
@@ -341,7 +335,7 @@ Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](d
 2. **Anbieter wechseln**:
    - Hauptoberfläche: Anbieter auswählen → auf „Enable" klicken
    - System-Tray: Anbietername direkt anklicken (sofort wirksam)
-3. **Wirksam werden**: Starten Sie Ihr Terminal oder das entsprechende CLI-Werkzeug neu, um die Änderungen anzuwenden (Claude Code erfordert keinen Neustart)
+3. **Wirksam werden**: Starten Sie Ihr Terminal oder das entsprechende CLI-Werkzeug neu, um die Änderungen anzuwenden (erforderlich, damit neue Umgebungsvariablen wirksam werden)
 4. **Zurück zum Offiziellen**: Fügen Sie ein „Official Login"-Preset hinzu, starten Sie das CLI-Werkzeug neu und folgen Sie dann seinem Login-/OAuth-Vorgang
 
 ### MCP, Prompts, Skills & Sessions
@@ -439,10 +433,9 @@ Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) heru
 
 - **ProviderService**: Anbieter-CRUD, Umschaltung, Backfill, Sortierung
 - **McpService**: Verwaltung von MCP-Servern, Import/Export, Synchronisierung von Live-Dateien
-- **ProxyService**: Lokaler Proxy-Modus mit Hot-Switching und Formatkonvertierung
+- **SecretStore / EnvDelivery**: Speicherung im Windows Credential Manager und Auslieferung über Benutzer-Umgebungsvariablen
 - **SessionManager**: Durchsuchen des Gesprächsverlaufs über alle unterstützten Apps hinweg
 - **ConfigService**: Konfigurations-Import/-Export, Backup-Rotation
-- **SpeedtestService**: Messung der Latenz von API-Endpunkten
 
 </details>
 
@@ -533,7 +526,7 @@ pnpm test:unit --coverage
 
 **Frontend**: React 18 · TypeScript · Vite · TailwindCSS 3.4 · TanStack Query v5 · react-i18next · react-hook-form · zod · shadcn/ui · @dnd-kit
 
-**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-updater/process/dialog/store/log
+**Backend**: Tauri 2.8 · Rust · serde · tokio · thiserror · tauri-plugin-process/dialog/store/log
 
 **Testing**: vitest · MSW · @testing-library/react
 
@@ -550,13 +543,8 @@ pnpm test:unit --coverage
 │   │   ├── prompts/            # Prompts-Verwaltung
 │   │   ├── skills/             # Skills-Verwaltung
 │   │   ├── sessions/           # Session Manager
-│   │   ├── proxy/              # Proxy-Modus-Panel
-│   │   ├── openclaw/           # OpenClaw-Konfigurationspanels
 │   │   ├── settings/           # Einstellungen (Terminal/Backup/About)
-│   │   ├── deeplink/           # Deep-Link-Import
 │   │   ├── env/                # Verwaltung von Umgebungsvariablen
-│   │   ├── universal/          # App-übergreifende Konfiguration
-│   │   ├── usage/              # Nutzungsstatistik
 │   │   └── ui/                 # shadcn/ui-Komponentenbibliothek
 │   ├── hooks/                  # Eigene Hooks (Geschäftslogik)
 │   ├── lib/
@@ -571,9 +559,9 @@ pnpm test:unit --coverage
 │       ├── commands/           # Tauri-Befehlsschicht (nach Domäne)
 │       ├── services/           # Geschäftslogikschicht
 │       ├── database/           # SQLite-DAO-Schicht
-│       ├── proxy/              # Proxy-Modul
+│       ├── secrets/            # Credential-Manager-Speicher und Extraktion
+│       ├── env_delivery/       # Auslieferung über Benutzer-Umgebungsvariablen
 │       ├── session_manager/    # Sitzungsverwaltung
-│       ├── deeplink/           # Deep-Link-Verarbeitung
 │       └── mcp/                # MCP-Synchronisierungsmodul
 ├── tests/                      # Frontend-Tests
 └── assets/                     # Screenshots & Partnerressourcen

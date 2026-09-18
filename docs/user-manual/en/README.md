@@ -39,7 +39,6 @@ CC Switch User Manual
 └── 5. FAQ
     ├── 5.1 Configuration Files
     ├── 5.2 FAQ
-    ├── 5.3 Deep Link Protocol
     └── 5.4 Environment Variable Conflicts
 ```
 
@@ -59,7 +58,7 @@ CC Switch User Manual
 
 | File | Description |
 |------|-------------|
-| [2.1-add.md](./2-providers/2.1-add.md) | Using presets, custom configuration, universal providers |
+| [2.1-add.md](./2-providers/2.1-add.md) | Using presets, custom configuration |
 | [2.2-switch.md](./2-providers/2.2-switch.md) | Main UI switching, tray switching, activation methods |
 | [2.3-edit.md](./2-providers/2.3-edit.md) | Edit configuration, modify API Key, backfill mechanism |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | Drag-to-reorder, duplicate provider, delete |
@@ -86,7 +85,6 @@ Secrets live in Windows Credential Manager and are delivered via user environmen
 |------|-------------|
 | [5.1-config-files.md](./5-faq/5.1-config-files.md) | CC Switch storage, CLI configuration file formats |
 | [5.2-questions.md](./5-faq/5.2-questions.md) | Frequently asked questions |
-| [5.3-deeplink.md](./5-faq/5.3-deeplink.md) | Deep link protocol, generation and usage |
 | [5.4-env-conflict.md](./5-faq/5.4-env-conflict.md) | Environment variable conflict detection and resolution |
 
 ## Quick Links

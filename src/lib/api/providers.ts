@@ -1,10 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-import type {
-  Provider,
-  UniversalProvider,
-  UniversalProvidersMap,
-} from "@/types";
+import type { Provider } from "@/types";
 import type { AppId } from "./types";
 
 export interface ProviderSortUpdate {
@@ -155,94 +151,5 @@ export const providersApi = {
       app: appId,
       cwd,
     });
-  },
-
-  /**
-   * 从 OpenCode live 配置导入供应商到数据库
-   * OpenCode 特有功能：由于累加模式，用户可能已在 opencode.json 中配置供应商
-   */
-  async importOpenCodeFromLive(): Promise<number> {
-    return await invoke("import_opencode_providers_from_live");
-  },
-
-  /**
-   * 获取 OpenCode live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 opencode.json
-   */
-  async getOpenCodeLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_opencode_live_provider_ids");
-  },
-
-  /**
-   * 获取 OpenClaw live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 openclaw.json
-   */
-  async getOpenClawLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_openclaw_live_provider_ids");
-  },
-
-  /**
-   * 获取 Hermes live 配置中的供应商 ID 列表
-   * 用于前端判断供应商是否已添加到 Hermes 配置
-   */
-  async getHermesLiveProviderIds(): Promise<string[]> {
-    return await invoke("get_hermes_live_provider_ids");
-  },
-
-  /**
-   * 从 OpenClaw live 配置导入供应商到数据库
-   * OpenClaw 特有功能：由于累加模式，用户可能已在 openclaw.json 中配置供应商
-   */
-  async importOpenClawFromLive(): Promise<number> {
-    return await invoke("import_openclaw_providers_from_live");
-  },
-
-  /**
-   * 从 Hermes live 配置导入供应商到数据库
-   * Hermes 特有功能：由于累加模式，用户可能已在 Hermes 配置中配置供应商
-   */
-  async importHermesFromLive(): Promise<number> {
-    return await invoke("import_hermes_providers_from_live");
-  },
-};
-
-// ============================================================================
-// 统一供应商（Universal Provider）API
-// ============================================================================
-
-export const universalProvidersApi = {
-  /**
-   * 获取所有统一供应商
-   */
-  async getAll(): Promise<UniversalProvidersMap> {
-    return await invoke("get_universal_providers");
-  },
-
-  /**
-   * 获取单个统一供应商
-   */
-  async get(id: string): Promise<UniversalProvider | null> {
-    return await invoke("get_universal_provider", { id });
-  },
-
-  /**
-   * 添加或更新统一供应商
-   */
-  async upsert(provider: UniversalProvider): Promise<boolean> {
-    return await invoke("upsert_universal_provider", { provider });
-  },
-
-  /**
-   * 删除统一供应商
-   */
-  async delete(id: string): Promise<boolean> {
-    return await invoke("delete_universal_provider", { id });
-  },
-
-  /**
-   * 手动同步统一供应商到各应用
-   */
-  async sync(id: string): Promise<boolean> {
-    return await invoke("sync_universal_provider", { id });
   },
 };

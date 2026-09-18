@@ -19,6 +19,7 @@ use crate::secrets::SecretExtractor;
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 use std::str::FromStr;
+use zeroize::Zeroizing;
 
 // Re-export sub-module functions for external access
 pub use live::{
@@ -611,7 +612,7 @@ impl ProviderService {
     fn reject_if_env_conflicts(
         state: &AppState,
         app_type: &AppType,
-        pending: &[(String, String)],
+        pending: &[(String, Zeroizing<String>)],
     ) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
         let sink = crate::env_delivery::default_sink();
@@ -620,7 +621,7 @@ impl ProviderService {
         let mut conflicts = Vec::new();
         for (name, value) in pending {
             if let Some(conflict) =
-                crate::env_delivery::check_conflict(sink, &managed, name, value)?
+                crate::env_delivery::check_conflict(sink, &managed, name, value.as_str())?
             {
                 conflicts.push(conflict);
             }
@@ -686,14 +687,14 @@ impl ProviderService {
         app_type: &AppType,
         provider: &Provider,
         result: &mut SwitchResult,
-    ) -> Result<Vec<(String, String)>, AppError> {
+    ) -> Result<Vec<(String, Zeroizing<String>)>, AppError> {
         use crate::secrets::SecretTarget;
-        let mut pending: Vec<(String, String)> = Vec::new();
+        let mut pending: Vec<(String, Zeroizing<String>)> = Vec::new();
         match app_type {
             AppType::Claude => {
                 let key_target =
                     SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
-                let key = futures::executor::block_on(state.secrets.retrieve(&key_target))
+                let key = futures::executor::block_on(state.secrets.get(&key_target))
                     .ok()
                     .flatten()
                     .ok_or_else(|| AppError::Message("请先补全密钥".to_string()))?;
@@ -703,7 +704,7 @@ impl ProviderService {
                     .and_then(|m| m.api_key_field.as_deref())
                     .unwrap_or("ANTHROPIC_AUTH_TOKEN");
                 pending.push((field.to_string(), key));
-                if let Ok(Some(url)) = futures::executor::block_on(state.secrets.retrieve(
+                if let Ok(Some(url)) = futures::executor::block_on(state.secrets.get(
                     &SecretTarget::provider_base_url(app_type.clone(), provider.id.clone()),
                 )) {
                     pending.push(("ANTHROPIC_BASE_URL".to_string(), url));
@@ -711,7 +712,7 @@ impl ProviderService {
                 pending.extend(load_extra_env_pending(state, app_type, &provider.id));
             }
             AppType::Codex => {
-                let key = futures::executor::block_on(state.secrets.retrieve(
+                let key = futures::executor::block_on(state.secrets.get(
                     &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
                 ))
                 .ok()
@@ -740,7 +741,7 @@ impl ProviderService {
                 }
             }
             AppType::Pi => {
-                match futures::executor::block_on(state.secrets.retrieve(
+                match futures::executor::block_on(state.secrets.get(
                     &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
                 )) {
                     Ok(Some(api_key)) => {
@@ -774,7 +775,7 @@ impl ProviderService {
                         if crate::secrets::is_literal_value(val) {
                             continue;
                         }
-                        match futures::executor::block_on(state.secrets.retrieve(
+                        match futures::executor::block_on(state.secrets.get(
                             &SecretTarget::provider_env(
                                 app_type.clone(),
                                 provider.id.clone(),
@@ -1437,7 +1438,7 @@ fn load_extra_env_pending(
     state: &AppState,
     app_type: &AppType,
     provider_id: &str,
-) -> Vec<(String, String)> {
+) -> Vec<(String, Zeroizing<String>)> {
     let prefix = format!(
         "cc-switch/v1/provider/{}/{}/env/",
         app_type.as_str(),
@@ -1455,7 +1456,7 @@ fn load_extra_env_pending(
             continue;
         }
         let target = crate::secrets::SecretTarget::provider_env(app_type.clone(), provider_id, var);
-        if let Ok(Some(value)) = futures::executor::block_on(state.secrets.retrieve(&target)) {
+        if let Ok(Some(value)) = futures::executor::block_on(state.secrets.get(&target)) {
             pending.push((var.to_string(), value));
         }
     }

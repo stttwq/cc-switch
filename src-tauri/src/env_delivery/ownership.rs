@@ -146,6 +146,7 @@ fn mask_value(value: &str) -> String {
 mod tests {
     use super::*;
     use crate::env_delivery::EnvSink;
+    use zeroize::Zeroizing;
 
     #[test]
     fn managed_env_vars_roundtrip() {
@@ -181,7 +182,11 @@ mod tests {
         let managed = ManagedEnvVars::default();
 
         // Set a foreign variable
-        sink.set("ANTHROPIC_API_KEY", "foreign-key-1234").unwrap();
+        sink.set(
+            "ANTHROPIC_API_KEY",
+            &Zeroizing::new("foreign-key-1234".to_string()),
+        )
+        .unwrap();
 
         let conflict = check_conflict(&sink, &managed, "ANTHROPIC_API_KEY", "our-key-5678")
             .unwrap()
@@ -199,7 +204,11 @@ mod tests {
         let sink = InMemoryEnvSink::new();
         let mut managed = ManagedEnvVars::default();
 
-        sink.set("ANTHROPIC_API_KEY", "old-value").unwrap();
+        sink.set(
+            "ANTHROPIC_API_KEY",
+            &Zeroizing::new("old-value".to_string()),
+        )
+        .unwrap();
         managed.register("ANTHROPIC_API_KEY", "claude", "provider-1");
 
         let conflict = check_conflict(&sink, &managed, "ANTHROPIC_API_KEY", "new-value").unwrap();
@@ -213,7 +222,11 @@ mod tests {
         let sink = InMemoryEnvSink::new();
         let managed = ManagedEnvVars::default();
 
-        sink.set("ANTHROPIC_API_KEY", "same-value").unwrap();
+        sink.set(
+            "ANTHROPIC_API_KEY",
+            &Zeroizing::new("same-value".to_string()),
+        )
+        .unwrap();
 
         let conflict = check_conflict(&sink, &managed, "ANTHROPIC_API_KEY", "same-value").unwrap();
         assert!(conflict.is_none(), "Same value should not conflict");

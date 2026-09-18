@@ -39,7 +39,6 @@ CC Switch ユーザーマニュアル
 └── 5. よくある質問
     ├── 5.1 設定ファイルの説明
     ├── 5.2 FAQ
-    ├── 5.3 ディープリンクプロトコル
     └── 5.4 環境変数の競合
 ```
 
@@ -59,7 +58,7 @@ CC Switch ユーザーマニュアル
 
 | ファイル | 内容 |
 |------|------|
-| [2.1-add.md](./2-providers/2.1-add.md) | プリセットの使用、カスタム設定、統一プロバイダー |
+| [2.1-add.md](./2-providers/2.1-add.md) | プリセットの使用、カスタム設定 |
 | [2.2-switch.md](./2-providers/2.2-switch.md) | メイン画面での切り替え、トレイでの切り替え、反映方法 |
 | [2.3-edit.md](./2-providers/2.3-edit.md) | 設定の編集、API Key の変更、バックフィル機能 |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | ドラッグで並べ替え、プロバイダーの複製、削除 |
@@ -86,7 +85,6 @@ CC Switch ユーザーマニュアル
 |------|------|
 | [5.1-config-files.md](./5-faq/5.1-config-files.md) | CC Switch のストレージ、CLI 設定ファイル形式 |
 | [5.2-questions.md](./5-faq/5.2-questions.md) | よくある質問と回答 |
-| [5.3-deeplink.md](./5-faq/5.3-deeplink.md) | ディープリンクプロトコル、生成と使用方法 |
 | [5.4-env-conflict.md](./5-faq/5.4-env-conflict.md) | 環境変数の競合検出と対処 |
 
 ## クイックリンク
