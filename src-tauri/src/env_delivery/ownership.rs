@@ -92,6 +92,26 @@ impl ManagedEnvVars {
             .map(|(name, _)| name.clone())
             .collect()
     }
+
+    /// Get all variable names registered for a specific provider (used when a
+    /// provider is deleted or a Pi provider is removed — §5.3.3 第 3 条).
+    pub fn vars_for_provider(&self, app: &str, provider: &str) -> Vec<String> {
+        self.entries
+            .iter()
+            .filter(|(_, entry)| entry.app == app && entry.provider == provider)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    /// Remove and return all variables owned by a provider, so the caller can
+    /// delete them from the sink and persist the registry.
+    pub fn take_vars_for_provider(&mut self, app: &str, provider: &str) -> Vec<String> {
+        let names = self.vars_for_provider(app, provider);
+        for name in &names {
+            self.unregister(name);
+        }
+        names
+    }
 }
 
 /// Information about an environment variable conflict

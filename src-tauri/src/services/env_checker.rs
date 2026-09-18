@@ -4,7 +4,8 @@ use std::collections::HashSet;
 use std::fs;
 
 /// Environment variable conflict information returned to frontend
-/// Phase 5 S11: Only expose masked value (last 4 chars) to prevent secret leakage via IPC
+/// Phase 5 S11: Only the masked value (last 4 chars) crosses IPC; the full
+/// value never leaves the backend, and deletion works by variable name.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EnvConflict {
@@ -13,9 +14,6 @@ pub struct EnvConflict {
     pub masked_value: String,
     pub source_type: String, // "system" | "file"
     pub source_path: String, // Registry path or file path
-    /// Full value - only available internally for restore operations, never sent to frontend
-    #[serde(skip)]
-    pub(crate) var_value: String,
 }
 
 /// Internal struct for processing - contains full value before masking
@@ -36,7 +34,6 @@ impl EnvConflictInternal {
             masked_value,
             source_type: self.source_type,
             source_path: self.source_path,
-            var_value: self.var_value, // Keep for restore operations
         }
     }
 }
@@ -71,9 +68,90 @@ pub fn check_env_conflicts(app: &str) -> Result<Vec<EnvConflict>, String> {
     Ok(conflicts)
 }
 
+/// Delete the listed conflicting environment variables (no plaintext backup is
+/// written anywhere — see施工計画 §5.3.3; originals are not retained).
+pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
+    let mut deleted = 0usize;
+    for conflict in &conflicts {
+        delete_single_env(conflict)?;
+        deleted += 1;
+    }
+    if deleted > 0 {
+        let sink = crate::env_delivery::default_sink();
+        let _ = sink.broadcast();
+    }
+    Ok(deleted)
+}
+
+#[cfg(target_os = "windows")]
+fn delete_single_env(conflict: &EnvConflict) -> Result<(), String> {
+    match conflict.source_type.as_str() {
+        "system" => {
+            if conflict.source_path.contains("HKEY_CURRENT_USER") {
+                let hkcu = RegKey::predef(HKEY_CURRENT_USER)
+                    .open_subkey_with_flags("Environment", KEY_SET_VALUE)
+                    .map_err(|e| format!("打开注册表失败: {e}"))?;
+
+                hkcu.delete_value(&conflict.var_name)
+                    .map_err(|e| format!("删除注册表项失败: {e}"))?;
+                std::env::remove_var(&conflict.var_name);
+            } else if conflict.source_path.contains("HKEY_LOCAL_MACHINE") {
+                // D11: cc-switch 永不写 HKLM。系统级同名变量只读报告，
+                // 用户级会覆盖它（PATH 除外），删除需用户自行在系统设置中操作。
+                return Err("系统级 (HKLM) 环境变量不由 cc-switch 管理".to_string());
+            }
+            Ok(())
+        }
+        "file" => Err("Windows 系统不应该有文件类型的环境变量".to_string()),
+        _ => Err(format!("未知的环境变量来源类型: {}", conflict.source_type)),
+    }
+}
+
+#[cfg(not(target_os = "windows"))]
+fn delete_single_env(conflict: &EnvConflict) -> Result<(), String> {
+    match conflict.source_type.as_str() {
+        "file" => {
+            // source_path 格式: "path:line"
+            let file_path = conflict.source_path.split(':').next().unwrap_or("");
+            if file_path.is_empty() {
+                return Err("无效的文件路径格式".to_string());
+            }
+
+            let content = fs::read_to_string(file_path)
+                .map_err(|e| format!("读取文件失败 {file_path}: {e}"))?;
+
+            let new_content: Vec<String> = content
+                .lines()
+                .filter(|line| {
+                    let trimmed = line.trim();
+                    let export_line = trimmed.strip_prefix("export ").unwrap_or(trimmed);
+
+                    if let Some(eq_pos) = export_line.find('=') {
+                        let var_name = export_line[..eq_pos].trim();
+                        var_name != conflict.var_name
+                    } else {
+                        true
+                    }
+                })
+                .map(|s| s.to_string())
+                .collect();
+
+            fs::write(file_path, new_content.join("\n"))
+                .map_err(|e| format!("写入文件失败 {file_path}: {e}"))?;
+
+            std::env::remove_var(&conflict.var_name);
+            Ok(())
+        }
+        "system" => {
+            std::env::remove_var(&conflict.var_name);
+            Ok(())
+        }
+        _ => Err(format!("未知的环境变量来源类型: {}", conflict.source_type)),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum EnvKeyword {
-    Exact(&'static str),
     Prefix(&'static str),
 }
 
@@ -82,24 +160,23 @@ fn get_keywords_for_app(app: &str) -> Vec<EnvKeyword> {
     match app.to_lowercase().as_str() {
         "claude" => vec![EnvKeyword::Prefix("ANTHROPIC")],
         "codex" => vec![EnvKeyword::Prefix("OPENAI")],
-        "gemini" => vec![
-            EnvKeyword::Prefix("GEMINI"),
-            EnvKeyword::Prefix("GOOGLE_GEMINI"),
-        ],
-        "grokbuild" | "grok" => vec![
-            EnvKeyword::Exact("XAI_API_KEY"),
-            EnvKeyword::Exact("GROK_DEFAULT_MODEL"),
-        ],
         _ => vec![],
     }
 }
 
 fn matches_env_keyword(name: &str, keywords: &[EnvKeyword]) -> bool {
     let upper_name = name.to_uppercase();
-    keywords.iter().any(|keyword| match keyword {
-        EnvKeyword::Exact(name) => upper_name == *name,
-        EnvKeyword::Prefix(prefix) => upper_name.starts_with(prefix),
-    })
+    keywords
+        .iter()
+        .any(|keyword| upper_name.starts_with(keyword.prefix()))
+}
+
+impl EnvKeyword {
+    fn prefix(&self) -> &'static str {
+        match self {
+            EnvKeyword::Prefix(p) => p,
+        }
+    }
 }
 
 fn load_managed_names() -> HashSet<String> {
@@ -253,41 +330,9 @@ mod tests {
             get_keywords_for_app("codex"),
             vec![EnvKeyword::Prefix("OPENAI")]
         );
-        assert_eq!(
-            get_keywords_for_app("gemini"),
-            vec![
-                EnvKeyword::Prefix("GEMINI"),
-                EnvKeyword::Prefix("GOOGLE_GEMINI")
-            ]
-        );
-        assert_eq!(
-            get_keywords_for_app("grokbuild"),
-            vec![
-                EnvKeyword::Exact("XAI_API_KEY"),
-                EnvKeyword::Exact("GROK_DEFAULT_MODEL")
-            ]
-        );
-        assert_eq!(
-            get_keywords_for_app("grok"),
-            get_keywords_for_app("grokbuild")
-        );
+        assert_eq!(get_keywords_for_app("gemini"), Vec::<EnvKeyword>::new());
+        assert_eq!(get_keywords_for_app("grokbuild"), Vec::<EnvKeyword>::new());
         assert_eq!(get_keywords_for_app("unknown"), Vec::<EnvKeyword>::new());
-    }
-
-    #[test]
-    fn grok_keywords_only_match_credentials() {
-        let keywords = get_keywords_for_app("grokbuild");
-
-        assert!(matches_env_keyword("XAI_API_KEY", &keywords));
-        assert!(matches_env_keyword("xai_api_key", &keywords));
-        assert!(matches_env_keyword("GROK_DEFAULT_MODEL", &keywords));
-        assert!(matches_env_keyword("grok_default_model", &keywords));
-        assert!(!matches_env_keyword("MY_XAI_API_KEY", &keywords));
-        assert!(!matches_env_keyword("XAI_API_KEY_BACKUP", &keywords));
-        assert!(!matches_env_keyword("MY_GROK_DEFAULT_MODEL", &keywords));
-        assert!(!matches_env_keyword("GROK_DEFAULT_MODEL_BACKUP", &keywords));
-        assert!(!matches_env_keyword("GROK_BIN_DIR", &keywords));
-        assert!(!matches_env_keyword("GROK_HOME", &keywords));
     }
 
     #[test]

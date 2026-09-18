@@ -42,7 +42,7 @@ const McpFormModal: React.FC<McpFormModalProps> = ({
   onClose,
   existingIds = [],
   defaultFormat = "json",
-  defaultEnabledApps = ["claude", "codex", "gemini", "grokbuild"],
+  defaultEnabledApps = ["claude", "codex"],
 }) => {
   const { t } = useTranslation();
   const { formatTomlError, validateTomlConfig, validateJsonConfig } =

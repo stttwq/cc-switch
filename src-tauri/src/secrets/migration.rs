@@ -12,7 +12,9 @@ use crate::error::AppError;
 use crate::provider::Provider;
 use crate::secrets::extractor::SecretExtractor;
 use crate::secrets::store::SecretStore;
+use crate::secrets::target::SecretTarget;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::str::FromStr;
 
 /// Migration report for one-time user notification
@@ -140,7 +142,78 @@ impl<'a> CredentialMigrator<'a> {
             "凭据迁移完成: 迁移 {} 个 provider",
             report.migrated_providers.len()
         );
+
+        // §6.2 第 5 步：迁移 settings.json 里的 WebDAV 密码 / S3 双密钥，
+        // 否则老用户的同步凭据会被 typed 结构（字段已删）静默丢弃。
+        self.migrate_app_settings().await?;
+
         Ok(report)
+    }
+
+    /// 把 settings.json 遗留的明文凭据迁入凭据管理器，并从文件剥离后原子重写。
+    /// 幂等：字段缺失或已为 `literal:` 前缀时跳过。
+    async fn migrate_app_settings(&self) -> Result<(), AppError> {
+        // 原则 3.2-5：单元测试不得触碰真实 home。未显式指向测试 home 时跳过，
+        // 生产构建（非 test）与设置 CC_SWITCH_TEST_HOME 的集成测试仍照常迁移。
+        if cfg!(test) && std::env::var("CC_SWITCH_TEST_HOME").is_err() {
+            return Ok(());
+        }
+        let path = crate::config::get_home_dir()
+            .join(".cc-switch")
+            .join("settings.json");
+        let Ok(content) = std::fs::read_to_string(&path) else {
+            return Ok(()); // 文件不存在，无需迁移
+        };
+        let Ok(mut root) = serde_json::from_str::<serde_json::Value>(&content) else {
+            return Ok(()); // 解析失败交给 typed loader 处理，这里不动
+        };
+
+        // (JSON 父键, 字段名, 凭据 target)
+        let fields = [
+            (
+                "webdav_sync",
+                "password",
+                SecretTarget::app("webdav", "password"),
+            ),
+            (
+                "s3_sync",
+                "access_key_id",
+                SecretTarget::app("s3", "access_key_id"),
+            ),
+            (
+                "s3_sync",
+                "secret_access_key",
+                SecretTarget::app("s3", "secret_access_key"),
+            ),
+        ];
+        let mut stripped_any = false;
+        for (parent_key, field, target) in fields {
+            let value = root
+                .get(parent_key)
+                .and_then(|o| o.get(field))
+                .and_then(Value::as_str)
+                .map(str::to_string);
+            let Some(value) = value else { continue };
+            if value.is_empty() || value.starts_with("literal:") {
+                continue;
+            }
+            self.store.store(&target, &value).await?;
+            if let Some(map) = root.get_mut(parent_key).and_then(Value::as_object_mut) {
+                map.remove(field);
+                stripped_any = true;
+            }
+        }
+
+        // 仅在确实剥离了字段时重写文件；serde 对已删除字段本就忽略，
+        // 重写让磁盘上不再残留明文。
+        if stripped_any {
+            let rewritten = serde_json::to_string_pretty(&root)
+                .map_err(|e| AppError::Config(format!("settings.json 序列化失败: {e}")))?;
+            crate::config::atomic_write_private(&path, rewritten.as_bytes())
+                .map_err(|e| AppError::Config(format!("settings.json 重写失败: {e}")))?;
+            log::info!("已将 settings.json 中的 WebDAV/S3 凭据迁入凭据管理器并剥离明文");
+        }
+        Ok(())
     }
 }
 

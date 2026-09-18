@@ -5,7 +5,7 @@
 ### The All-in-One Manager for Claude Code, Codex & Pi
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/farion1231/cc-switch/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
 
@@ -216,7 +216,7 @@ Modern AI-powered coding relies on tools like Claude Code, Codex, and Pi — but
 - **Unified MCP & Skills Management** — One panel to manage MCP servers and Skills across Claude and Codex with bidirectional sync
 - **System Tray Quick Switch** — Switch providers instantly from the tray menu, no need to open the full app
 - **Cloud Sync** — Sync provider data across devices via Dropbox, OneDrive, iCloud, or WebDAV servers
-- **Cross-Platform** — Native desktop app for Windows, macOS, and Linux, built with Tauri 2
+- **Windows-First** — Native desktop app built with Tauri 2; full credential support requires Windows Credential Manager, macOS/Linux builds are best-effort
 - **Built-in Utilities** — Includes various utilities for first-launch login confirmation, signature bypass, plugin extension sync, and more
 
 ## Screenshots
@@ -280,7 +280,7 @@ CC Switch provides a "Shared Config Snippet" feature to pass common data (beyond
 <details>
 <summary><strong>macOS installation</strong></summary>
 
-CC Switch for macOS is code-signed and notarized by Apple. You can download and install it directly — no extra steps needed. We recommend using the `.dmg` installer.
+Official installers currently ship for Windows only: API keys and Base URLs require the Windows Credential Manager. macOS builds are best-effort from source and run without credential storage — install them only if you accept that limitation.
 
 </details>
 
@@ -348,6 +348,8 @@ For detailed guides on every feature, check out the **[User Manual](docs/user-ma
 
 ## Download & Installation
 
+> **Support scope**: Official releases ship Windows installers only. Credentials require the Windows Credential Manager; self-built macOS/Linux builds cannot store or deliver API keys. The macOS/Linux notes below document legacy packages and no longer apply to current releases.
+
 ### System Requirements
 
 - **Windows**: Windows 10 and above
@@ -394,7 +396,7 @@ Download the latest Linux build from the [Releases](../../releases) page:
 - `CC-Switch-v{version}-Linux.rpm` (Fedora/RHEL/openSUSE)
 - `CC-Switch-v{version}-Linux.AppImage` (Universal)
 
-> **Flatpak**: Not included in official releases. You can build it yourself from the `.deb` — see [`flatpak/README.md`](flatpak/README.md) for instructions.
+> **Flatpak**: No longer shipped in official releases.
 
 <details>
 <summary><strong>Architecture Overview</strong></summary>

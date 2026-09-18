@@ -196,7 +196,10 @@ export const useSwitchProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
-  return useMutation({
+  // 接管外来变量后用于重试切换；在 useMutation 构造后回填（见下方）。
+  let retrySwitch: (providerId: string) => void = () => {};
+
+  const mutation = useMutation({
     mutationFn: async (providerId: string): Promise<SwitchResult> => {
       return await providersApi.switch(providerId, appId);
     },
@@ -230,15 +233,17 @@ export const useSwitchProviderMutation = (appId: AppId) => {
                 defaultValue: "接管并重试",
               }),
               onClick: () => {
+                // adopt 会用我方凭据覆盖并登记所有权，随后重试切换即可成功。
                 void envDeliveryAdopt(
                   appId,
                   providerId,
                   conflicts.map((c) => c.name),
-                ).then(() =>
+                ).then(() => {
                   queryClient.invalidateQueries({
                     queryKey: ["providers", appId],
-                  }),
-                );
+                  });
+                  retrySwitch(providerId);
+                });
               },
             },
           },
@@ -269,6 +274,9 @@ export const useSwitchProviderMutation = (appId: AppId) => {
       }
     },
   });
+
+  retrySwitch = (providerId: string) => mutation.mutate(providerId);
+  return mutation;
 };
 
 export const useDeleteSessionMutation = () => {

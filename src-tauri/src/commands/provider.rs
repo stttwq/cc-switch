@@ -29,12 +29,15 @@ pub fn get_providers(
 }
 
 fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -> SecretStatus {
-    let api = futures::executor::block_on(state.secrets.retrieve(&SecretTarget::provider_api_key(
+    // api_key 用 Zeroizing 承载，取完末四位即离开作用域被清零，不生成裸 String。
+    let api = futures::executor::block_on(state.secrets.get(&SecretTarget::provider_api_key(
         app_type.clone(),
         provider_id,
     )))
     .ok()
     .flatten();
+    let hint = api.as_deref().and_then(|key| hint_last4(key));
+    // base_url 允许回显（编辑表单与卡片要显示），仍来自凭据管理器按需读取。
     let base = futures::executor::block_on(state.secrets.retrieve(
         &SecretTarget::provider_base_url(app_type.clone(), provider_id),
     ))
@@ -43,7 +46,7 @@ fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -
     SecretStatus {
         api_key: SecretHint {
             present: api.is_some(),
-            hint: api.as_deref().and_then(hint_last4),
+            hint,
         },
         base_url: base,
         extra_env: extra_env_keys(state, app_type, provider_id),

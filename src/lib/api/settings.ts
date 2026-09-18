@@ -53,14 +53,6 @@ export const settingsApi = {
     return await invoke("restart_app");
   },
 
-  async installUpdateAndRestart(): Promise<boolean> {
-    return await invoke("install_update_and_restart");
-  },
-
-  async checkUpdates(): Promise<void> {
-    await invoke("check_for_updates");
-  },
-
   async isPortable(): Promise<boolean> {
     return await invoke("is_portable_mode");
   },
@@ -276,22 +268,6 @@ export const settingsApi = {
     return await invoke("probe_tool_installations", { tools });
   },
 
-  async getRectifierConfig(): Promise<RectifierConfig> {
-    return await invoke("get_rectifier_config");
-  },
-
-  async setRectifierConfig(config: RectifierConfig): Promise<boolean> {
-    return await invoke("set_rectifier_config", { config });
-  },
-
-  async getOptimizerConfig(): Promise<OptimizerConfig> {
-    return await invoke("get_optimizer_config");
-  },
-
-  async setOptimizerConfig(config: OptimizerConfig): Promise<boolean> {
-    return await invoke("set_optimizer_config", { config });
-  },
-
   async getLogConfig(): Promise<LogConfig> {
     return await invoke("get_log_config");
   },
@@ -319,20 +295,6 @@ export interface ToolInstallationReport {
   needs_confirmation: boolean;
   command: string;
   anchored: boolean;
-}
-
-export interface RectifierConfig {
-  enabled: boolean;
-  requestThinkingSignature: boolean;
-  requestThinkingBudget: boolean;
-  requestMediaFallback: boolean;
-  requestMediaHeuristic: boolean;
-}
-
-export interface OptimizerConfig {
-  enabled: boolean;
-  thinkingOptimizer: boolean;
-  cacheInjection: boolean;
 }
 
 export interface LogConfig {

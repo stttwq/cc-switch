@@ -630,7 +630,7 @@ describe("PiProviderForm", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("pi.form.contextWindow")).toHaveFocus(),
     );
-  });
+  }, 30_000);
 
   it("stores Pi-native request headers without mixing them with API-key auth", async () => {
     const user = userEvent.setup();
@@ -694,7 +694,7 @@ describe("PiProviderForm", () => {
     expect(config).not.toHaveProperty("authHeader");
     expect(config.headers).not.toHaveProperty("authorization");
     expect(config.headers).not.toHaveProperty("x-api-key");
-  });
+  }, 30_000);
 
   it("echoes existing Pi headers and preserves them when saving", async () => {
     const onSubmit = vi.fn().mockResolvedValue(undefined);

@@ -72,15 +72,9 @@ export function EnvWarningBanner({
         return;
       }
 
-      const backupInfo = await deleteEnvVars(conflictsToDelete);
+      const deletedCount = await deleteEnvVars(conflictsToDelete);
 
-      toast.success(t("env.delete.success"), {
-        description: t("env.backup.location", {
-          path: backupInfo.backupPath,
-        }),
-        duration: 5000,
-        closeButton: true,
-      });
+      toast.success(t("env.delete.success", { count: deletedCount }));
 
       // 清空选择并通知父组件
       setSelectedConflicts(new Set());
@@ -253,7 +247,7 @@ export function EnvWarningBanner({
                 {t("env.confirm.message", { count: selectedConflicts.size })}
               </p>
               <p className="text-sm text-muted-foreground">
-                {t("env.confirm.backupNotice")}
+                {t("env.confirm.noBackupNotice")}
               </p>
             </DialogDescription>
           </DialogHeader>

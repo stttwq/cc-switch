@@ -125,7 +125,10 @@ pub async fn s3_sync_download(state: State<'_, AppState>) -> Result<Value, Strin
         s3_sync_service::download(&db, &secrets, &mut settings),
         |result| async move {
             let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
-                run_post_import_sync(&app_state_for_sync)
+                // 远端遗留快照可能含明文密钥：先 scrub，再刷新派生 live 配置。
+                app_state_for_sync
+                    .scrub_imported_plaintext()
+                    .and_then(|_| run_post_import_sync(&app_state_for_sync))
             })
             .await
             .map_err(|e| e.to_string());

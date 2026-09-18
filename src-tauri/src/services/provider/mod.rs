@@ -345,7 +345,34 @@ impl ProviderService {
         }
 
         delete_provider_secrets(state, &app_type, id);
+        Self::release_provider_managed_env(state, &app_type, id);
         state.db.delete_provider(app_type.as_str(), id)
+    }
+
+    /// §5.3.3 第 3 条：删除供应商 / Pi 移除时，先移除它托管的用户环境变量并更新
+    /// `managed_env_vars`，避免孤儿变量残留在 `HKCU\Environment`。best-effort。
+    pub(crate) fn release_provider_managed_env(state: &AppState, app_type: &AppType, id: &str) {
+        use crate::env_delivery::ManagedEnvVars;
+        match ManagedEnvVars::load(&state.db) {
+            Ok(mut managed) => {
+                let vars = managed.take_vars_for_provider(app_type.as_str(), id);
+                if !vars.is_empty() {
+                    let sink = crate::env_delivery::default_sink();
+                    for name in &vars {
+                        if let Err(e) = sink.remove(name) {
+                            log::warn!("删除供应商时移除环境变量 {name} 失败: {e}");
+                        }
+                    }
+                    if let Err(e) = managed.save(&state.db) {
+                        log::warn!("删除供应商时更新 managed_env_vars 失败: {e}");
+                    }
+                    if let Err(e) = sink.broadcast() {
+                        log::warn!("删除供应商后广播 WM_SETTINGCHANGE 失败: {e}");
+                    }
+                }
+            }
+            Err(e) => log::warn!("读取 managed_env_vars 以清理供应商失败: {e}"),
+        }
     }
 
     /// Remove provider from live config only (for additive mode apps like Pi)
@@ -420,7 +447,8 @@ impl ProviderService {
                 // no backfill needed (backfill is for exclusive mode apps like Claude/Codex/Gemini)
                 if !app_type.is_additive_mode() {
                     // Only backfill when switching to a different provider
-                    if let Ok(live_config) = read_live_settings(app_type.clone()) {
+                    if let Ok(live_config) = live::read_live_settings_for_backfill(app_type.clone())
+                    {
                         if let Some(mut current_provider) = providers.get(&current_id).cloned() {
                             // 切走前先把 live 里的可共享改动（含用户直接在应用内
                             // 装插件/加 hook/改偏好）同步进通用配置片段，再做剥离回填。
@@ -688,6 +716,20 @@ impl ProviderService {
         provider: &Provider,
         result: &mut SwitchResult,
     ) -> Result<Vec<(String, Zeroizing<String>)>, AppError> {
+        let mut warnings = Vec::new();
+        let pending = Self::provider_env_pairs(state, app_type, provider, &mut warnings)?;
+        result.warnings.extend(warnings);
+        Ok(pending)
+    }
+
+    /// 单一真源地计算「某供应商应投递的用户环境变量 (name → value)」。
+    /// 切换投递与内置「打开终端」共用，保证非当前供应商也能拿到自己的密钥（§5.3.4）。
+    pub(crate) fn provider_env_pairs(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        warnings: &mut Vec<String>,
+    ) -> Result<Vec<(String, Zeroizing<String>)>, AppError> {
         use crate::secrets::SecretTarget;
         let mut pending: Vec<(String, Zeroizing<String>)> = Vec::new();
         match app_type {
@@ -734,9 +776,7 @@ impl ProviderService {
                              relying on config-carried auth",
                             provider.id
                         );
-                        result
-                            .warnings
-                            .push(format!("codex_missing_api_key:{}", provider.id));
+                        warnings.push(format!("codex_missing_api_key:{}", provider.id));
                     }
                 }
             }
@@ -749,15 +789,11 @@ impl ProviderService {
                     }
                     Ok(None) => {
                         log::warn!("Pi provider {} has no api_key in SecretStore", provider.id);
-                        result
-                            .warnings
-                            .push(format!("pi_missing_api_key:{}", provider.id));
+                        warnings.push(format!("pi_missing_api_key:{}", provider.id));
                     }
                     Err(e) => {
                         log::warn!("Pi retrieve api_key failed for {}: {}", provider.id, e);
-                        result
-                            .warnings
-                            .push(format!("pi_retrieve_failed:{}", provider.id));
+                        warnings.push(format!("pi_retrieve_failed:{}", provider.id));
                     }
                 }
                 if let Some(headers) = provider
@@ -789,7 +825,7 @@ impl ProviderService {
                                 ));
                             }
                             Ok(None) => {
-                                result.warnings.push(format!(
+                                warnings.push(format!(
                                     "pi_missing_header:{}:{header_name}",
                                     provider.id
                                 ));
@@ -815,14 +851,31 @@ impl ProviderService {
         names: &[String],
     ) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
+        let provider = state
+            .db
+            .get_provider_by_id(provider_id, app_type.as_str())?
+            .ok_or_else(|| AppError::Message(format!("供应商 {provider_id} 不存在")))?;
         let sink = crate::env_delivery::default_sink();
         let sink = sink.as_ref();
         let mut managed = ManagedEnvVars::load(&state.db)?;
+
+        // 接管 = 用我方凭据覆盖外来变量并登记所有权；值与切换投递同源。
+        let mut warnings = Vec::new();
+        let pending = Self::provider_env_pairs(state, app_type, &provider, &mut warnings)?;
+        let mut wrote = false;
         for name in names {
             managed.register(name, app_type.as_str(), provider_id);
-            let _ = sink.get(name)?;
+            if let Some((_, value)) = pending.iter().find(|(k, _)| k == name) {
+                sink.set(name, value)?;
+                wrote = true;
+            }
         }
         managed.save(&state.db)?;
+        if wrote {
+            if let Err(e) = sink.broadcast() {
+                log::warn!("接管环境变量后广播失败: {e}");
+            }
+        }
         Ok(())
     }
 
@@ -980,74 +1033,6 @@ impl ProviderService {
         }
     }
 
-    /// 判断一个 env / 顶层配置键名是否为凭据/机密：凡命中一律不得写入共享的
-    /// 通用配置片段。**故意从严**——多剥一个非机密键只是它不被共享（可恢复的小
-    /// 不便），漏剥一个凭据则会把密钥注入到每个供应商（不可恢复的泄漏）。因此用
-    /// 模式匹配覆盖整类，而非枚举具体名字（枚举永远会漏掉下一个 `*_API_KEY`）。
-    ///
-    /// 覆盖：Anthropic / OpenRouter / Google / OpenAI / Gemini 等 `*_API_KEY`
-    /// （Claude provider 的凭据见 `Provider::resolve_usage_credentials`，确实支持
-    /// `OPENROUTER_API_KEY` / `GOOGLE_API_KEY` 等回退）、各类 `*_AUTH_TOKEN` /
-    /// 单数 `*_TOKEN`、AWS Bedrock / Vertex 凭据、以及通用 secret / password /
-    /// 私钥命名。
-    pub(crate) fn is_sensitive_config_key(name: &str) -> bool {
-        let upper = name.to_ascii_uppercase();
-
-        // 单数 `_TOKEN` 命中 AWS_SESSION_TOKEN 等，但**不**误伤复数 `_TOKENS`
-        // （CLAUDE_CODE_MAX_OUTPUT_TOKENS / MAX_THINKING_TOKENS 是正常可共享配置）。
-        const SENSITIVE_SUFFIXES: &[&str] = &[
-            // 裸 `_KEY` 是最常见的凭据写法（OPENAI_KEY / GROQ_KEY / XAI_KEY…），
-            // 必须单列：只枚举 `_API_KEY` / `_ACCESS_KEY` 这些子类，等于把最普通
-            // 的那一种漏在外面。下面几条 `_*_KEY` 被它蕴含，保留是为了说明覆盖面。
-            "_KEY",
-            "_API_KEY",
-            "_ACCESS_KEY",
-            "_ACCESS_KEY_ID",
-            "_KEY_ID",
-            "_PRIVATE_KEY",
-            // 不带分隔符的复合写法各走各的后缀：`_KEY` 够不着 `..._APIKEY`
-            // （倒数第四个字符是 I 不是下划线）。VOLC_ACCESSKEY 是火山引擎文档
-            // 里的正式变量名，本仓库就实现了火山 AK/SK 用量查询。
-            "_APIKEY",
-            "_ACCESSKEY",
-            "_SECRETKEY",
-            "_APITOKEN",
-            "_AUTH_TOKEN",
-            "_TOKEN",
-            // GITHUB_PAT / GITLAB_PAT 等 personal access token 的惯用写法，
-            // 既不含 TOKEN 也不含 KEY，前面每一条规则都够不着。
-            "_PAT",
-            // 口令类的常见缩写。`_PASS` 不会误伤 `*_BYPASS`（那个以 `_BYPASS`
-            // 结尾），`_PWD` 也不会误伤 shell 的 PWD / OLDPWD。
-            "_PWD",
-            "_PASS",
-            "_PASSPHRASE",
-            "_CREDS",
-        ];
-        const SENSITIVE_EXACT: &[&str] = &[
-            "APIKEY",
-            "API_KEY",
-            "TOKEN",
-            "SECRET",
-            "PASSWORD",
-            "CREDENTIALS",
-        ];
-        // contains：覆盖 AWS_SECRET_ACCESS_KEY / *_CLIENT_SECRET /
-        // GOOGLE_APPLICATION_CREDENTIALS / AWS_BEARER_TOKEN_BEDROCK 等变体。
-        const SENSITIVE_CONTAINS: &[&str] = &[
-            "SECRET",
-            "PASSWORD",
-            "PASSWD",
-            "CREDENTIAL",
-            "PRIVATE_KEY",
-            "BEARER_TOKEN",
-        ];
-
-        SENSITIVE_EXACT.contains(&upper.as_str())
-            || SENSITIVE_SUFFIXES.iter().any(|s| upper.ends_with(s))
-            || SENSITIVE_CONTAINS.iter().any(|c| upper.contains(c))
-    }
-
     /// Extract common config for Claude (JSON format)
     fn extract_claude_common_config(settings: &Value) -> Result<String, AppError> {
         let mut config = settings.clone();
@@ -1088,7 +1073,7 @@ impl ProviderService {
         if let Some(env) = config.get_mut("env").and_then(|v| v.as_object_mut()) {
             let sensitive: Vec<String> = env
                 .keys()
-                .filter(|k| Self::is_sensitive_config_key(k))
+                .filter(|k| crate::secrets::is_sensitive_config_key(k))
                 .cloned()
                 .collect();
             for key in ENV_PROVIDER_SPECIFIC_EXCLUDES {
@@ -1108,7 +1093,7 @@ impl ProviderService {
         if let Some(obj) = config.as_object_mut() {
             let sensitive: Vec<String> = obj
                 .keys()
-                .filter(|k| Self::is_sensitive_config_key(k))
+                .filter(|k| crate::secrets::is_sensitive_config_key(k))
                 .cloned()
                 .collect();
             for key in TOP_LEVEL_EXCLUDES {

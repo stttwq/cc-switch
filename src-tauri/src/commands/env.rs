@@ -1,7 +1,6 @@
 use crate::app_config::AppType;
-use crate::services::env_checker::{check_env_conflicts as check_conflicts, EnvConflict};
-use crate::services::env_manager::{
-    delete_env_vars as delete_vars, restore_from_backup, BackupInfo,
+use crate::services::env_checker::{
+    check_env_conflicts as check_conflicts, delete_env_vars as delete_vars, EnvConflict,
 };
 use crate::services::ProviderService;
 use crate::store::AppState;
@@ -14,16 +13,10 @@ pub fn check_env_conflicts(app: String) -> Result<Vec<EnvConflict>, String> {
     check_conflicts(&app)
 }
 
-/// Delete environment variables with backup
+/// Delete conflicting environment variables by name (originals are not retained)
 #[tauri::command]
-pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<BackupInfo, String> {
+pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
     delete_vars(conflicts)
-}
-
-/// Restore environment variables from backup file
-#[tauri::command]
-pub fn restore_env_backup(backup_path: String) -> Result<(), String> {
-    restore_from_backup(backup_path)
 }
 
 #[tauri::command]

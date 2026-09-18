@@ -21,6 +21,10 @@ Credentials (API keys and Base URLs) are stored only in **Windows Credential Man
 
 密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
 
+**Rolling back to a pre-migration version / 回滚到迁移前的旧版本.** The v18→v19 upgrade keeps one dated backup `~/.cc-switch/backups/pre-secrets-migration-*.db` that still contains the old plaintext schema; it is intentionally NOT auto-deleted. Overwriting `cc-switch.db` with it lets an older build read it normally. Extra `cc-switch/`-prefixed entries left in Windows Credential Manager are then harmless and can be removed manually from the Credential Manager control panel.
+
+v18→v19 升级会保留一份带时间戳的备份 `~/.cc-switch/backups/pre-secrets-migration-*.db`，其中仍是旧的明文 schema，且**刻意不自动删除**。用它覆盖 `cc-switch.db` 即可让旧版本正常读取；此时凭据管理器里多出的 `cc-switch/` 前缀条目无害，可在凭据管理器控制面板手动清理。
+
 ### The bundled renderer is inside the trust boundary / 打包的渲染进程属于信任边界之内
 
 The bundled WebView renderer is treated as a trusted component. This is a **scoping decision, supported by the facts below rather than derived from them** — the facts are what make the decision checkable, and if any ceases to hold the decision must be revisited. Verified against v3.18.0:
@@ -74,7 +78,7 @@ Inputs that genuinely cross a trust boundary:
 - Remote data rendered by the renderer (avatars) / 渲染进程展示的远程数据（头像）
 - Live config files on disk that a third party can write / 磁盘上可被第三方写入的 live 配置文件
 - Any path by which credentials (API keys, tokens) reach logs, telemetry, or shared config snippets / 凭据（API Key、令牌）进入日志、遥测或共享配置片段的任何路径
-- The build, release, signing and updater pipeline / 构建、发布、签名与更新链路
+- The build, release and signing pipeline / 构建、发布与签名链路
 
 ### Out of scope / 不在范围内
 

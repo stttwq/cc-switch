@@ -20,7 +20,6 @@ interface EditProviderDialogProps {
     originalId?: string;
   }) => Promise<void> | void;
   appId: AppId;
-  isProxyTakeover?: boolean; // 代理接管模式下不读取 live（避免显示被接管后的代理配置）
 }
 
 const asRecord = (value: unknown): Record<string, unknown> | null =>
@@ -87,7 +86,6 @@ export function EditProviderDialog({
   onOpenChange,
   onSubmit,
   appId,
-  isProxyTakeover = false,
 }: EditProviderDialogProps) {
   const { t } = useTranslation();
   const [isFormSubmitting, setIsFormSubmitting] = useState(false);
@@ -146,16 +144,6 @@ export function EditProviderDialog({
         return;
       }
 
-      // 代理接管模式：Live 配置已被代理改写，读取 live 会导致编辑界面展示代理地址/占位符等内容
-      // 因此直接回退到 SSOT（数据库）配置，避免用户困惑与误保存
-      if (isProxyTakeover) {
-        if (!cancelled) {
-          setLiveSettings(null);
-          setHasLoadedLive(true);
-        }
-        return;
-      }
-
       // Pi 的共享 models.json 由 catalog coordinator 拥有，没有逐供应商的
       // 通用 live 快照可以在这里替换 DB 聚合结果。
       if (appId === "pi") {
@@ -198,7 +186,7 @@ export function EditProviderDialog({
     return () => {
       cancelled = true;
     };
-  }, [open, provider?.id, appId, hasLoadedLive, isProxyTakeover]); // 只依赖 provider.id，不依赖整个 provider 对象
+  }, [open, provider?.id, appId, hasLoadedLive]); // 只依赖 provider.id，不依赖整个 provider 对象
 
   const initialSettingsConfig = useMemo(() => {
     const storedSettings = asRecord(provider?.settingsConfig);
@@ -335,7 +323,6 @@ export function EditProviderDialog({
         onSubmitReadyChange={handleSubmitReadyChange}
         initialData={initialData}
         showButtons={false}
-        isProxyTakeover={isProxyTakeover}
       />
     </FullScreenPanel>
   );

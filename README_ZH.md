@@ -5,7 +5,7 @@
 ### Claude Code、Codex 和 Pi 的全方位管理工具
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/farion1231/cc-switch/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
 
@@ -217,7 +217,7 @@ TeamoRouter 还提供企业级功能，包括集中账单、团队管理、BYOK�
 - **统一 MCP, SKILLS 管理** — 一个面板管理 Claude 和 Codex 的 MCP, SKILLS, 支持双向同步
 - **系统托盘快速切换** — 从托盘菜单即时切换供应商，无需打开完整应用
 - **云同步** — 通过 Dropbox、OneDrive、iCloud 或 WebDAV 服务器在不同设备之间同步供应商数据
-- **跨平台** — 基于 Tauri 2 构建的原生桌面应用，支持 Windows、macOS 和 Linux
+- **Windows 优先** — 基于 Tauri 2 构建的原生桌面应用；凭据管理依赖 Windows 凭据管理器，macOS/Linux 为尽力支持的自行构建版
 - **小工具** - 内置了多种小工具来解决首次安装登录确认、禁止签名、插件拓展同步等多种功能
 
 ## 界面预览
@@ -282,7 +282,7 @@ CC Switch 使用“通用配置片段”功能，在不同的供应商之间传�
 <details>
 <summary><strong>macOS 安装</strong></summary>
 
-CC Switch macOS 版本已通过 Apple 代码签名和公证，可直接下载安装，无需额外操作。推荐使用 `.dmg` 安装包。
+自凭据管理器版本起，官方仅提供 Windows 安装包：密钥与 Base URL 依赖 Windows 凭据管理器。macOS 版本为源码自行构建的尽力支持，无法使用凭据存储功能，请确认接受该限制后再安装。
 
 </details>
 
@@ -352,6 +352,8 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ## 下载安装
 
+> **支持范围**：自凭据管理器版本起，官方发布仅提供 Windows 安装包。凭据存储依赖 Windows 凭据管理器；自行构建的 macOS/Linux 版本无法使用凭据功能。下文的 macOS/Linux 说明针对历史版本，已不适用于当前版本。
+
 ### 系统要求
 
 - **Windows**：Windows 10 及以上
@@ -398,7 +400,7 @@ paru -S cc-switch-bin
 - `CC-Switch-v{版本号}-Linux.rpm`（Fedora/RHEL/openSUSE）
 - `CC-Switch-v{版本号}-Linux.AppImage`（通用）
 
-> **Flatpak**：官方 Release 不包含 Flatpak 包。如需使用，可从 `.deb` 自行构建 — 参见 [`flatpak/README.md`](flatpak/README.md)。
+> **Flatpak**：官方 Release 不再提供 Flatpak 包。
 
 <details>
 <summary><strong>架构总览</strong></summary>

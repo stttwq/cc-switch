@@ -5,7 +5,7 @@
 ### Claude Code、Codex、Pi のオールインワン管理ツール
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/farion1231/cc-switch/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
 
@@ -216,7 +216,7 @@ TeamoRouter は、集中請求、チーム管理、BYOK、スマートルーテ�
 - **統一 MCP・Skills 管理** -- 1 つのパネルで Claude と Codex の MCP サーバーと Skills を双方向同期で管理
 - **システムトレイでクイック切り替え** -- トレイメニューから即座にプロバイダを切り替え。アプリを開く必要なし
 - **クラウド同期** -- Dropbox、OneDrive、iCloud、または WebDAV サーバー経由でデバイス間のプロバイダデータを同期
-- **クロスプラットフォーム** -- Tauri 2 で構築された Windows、macOS、Linux 対応のネイティブデスクトップアプリ
+- **Windows ファースト** -- Tauri 2 で構築されたネイティブデスクトップアプリ。認証情報管理は Windows 資格情報マネージャーに依存するため、macOS/Linux ビルドはベストエフォートです
 - **便利ツール内蔵** -- 初回起動時のログイン確認、署名バイパス、プラグイン拡張の同期など、さまざまなユーティリティを搭載
 
 ## スクリーンショット
@@ -281,7 +281,7 @@ CC Switch には「共有設定スニペット」機能があり、APIキーや�
 <details>
 <summary><strong>macOS のインストールについて</strong></summary>
 
-CC Switch の macOS 版は Apple によるコード署名と公証が完了しています。直接ダウンロードしてインストールできます — 追加の手順は不要です。`.dmg` インストーラの使用を推奨します。
+認証情報マネージャー版以降、公式インストーラーは Windows のみです。API キーと Base URL は Windows 資格情報マネージャーが必要なため、自作の macOS ビルドでは認証情報の保存機能を利用できません。この制限を了承する場合のみ構築してください。
 
 </details>
 
@@ -349,6 +349,8 @@ CC_SWITCH_GDK_BACKEND=wayland ./CC-Switch-*.AppImage
 
 ## ダウンロード & インストール
 
+> **サポート範囲**: 認証情報マネージャー版以降、公式リリースは Windows インストーラーのみを提供します。資格情報は Windows 資格情報マネージャーに依存するため、自作の macOS/Linux ビルドでは認証情報機能を利用できません。以下の macOS/Linux 手順は過去バージョン向けの参考情報です。
+
 ### システム要件
 
 - **Windows**: Windows 10 以上
@@ -395,7 +397,7 @@ paru -S cc-switch-bin
 - `CC-Switch-v{version}-Linux.rpm`（Fedora/RHEL/openSUSE）
 - `CC-Switch-v{version}-Linux.AppImage`（汎用）
 
-> **Flatpak**：公式リリースには含まれていません。`.deb` から自分でビルドできます — 手順は [`flatpak/README.md`](flatpak/README.md) を参照してください。
+> **Flatpak**：公式リリースには含まれていません。
 
 <details>
 <summary><strong>アーキテクチャ概要</strong></summary>

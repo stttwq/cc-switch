@@ -197,7 +197,6 @@ export interface ProviderFormProps {
     };
   };
   showButtons?: boolean;
-  isProxyTakeover?: boolean;
 }
 
 export function ProviderForm(props: ProviderFormProps) {
@@ -217,7 +216,6 @@ function ProviderFormFull({
   onSubmittingChange,
   initialData,
   showButtons = true,
-  isProxyTakeover = false,
 }: ProviderFormProps) {
   const { t } = useTranslation();
   const isEditMode = Boolean(initialData);
@@ -1082,7 +1080,6 @@ function ProviderFormFull({
                 configValue={codexConfig}
                 providerName={form.watch("name")}
                 showRemoteCompaction={category !== "official"}
-                isProxyTakeover={isProxyTakeover}
                 onAuthChange={setCodexAuth}
                 onConfigChange={handleCodexConfigChange}
                 useCommonConfig={useCodexCommonConfigFlag}

@@ -15,15 +15,3 @@ export interface EnvConflict {
   /** 来源路径 (注册表路径或文件路径:行号) */
   sourcePath: string;
 }
-
-/**
- * 备份信息
- */
-export interface BackupInfo {
-  /** 备份文件路径 */
-  backupPath: string;
-  /** 备份时间戳 */
-  timestamp: string;
-  /** 被备份的环境变量冲突列表 */
-  conflicts: EnvConflict[];
-}

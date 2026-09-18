@@ -65,15 +65,17 @@ pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
         Ok(sanitized) => sanitized,
         Err(e) => {
             log::error!("Failed to sanitize Claude settings for live write: {}", e);
-            // Fallback: return a minimal safe config
+            // Fallback：只剥离敏感 env（密钥/Base URL/命中敏感规则的键），
+            // 保留用户的模型名等非敏感 env，而不是整块删除。绝不写密钥。
             let mut v = settings.clone();
             if let Some(obj) = v.as_object_mut() {
-                // Remove all potentially sensitive fields
                 obj.remove("api_format");
                 obj.remove("apiFormat");
                 obj.remove("openrouter_compat_mode");
                 obj.remove("openrouterCompatMode");
-                obj.remove("env");
+                if let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) {
+                    env.retain(|key, _| !super::live_sanitizer::is_claude_env_secret(key));
+                }
             }
             v
         }
@@ -1037,6 +1039,18 @@ pub fn sync_current_to_live(state: &AppState) -> Result<(), AppError> {
 /// Read current live settings for an app type (sanitized for frontend)
 /// Phase 5 S1: Strips sensitive fields before returning to IPC
 pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
+    // IPC / 前端可见路径：脱去全部凭据材料（原则 3.1-3 / §5.2.2-4）。
+    read_live_settings_with_auth(&app_type, true)
+}
+
+/// 内部回填专用：需要 live `auth.json` 里用户自己的 `OPENAI_API_KEY` / 登录态
+/// 原样读回，才能把它回填进被切走的供应商行；这条路径不经过 IPC，
+/// 脱敏只在 `read_live_settings`（前端命令）里做。
+pub(crate) fn read_live_settings_for_backfill(app_type: AppType) -> Result<Value, AppError> {
+    read_live_settings_with_auth(&app_type, false)
+}
+
+fn read_live_settings_with_auth(app_type: &AppType, strip_auth: bool) -> Result<Value, AppError> {
     match app_type {
         AppType::Codex => {
             let mut result = crate::codex_config::read_codex_live_settings()?;
@@ -1048,6 +1062,12 @@ pub fn read_live_settings(app_type: AppType) -> Result<Value, AppError> {
                     auth.remove("experimental_bearer_token");
                     auth.remove("bearer_token");
                     auth.remove("api_key");
+                    if strip_auth {
+                        // 前端 IPC：连用户自己的 API key 与 ChatGPT OAuth 登录态也不外泄。
+                        auth.remove("OPENAI_API_KEY");
+                        auth.remove("tokens");
+                        auth.remove("last_refresh");
+                    }
                 }
 
                 // Sanitize config text - remove bearer tokens and api keys

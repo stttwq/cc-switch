@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ClaudeIcon, CodexIcon, GeminiIcon } from "@/components/BrandIcons";
+import { ClaudeIcon, CodexIcon } from "@/components/BrandIcons";
 import { ArrowUpAZ, Search, Zap, Star, Heart } from "lucide-react";
 import type { ProviderPreset } from "@/config/claudeProviderPresets";
 import type { CodexProviderPreset } from "@/config/codexProviderPresets";
@@ -252,8 +252,6 @@ export function ProviderPresetSelector({
           return <ClaudeIcon size={14} />;
         case "codex":
           return <CodexIcon size={14} />;
-        case "gemini":
-          return <GeminiIcon size={14} />;
         case "generic":
           return <Zap size={14} />;
       }

@@ -5,7 +5,7 @@
 ### Der All-in-One-Manager für Claude Code, Codex & Pi
 
 [![Version](https://img.shields.io/github/v/release/farion1231/cc-switch?color=blue&label=version)](https://github.com/farion1231/cc-switch/releases)
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey.svg)](https://github.com/farion1231/cc-switch/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-blue.svg)](https://github.com/farion1231/cc-switch/releases)
 [![Built with Tauri](https://img.shields.io/badge/built%20with-Tauri%202-orange.svg)](https://tauri.app/)
 [![Downloads](https://img.shields.io/github/downloads/farion1231/cc-switch/total)](https://github.com/farion1231/cc-switch/releases/latest)
 
@@ -216,7 +216,7 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 - **Einheitliche MCP- & Skills-Verwaltung** — Ein Panel zur Verwaltung von MCP-Servern und Skills für Claude und Codex mit bidirektionaler Synchronisierung
 - **Schnellumschaltung über System-Tray** — Wechseln Sie Anbieter sofort über das Tray-Menü, ohne die vollständige App öffnen zu müssen
 - **Cloud-Synchronisierung** — Synchronisieren Sie Anbieterdaten geräteübergreifend über Dropbox, OneDrive, iCloud oder WebDAV-Server
-- **Plattformübergreifend** — Native Desktop-App für Windows, macOS und Linux, gebaut mit Tauri 2
+- **Windows zuerst** — Native Desktop-App mit Tauri 2; die vollständige Unterstützung von Zugangsdaten erfordert den Windows Credential Manager, macOS/Linux-Builds sind nur nach besten Möglichkeiten verfügbar
 - **Integrierte Hilfsprogramme** — Enthält diverse Hilfsprogramme für die Login-Bestätigung beim Erststart, das Umgehen von Signaturen, die Synchronisierung von Plugin-Erweiterungen und mehr
 
 ## Screenshots
@@ -281,7 +281,7 @@ CC Switch bietet eine Funktion „Gemeinsames Konfigurations-Snippet", um gemein
 <details>
 <summary><strong>Installation unter macOS</strong></summary>
 
-CC Switch für macOS ist von Apple code-signiert und notarisiert. Sie können es direkt herunterladen und installieren — es sind keine zusätzlichen Schritte erforderlich. Wir empfehlen die Verwendung des `.dmg`-Installationsprogramms.
+Offizielle Installer erscheinen derzeit nur für Windows: API-Schlüssel und Base-URLs erfordern den Windows Credential Manager. macOS-Builds sind nur nach besten Möglichkeiten aus der Quelle baubar und laufen ohne Speicher für Zugangsdaten — installieren Sie sie nur, wenn Sie diese Einschränkung akzeptieren.
 
 </details>
 
@@ -349,6 +349,8 @@ Ausführliche Anleitungen zu jeder Funktion finden Sie im **[Benutzerhandbuch](d
 
 ## Download & Installation
 
+> **Unterstützungsumfang**: Seit der Version mit Credential Manager enthalten die offiziellen Releases ausschließlich Windows-Installer. Zugangsdaten erfordern den Windows Credential Manager; selbst gebaute macOS/Linux-Versionen können die Zugangsdatenfunktionen nicht nutzen. Die folgenden macOS/Linux-Hinweise gelten nur für frühere Versionen.
+
 ### Systemanforderungen
 
 - **Windows**: Windows 10 und höher
@@ -395,7 +397,7 @@ Laden Sie den neuesten Linux-Build von der Seite [Releases](../../releases) heru
 - `CC-Switch-v{version}-Linux.rpm` (Fedora/RHEL/openSUSE)
 - `CC-Switch-v{version}-Linux.AppImage` (universell)
 
-> **Flatpak**: Nicht in den offiziellen Releases enthalten. Sie können es selbst aus dem `.deb` bauen — eine Anleitung finden Sie unter [`flatpak/README.md`](flatpak/README.md).
+> **Flatpak**: Nicht mehr in den offiziellen Releases enthalten.
 
 <details>
 <summary><strong>Architekturüberblick</strong></summary>

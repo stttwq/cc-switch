@@ -80,7 +80,7 @@ impl<'a> SecretExtractor<'a> {
         provider_id: &str,
         sanitized_config: &Value,
     ) -> Result<Value, AppError> {
-        let secrets = load_secrets(self.store, &self.app, provider_id).await?;
+        let secrets = load_secrets(self.store, self.db, &self.app, provider_id).await?;
         Ok(hydrate(&self.app, sanitized_config, &secrets))
     }
 
@@ -251,21 +251,43 @@ pub fn provider_target_prefix(app: &AppType, provider_id: &str) -> String {
 
 async fn load_secrets(
     store: &dyn SecretStore,
+    db: Option<&crate::database::Database>,
     app: &AppType,
     provider_id: &str,
 ) -> Result<ProviderSecrets, AppError> {
     let mut secrets = ProviderSecrets::new();
     if let Some(key) = store
-        .retrieve(&SecretTarget::provider_api_key(app.clone(), provider_id))
+        .get(&SecretTarget::provider_api_key(app.clone(), provider_id))
         .await?
     {
-        secrets = secrets.with_api_key(key);
+        secrets.api_key = Some(key);
     }
     if let Some(url) = store
-        .retrieve(&SecretTarget::provider_base_url(app.clone(), provider_id))
+        .get(&SecretTarget::provider_base_url(app.clone(), provider_id))
         .await?
     {
-        secrets = secrets.with_base_url(url);
+        secrets.base_url = Some(url);
+    }
+    // extra_env (Claude 敏感 env、Pi 敏感 header) 与写入侧对称回读。keyring 无法
+    // 枚举，变量名来自 known_secret_targets 里该 provider 的 `/env/` 条目。
+    if let Some(db) = db {
+        let prefix = format!(
+            "cc-switch/v1/provider/{}/{}/env/",
+            app.as_str(),
+            provider_id
+        );
+        for target_str in load_known_targets(db)? {
+            let Some(var) = target_str.strip_prefix(&prefix) else {
+                continue;
+            };
+            if var.is_empty() {
+                continue;
+            }
+            let target = SecretTarget::provider_env(app.clone(), provider_id, var);
+            if let Some(value) = store.get(&target).await? {
+                secrets.extra_env.insert(var.to_string(), value);
+            }
+        }
     }
     Ok(secrets)
 }
@@ -330,6 +352,19 @@ fn take_string_field(obj: &mut serde_json::Map<String, Value>, key: &str) -> Opt
     }
 }
 
+/// §6.4 代理接管时写入的 token 占位符，非真实密钥。
+fn is_proxy_takeover_placeholder(value: &str) -> bool {
+    value.trim().eq_ignore_ascii_case("PROXY_MANAGED")
+}
+
+/// §6.4 代理接管把 Base URL 指向本机回环端口，代理删除后即为死端点。
+fn is_local_proxy_takeover_url(url: &str) -> bool {
+    let lower = url.trim().to_ascii_lowercase();
+    ["127.0.0.1", "localhost", "0.0.0.0", "[::1]"]
+        .iter()
+        .any(|host| lower.contains(&format!("://{host}")))
+}
+
 fn extract_claude(raw: &Value, api_key_field: Option<&str>) -> Result<Extracted, AppError> {
     let mut stripped = raw.clone();
     let mut secrets = ProviderSecrets::new();
@@ -350,11 +385,19 @@ fn extract_claude(raw: &Value, api_key_field: Option<&str>) -> Result<Extracted,
     } else {
         auth_token.or(api_key)
     };
+    // §6.4 代理接管残留：旧版本接管时把占位符 PROXY_MANAGED 写进 token，
+    // 这不是真密钥，遇到即丢弃（凭据管理器与 live 都不落它）。
     if let Some(token) = chosen {
-        secrets = secrets.with_api_key(token);
+        if !is_proxy_takeover_placeholder(&token) {
+            secrets = secrets.with_api_key(token);
+        }
     }
+    // 接管会把 ANTHROPIC_BASE_URL 写成 http://127.0.0.1:<port>，本地代理删除后
+    // 这是死端点；识别并丢弃，避免迁移进凭据管理器后再投递给用户环境变量。
     if let Some(url) = take_string_field(env, "ANTHROPIC_BASE_URL") {
-        secrets = secrets.with_base_url(url);
+        if !is_local_proxy_takeover_url(&url) {
+            secrets = secrets.with_base_url(url);
+        }
     }
 
     let extra_keys: Vec<String> = env
@@ -616,6 +659,50 @@ mod tests {
             .unwrap();
         assert_eq!(restored["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-test-456");
         assert_eq!(restored["env"]["ANTHROPIC_MODEL"], "claude-3-opus");
+    }
+
+    #[test]
+    fn extract_claude_drops_proxy_takeover_residue() {
+        // §6.4：旧代理接管把占位符 token 与本机回环 Base URL 写进 env，
+        // 迁移时必须识别并丢弃，不能当成合法凭据入库/投递。
+        let raw = json!({ "env": {
+            "ANTHROPIC_AUTH_TOKEN": "PROXY_MANAGED",
+            "ANTHROPIC_BASE_URL": "http://127.0.0.1:34567"
+        }});
+        let extracted = SecretExtractor::extract("c-residue", &AppType::Claude, &raw).unwrap();
+        assert!(extracted.secrets.api_key.is_none());
+        assert!(extracted.secrets.base_url.is_none());
+    }
+
+    #[tokio::test]
+    async fn restore_reads_back_extra_env_symmetrically() {
+        // §5.2.3：写入侧 persist 了三类，读取侧 load_secrets 也必须回读 extra_env，
+        // 否则 hydrate 会静默丢掉 Claude 的额外密钥。需要 db 走 known_secret_targets。
+        let db = crate::database::Database::memory().unwrap();
+        let store = InMemorySecretStore::new();
+        let extractor = SecretExtractor::new(&store, AppType::Claude).with_db(&db);
+        let config = json!({ "env": {
+            "ANTHROPIC_AUTH_TOKEN": "sk-ant-main",
+            "OPENROUTER_API_KEY": "sk-or-secret"
+        }});
+        let (sanitized, secrets) = extractor
+            .extract_provider_secrets("p-env", &config)
+            .await
+            .unwrap();
+        assert_eq!(
+            secrets
+                .extra_env
+                .get("OPENROUTER_API_KEY")
+                .unwrap()
+                .as_str(),
+            "sk-or-secret"
+        );
+        let restored = extractor
+            .restore_provider_secrets("p-env", &sanitized)
+            .await
+            .unwrap();
+        assert_eq!(restored["env"]["OPENROUTER_API_KEY"], "sk-or-secret");
+        assert_eq!(restored["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-ant-main");
     }
 
     #[tokio::test]

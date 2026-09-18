@@ -22,13 +22,6 @@ export const DEFAULT_VISIBLE_APPS: VisibleApps = {
 /** App IDs shown in Skills panels. */
 export const SKILLS_APP_IDS: AppId[] = ["claude", "codex", "pi"];
 
-export type ProxyAppId = never;
-export const PROXY_APP_IDS: ProxyAppId[] = [];
-
-export function isProxyAppId(_appId: string): _appId is ProxyAppId {
-  return false;
-}
-
 export type AdditiveAppId = Extract<AppId, "pi">;
 export const ADDITIVE_APP_IDS: AdditiveAppId[] = ["pi"];
 

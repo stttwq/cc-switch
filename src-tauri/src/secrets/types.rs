@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 use zeroize::Zeroizing;
 
 /// Provider secrets extracted from settings_config
@@ -7,8 +7,9 @@ use zeroize::Zeroizing;
 pub struct ProviderSecrets {
     pub api_key: Option<Zeroizing<String>>,
     pub base_url: Option<Zeroizing<String>>,
-    /// Map of environment variable name to value (Claude extra_env, Pi sensitive headers)
-    pub extra_env: HashMap<String, Zeroizing<String>>,
+    /// Map of environment variable name to value (Claude extra_env, Pi sensitive headers).
+    /// BTreeMap so credential writes and orphan-cleanup targets are in a stable order.
+    pub extra_env: BTreeMap<String, Zeroizing<String>>,
 }
 
 impl ProviderSecrets {
@@ -16,7 +17,7 @@ impl ProviderSecrets {
         Self {
             api_key: None,
             base_url: None,
-            extra_env: HashMap::new(),
+            extra_env: BTreeMap::new(),
         }
     }
 

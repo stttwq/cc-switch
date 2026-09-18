@@ -1,48 +1,61 @@
-/// 敏感配置键判定：显式黑名单 + 后缀匹配。
-/// 不用子串 contains，避免误伤 apiKeyHelper / includeCoAuthoredBy / MAX_OUTPUT_TOKENS。
-const EXACT_SECRET_KEYS: &[&str] = &[
-    "ANTHROPIC_API_KEY",
-    "ANTHROPIC_AUTH_TOKEN",
-    "ANTHROPIC_BASE_URL",
-    "OPENAI_API_KEY",
-    "apiKey",
-    "api_key",
-    "OPENROUTER_API_KEY",
-    "Authorization",
-    "AUTH_TOKEN",
-    "ACCESS_TOKEN",
-    "BEARER_TOKEN",
-    "PASSWORD",
-    "SECRET",
-];
+/// 敏感配置键判定的**唯一实现**（计划 §5.2.3：mod.rs 那份搬到此处）。
+/// 覆盖 Anthropic / OpenAI / OpenRouter / Google / AWS Bedrock / Vertex 等
+/// `*_API_KEY`、裸 `*_KEY`、各类 `*_TOKEN`（单数，不误伤 `*_TOKENS` 共享配置）、
+/// `*_SECRET` / `*SECRET*`、口令类缩写与 `CREDENTIAL` / `PRIVATE_KEY` 等惯用命名。
+/// 用显式名单 + 后缀 + 有限子串，避免误伤 `apiKeyHelper` / `includeCoAuthoredBy` /
+/// `CLAUDE_CODE_MAX_OUTPUT_TOKENS` / `awsAuthRefresh`。
+pub fn is_sensitive_config_key(name: &str) -> bool {
+    let upper = name.to_ascii_uppercase();
 
-const SECRET_SUFFIXES: &[&str] = &[
-    "_api_key",
-    "_auth_token",
-    "_access_token",
-    "_secret_access_key",
-    "_secret",
-    "_password",
-    "_bearer_token",
-];
+    const SENSITIVE_SUFFIXES: &[&str] = &[
+        // 裸 `_KEY` 是最常见的凭据写法（OPENAI_KEY / GROQ_KEY / XAI_KEY…），
+        // 必须单列；下面几条 `_*_KEY` 被它蕴含，保留只为说明覆盖面。
+        "_KEY",
+        "_API_KEY",
+        "_ACCESS_KEY",
+        "_ACCESS_KEY_ID",
+        "_KEY_ID",
+        "_PRIVATE_KEY",
+        // 不带分隔符的复合写法各自成后缀：`_KEY` 够不着 `..._APIKEY`。
+        "_APIKEY",
+        "_ACCESSKEY",
+        "_SECRETKEY",
+        "_APITOKEN",
+        "_AUTH_TOKEN",
+        // 单数 `_TOKEN` 命中 AWS_SESSION_TOKEN 等，但**不**误伤复数 `_TOKENS`。
+        "_TOKEN",
+        // GITHUB_PAT / GITLAB_PAT 等 personal access token 惯用写法。
+        "_PAT",
+        // 口令类缩写：`_PASS` 不误伤 `*_BYPASS`，`_PWD` 不误伤 shell 的 PWD/OLDPWD。
+        "_PWD",
+        "_PASS",
+        "_PASSPHRASE",
+        "_CREDS",
+    ];
+    const SENSITIVE_EXACT: &[&str] = &[
+        "APIKEY",
+        "API_KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "CREDENTIALS",
+    ];
+    // contains：覆盖 AWS_SECRET_ACCESS_KEY / *_CLIENT_SECRET /
+    // GOOGLE_APPLICATION_CREDENTIALS / AWS_BEARER_TOKEN_BEDROCK，以及无分隔符的
+    // HTTP 认证头 `Authorization` / `Proxy-Authorization`（后缀规则够不着它们）。
+    const SENSITIVE_CONTAINS: &[&str] = &[
+        "SECRET",
+        "PASSWORD",
+        "PASSWD",
+        "CREDENTIAL",
+        "PRIVATE_KEY",
+        "BEARER_TOKEN",
+        "AUTHORIZATION",
+    ];
 
-/// Check if a configuration key name is sensitive (should be treated as secret)
-/// Used for Claude extra_env and Pi headers
-pub fn is_sensitive_config_key(key: &str) -> bool {
-    if EXACT_SECRET_KEYS
-        .iter()
-        .any(|known| key.eq_ignore_ascii_case(known))
-    {
-        return true;
-    }
-
-    let key_lower = key.to_lowercase();
-    if key_lower.ends_with("tokens") || key_lower.contains("max_output") {
-        return false;
-    }
-    SECRET_SUFFIXES
-        .iter()
-        .any(|suffix| key_lower.ends_with(suffix))
+    SENSITIVE_EXACT.contains(&upper.as_str())
+        || SENSITIVE_SUFFIXES.iter().any(|s| upper.ends_with(s))
+        || SENSITIVE_CONTAINS.iter().any(|c| upper.contains(c))
 }
 
 /// Check if a Pi apiKey or header value is a literal (not a variable reference)
@@ -143,6 +156,11 @@ mod tests {
         assert!(is_sensitive_config_key("PASSWORD"));
         assert!(is_sensitive_config_key("access_token"));
         assert!(is_sensitive_config_key("MY_PASSWORD"));
+        // 合并自 mod.rs 宽规则后新增覆盖：无分隔符认证头、裸 _KEY、PAT 等。
+        assert!(is_sensitive_config_key("Authorization"));
+        assert!(is_sensitive_config_key("Proxy-Authorization"));
+        assert!(is_sensitive_config_key("GITHUB_PAT"));
+        assert!(is_sensitive_config_key("AWS_SECRET_ACCESS_KEY"));
 
         assert!(!is_sensitive_config_key("MODEL_NAME"));
         assert!(!is_sensitive_config_key("BASE_PATH"));

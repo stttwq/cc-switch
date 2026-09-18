@@ -1,6 +1,5 @@
 pub mod config;
 pub mod env_checker;
-pub mod env_manager;
 pub mod http_client;
 pub mod mcp;
 pub mod model_fetch;

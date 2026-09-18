@@ -53,7 +53,7 @@ pub fn sanitize_claude_settings_for_live_write(settings: &Value) -> Result<Value
 /// - ANTHROPIC_AUTH_TOKEN
 /// - ANTHROPIC_BASE_URL (credential-bearing base URL)
 /// - Any other key matching sensitive patterns
-fn is_claude_env_secret(key: &str) -> bool {
+pub(crate) fn is_claude_env_secret(key: &str) -> bool {
     // Explicit blacklist for Claude env keys per plan 5.3.1
     const CLAUDE_SECRET_ENV_KEYS: &[&str] = &[
         "ANTHROPIC_API_KEY",

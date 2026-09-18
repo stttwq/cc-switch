@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { EnvConflict, BackupInfo } from "@/types/env";
+import type { EnvConflict } from "@/types/env";
 
 /**
  * 环境变量管理 API
@@ -64,8 +64,8 @@ export function parseEnvConflictError(
 
 /**
  * 检查指定应用的环境变量冲突
- * @param appType 应用类型 ("claude" | "codex" | "gemini" | "grokbuild")
- * @returns 环境变量冲突列表
+ * @param appType 应用类型 ("claude" | "codex")
+ * @returns 环境变量冲突列表（值已脱敏为末 4 位）
  */
 export async function checkEnvConflicts(
   appType: string,
@@ -74,22 +74,12 @@ export async function checkEnvConflicts(
 }
 
 /**
- * 删除指定的环境变量 (会自动备份)
+ * 按名字删除选中的冲突环境变量（原值不做备份、不保留）
  * @param conflicts 要删除的环境变量冲突列表
- * @returns 备份信息
+ * @returns 实际删除的变量数量
  */
-export async function deleteEnvVars(
-  conflicts: EnvConflict[],
-): Promise<BackupInfo> {
-  return invoke<BackupInfo>("delete_env_vars", { conflicts });
-}
-
-/**
- * 从备份文件恢复环境变量
- * @param backupPath 备份文件路径
- */
-export async function restoreEnvBackup(backupPath: string): Promise<void> {
-  return invoke<void>("restore_env_backup", { backupPath });
+export async function deleteEnvVars(conflicts: EnvConflict[]): Promise<number> {
+  return invoke<number>("delete_env_vars", { conflicts });
 }
 
 /**
@@ -99,7 +89,7 @@ export async function restoreEnvBackup(backupPath: string): Promise<void> {
 export async function checkAllEnvConflicts(): Promise<
   Record<string, EnvConflict[]>
 > {
-  const apps = ["claude", "codex", "gemini", "grokbuild"];
+  const apps = ["claude", "codex"];
   const results: Record<string, EnvConflict[]> = {};
 
   await Promise.all(

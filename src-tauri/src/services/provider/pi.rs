@@ -159,6 +159,7 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
         }
         return Err(error);
     }
+    ProviderService::release_provider_managed_env(state, &app_type, id);
     Ok(())
 }
 
@@ -182,6 +183,8 @@ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
         }
         return Err(error);
     }
+    // 从 live 移除后不再持有该供应商的环境变量（DB 行保留，下次启用会重新投递）。
+    ProviderService::release_provider_managed_env(state, &app_type, id);
     Ok(())
 }
 

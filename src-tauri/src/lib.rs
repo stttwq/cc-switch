@@ -1134,7 +1134,6 @@ pub fn run() {
             // Environment variable management
             commands::check_env_conflicts,
             commands::delete_env_vars,
-            commands::restore_env_backup,
             commands::env_delivery_conflicts,
             commands::env_delivery_adopt,
             // Skill management (v3.10.0+ unified)

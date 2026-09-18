@@ -42,8 +42,8 @@ describe("GlobalProxySettings", () => {
     const urlInput = screen.getByPlaceholderText(
       "http://127.0.0.1:7890 / socks5://127.0.0.1:1080",
     );
-    // URL 对象会在末尾添加斜杠
-    await waitFor(() => expect(urlInput).toHaveValue("http://127.0.0.1:7890/"));
+    // 组件不再经 URL 对象解析（D10 去用户名密码后按原样展示）
+    await waitFor(() => expect(urlInput).toHaveValue("http://127.0.0.1:7890"));
   });
 
   it("saves proxy URL when save button is clicked", async () => {
@@ -71,7 +71,7 @@ describe("GlobalProxySettings", () => {
     );
 
     // Wait for initial value to load
-    await waitFor(() => expect(urlInput).toHaveValue("http://127.0.0.1:7890/"));
+    await waitFor(() => expect(urlInput).toHaveValue("http://127.0.0.1:7890"));
 
     // Click clear button
     const clearButton = screen.getByTitle("settings.globalProxy.clear");

@@ -1,6 +1,6 @@
 # CC Switch User Manual
 
-> All-in-One Assistant for Claude Code / Claude Desktop / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes
+> All-in-One Assistant for Claude Code / Codex / Pi
 
 ## Table of Contents
 
@@ -18,23 +18,13 @@ CC Switch User Manual
 │   ├── 2.1 Add Provider
 │   ├── 2.2 Switch Provider
 │   ├── 2.3 Edit Provider
-│   ├── 2.4 Sort & Duplicate
-│   ├── 2.5 Usage Query
-│   └── 2.6 Claude Desktop
+│   └── 2.4 Sort & Duplicate
 │
 ├── 3. Extensions
 │   ├── 3.1 MCP Server Management
 │   ├── 3.2 Prompts Management
 │   ├── 3.3 Skills Management
-│   ├── 3.4 Session Manager
-│   └── 3.5 Workspace & Memory
-│
-├── 4. Proxy & High Availability
-│   ├── 4.1 Proxy Service
-│   ├── 4.2 App Takeover
-│   ├── 4.3 Failover
-│   ├── 4.4 Usage Statistics
-│   └── 4.5 Model Test
+│   └── 3.4 Session Manager
 │
 └── 5. FAQ
     ├── 5.1 Configuration Files
@@ -62,8 +52,6 @@ CC Switch User Manual
 | [2.2-switch.md](./2-providers/2.2-switch.md) | Main UI switching, tray switching, activation methods |
 | [2.3-edit.md](./2-providers/2.3-edit.md) | Edit configuration, modify API Key, backfill mechanism |
 | [2.4-sort-duplicate.md](./2-providers/2.4-sort-duplicate.md) | Drag-to-reorder, duplicate provider, delete |
-| [2.5-usage-query.md](./2-providers/2.5-usage-query.md) | Usage query, remaining balance, multi-plan display |
-| [2.6-claude-desktop.md](./2-providers/2.6-claude-desktop.md) | Claude Desktop third-party providers, direct mode, and model mapping |
 
 ### 3. Extensions
 
@@ -73,7 +61,6 @@ CC Switch User Manual
 | [3.2-prompts.md](./3-extensions/3.2-prompts.md) | Create presets, activate/switch, smart backfill |
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | Discover skills, install/uninstall, repository management |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | Session Manager: browse, search, resume, delete sessions |
-| [3.5-workspace.md](./3-extensions/3.5-workspace.md) | Workspace files and daily memory (OpenClaw) |
 
 ### 4. Credentials
 
@@ -92,7 +79,6 @@ Secrets live in Windows Credential Manager and are delivered via user environmen
 - **New users**: Start with [1.1 Introduction](./1-getting-started/1.1-introduction.md)
 - **Installation issues**: See [1.2 Installation Guide](./1-getting-started/1.2-installation.md)
 - **Configure providers**: See [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Use Claude Desktop**: See [2.6 Claude Desktop](./2-providers/2.6-claude-desktop.md)
 - **Credentials**: See “Credentials” above
 - **Having trouble**: See [5.2 FAQ](./5-faq/5.2-questions.md)
 
@@ -109,14 +95,11 @@ Secrets live in Windows Credential Manager and are delivered via user environmen
 - **Provider and model refresh**: new partner presets, refreshed default models and pricing, Claude Opus 4.8 defaults, and GPT 5.5 defaults where applicable
 - **Routing support badges**: Claude Code / Codex provider cards indicate whether a provider can be served through Local Routing
 - **Codex OAuth live model discovery**: ChatGPT Codex providers fetch available models from the ChatGPT backend on demand
-- **Filter-driven Usage Hero**: shows cache-normalized real total tokens and cache hit rate, updating with date / provider / model filters — see [4.4 Usage Statistics](./4-proxy/4.4-usage.md)
 - **Lightweight Mode**: Destroys the main window when minimizing to tray — near-zero idle footprint. See [1.5 Personalization](./1-getting-started/1.5-settings.md)
-- **Quota & Balance Display**: Official subscriptions (Claude/Codex/Gemini/Copilot/Codex OAuth) auto-display quotas; Token Plan and third-party balances use built-in templates with one-click enable — see [2.5 Usage Query](./2-providers/2.5-usage-query.md)
 - **Codex OAuth Reverse Proxy**: Reuse your ChatGPT account's Codex service inside Claude Code — see [2.1 Add Provider](./2-providers/2.1-add.md)
 - **Per-App Tray Submenus**: Claude / Codex / Gemini submenus show the current provider and available usage summaries — see [2.2 Switch Provider](./2-providers/2.2-switch.md)
 - **Skills Discovery & Batch Updates**: SHA-256 update detection, batch updates, skills.sh public registry search — see [3.3 Skills Management](./3-extensions/3.3-skills.md)
 - **Full URL Endpoint Mode**: Advanced option to treat `base_url` as the full upstream endpoint — see [2.1 Add Provider](./2-providers/2.1-add.md)
-- **OpenCode / OpenClaw / Hermes Stream Check Coverage**: Stream Check covers Claude / Codex / Gemini / OpenCode / OpenClaw / Hermes — see [4.5 Model Test](./4-proxy/4.5-model-test.md)
 
 ## Contributing
 
