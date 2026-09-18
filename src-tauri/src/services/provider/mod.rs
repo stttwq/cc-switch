@@ -44,7 +44,38 @@ pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
             expected.push(crate::secrets::provider_target_prefix(&app, id));
         }
     }
+    // §5.4：应用级条目（WebDAV / S3）不在任何 provider 前缀下，且 keyring 无法
+    // 枚举，known_secret_targets 也不覆盖它们 → 这里按附录 B 的固定名字直接探测，
+    // 对应同步配置已不存在时才判定为孤儿。
+    let settings = crate::settings::get_settings();
+    let app_level: [(crate::secrets::SecretTarget, bool); 3] = {
+        let has_webdav = settings.webdav_sync.is_some();
+        let has_s3 = settings.s3_sync.is_some();
+        [
+            (
+                crate::secrets::SecretTarget::app("webdav", "password"),
+                has_webdav,
+            ),
+            (
+                crate::secrets::SecretTarget::app("s3", "access_key_id"),
+                has_s3,
+            ),
+            (
+                crate::secrets::SecretTarget::app("s3", "secret_access_key"),
+                has_s3,
+            ),
+        ]
+    };
     let mut removed = 0;
+    for (target, configured) in app_level {
+        if configured {
+            continue;
+        }
+        match futures::executor::block_on(state.secrets.delete(&target)) {
+            Ok(()) => removed += 1,
+            Err(e) => log::warn!("清理应用级孤儿凭据失败 {}: {e}", target.to_target_string()),
+        }
+    }
     let mut kept = Vec::new();
     for target_str in targets.drain(..) {
         let still_needed = expected.iter().any(|prefix| target_str.starts_with(prefix));
@@ -207,7 +238,11 @@ impl ProviderService {
         strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
 
         // Save to database
-        state.db.save_provider(app_type.as_str(), &provider)?;
+        if let Err(e) = state.db.save_provider(app_type.as_str(), &provider) {
+            // §5.4：写 DB 失败 → best-effort 撤掉刚写入的凭据条目，不留孤儿。
+            delete_provider_secrets(state, &app_type, &provider.id);
+            return Err(e);
+        }
 
         // For other apps: Check if sync is needed (if this is current provider, or no current provider)
         let current = state.db.get_current_provider(app_type.as_str())?;
@@ -313,7 +348,11 @@ impl ProviderService {
 
         strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
         // Save to database
-        state.db.save_provider(app_type.as_str(), &provider)?;
+        if let Err(e) = state.db.save_provider(app_type.as_str(), &provider) {
+            // §5.4：写 DB 失败 → best-effort 撤掉刚写入的凭据条目，不留孤儿。
+            delete_provider_secrets(state, &app_type, &provider.id);
+            return Err(e);
+        }
 
         if is_current {
             write_live_with_common_config_for_state(state, &app_type, &provider)?;
@@ -468,6 +507,14 @@ impl ProviderService {
                                     &current_provider,
                                     live_config,
                                 );
+                            // §3.1-5 / §5.4-③：回填是密钥进入 DB 的入口之一，
+                            // 必须先过提取器——live 里用户手改的字面量密钥剥进
+                            // 凭据管理器，DB 行只留 stripped 部分。
+                            strip_and_store_provider_secrets(
+                                state,
+                                &app_type,
+                                &mut current_provider,
+                            )?;
                             if let Err(e) =
                                 state.db.save_provider(app_type.as_str(), &current_provider)
                             {
@@ -493,16 +540,41 @@ impl ProviderService {
 
             Self::preflight_env_delivery(state, &app_type, provider)?;
 
+            // §5.4：顺序是 ⑤ 投递环境变量 → ⑥ 写 live → ⑦ 移动 is_current。
+            // 这样 ⑥ 失败时 current 还没动，可以撤销 ⑤ 回到切换前状态；
+            // 反过来（先移动 current 再写 live）会让下一次切换把旧 live
+            // 回填进新供应商的行。
+            let previous_current = if app_type.is_additive_mode() {
+                None
+            } else {
+                crate::settings::get_effective_current_provider(&state.db, &app_type)?
+            };
+
+            Self::deliver_env_credentials(state, &app_type, provider, &mut result)?;
+
+            if let Err(e) = write_live_with_common_config_for_state(state, &app_type, provider) {
+                // ⑥ 失败 → 回滚 ⑤：撤下刚写入的变量，并把上一个当前供应商的变量投回去。
+                Self::undo_env_delivery(state, &app_type, provider);
+                if let Some(prev_id) = previous_current.as_deref() {
+                    if prev_id != id {
+                        if let Some(prev) = providers.get(prev_id) {
+                            let mut discard = SwitchResult::default();
+                            if let Err(re) =
+                                Self::deliver_env_credentials(state, &app_type, prev, &mut discard)
+                            {
+                                log::warn!("回滚投递上一个供应商 {prev_id} 的环境变量失败: {re}");
+                            }
+                        }
+                    }
+                }
+                return Err(e);
+            }
+
             // Additive mode apps skip setting is_current (no such concept).
             if !app_type.is_additive_mode() {
                 crate::settings::set_current_provider(&app_type, Some(id))?;
                 state.db.set_current_provider(app_type.as_str(), id)?;
             }
-
-            write_live_with_common_config_for_state(state, &app_type, provider)?;
-
-            // Deliver credentials via environment variables
-            Self::deliver_env_credentials(state, &app_type, provider, &mut result)?;
         }
         // Third-party dual of the block above: with preservation off, the
         // config-only write is expected to delete auth.json. A deletion
@@ -698,6 +770,9 @@ impl ProviderService {
         }
 
         for (name, value) in pending {
+            // S2：投递给用户环境变量（含 CC_SWITCH_*）的值登记进会话密钥表，
+            // 之后任何日志与导出文本命中它都会被脱敏 / 拦下。
+            crate::secrets::scan::note_session_secret(value.as_str());
             sink.set(&name, &value)?;
             managed.register(&name, app_type.as_str(), &provider.id);
         }
@@ -708,6 +783,32 @@ impl ProviderService {
         }
 
         Ok(())
+    }
+
+    /// §5.4：live 写入失败后撤销刚投递的变量（含登记），避免半态。
+    fn undo_env_delivery(state: &AppState, app_type: &AppType, provider: &Provider) {
+        use crate::env_delivery::ManagedEnvVars;
+
+        let sink = crate::env_delivery::default_sink();
+        let mut managed = match ManagedEnvVars::load(&state.db) {
+            Ok(managed) => managed,
+            Err(e) => {
+                log::warn!("回滚环境变量投递失败（读取登记）: {e}");
+                return;
+            }
+        };
+        let names = managed.take_vars_for_provider(app_type.as_str(), &provider.id);
+        for name in &names {
+            if let Err(e) = sink.remove(name) {
+                log::warn!("回滚环境变量投递失败（移除 {name}）: {e}");
+            }
+        }
+        if let Err(e) = managed.save(&state.db) {
+            log::warn!("回滚环境变量投递失败（写登记）: {e}");
+        }
+        if let Err(e) = sink.broadcast() {
+            log::warn!("回滚环境变量投递后广播失败: {e}");
+        }
     }
 
     fn collect_pending_env(

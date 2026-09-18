@@ -12,9 +12,3 @@ pub use sink::EnvSink;
 
 #[cfg(test)]
 pub use sink::InMemoryEnvSink;
-
-#[cfg(target_os = "windows")]
-#[cfg(not(target_os = "windows"))]
-pub use sink::UnsupportedEnvSink;
-#[allow(unused_imports)]
-pub use sink::WindowsUserEnvSink;

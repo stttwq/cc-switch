@@ -309,6 +309,13 @@ function newModel(): PiModelDraft {
 
 type PiThinkingLevelMode = "default" | "unsupported" | "value";
 
+/** 模型级 baseUrl（Pi schema 允许，但本产品只支持供应商级）。 */
+function modelBaseUrlValue(model: PiModelDraft): string {
+  return typeof model.passthrough.baseUrl === "string"
+    ? model.passthrough.baseUrl.trim()
+    : "";
+}
+
 function thinkingLevelMode(
   map: PiThinkingLevelMap,
   level: PiThinkingLevel,
@@ -1171,10 +1178,20 @@ export function PiProviderForm({
           typeof model.passthrough.api === "string"
             ? model.passthrough.api.trim()
             : "";
-        const modelBaseUrl =
-          typeof model.passthrough.baseUrl === "string"
-            ? model.passthrough.baseUrl.trim()
-            : "";
+        const modelBaseUrl = modelBaseUrlValue(model);
+        // 计划 §5.2.3：模型级 baseUrl 不参与密钥提取，也不允许在这里新增或改写；
+        // 导入配置中原有的值继续原样保留。
+        const keptInitialBaseUrl = initialModels.some(
+          (initial) =>
+            initial.id === id && modelBaseUrlValue(initial) === modelBaseUrl,
+        );
+        if (modelBaseUrl && !keptInitialBaseUrl) {
+          throw new PiFormValidationError(
+            t("pi.form.modelBaseUrlUnsupported"),
+            `#pi-model-id-${model.key}`,
+            true,
+          );
+        }
         // Existing explicit nodes may be partial overrides of a Pi built-in
         // provider. Pi inherits the built-in transport in that case, so only
         // require a complete transport when CC Switch creates a new provider.
@@ -1218,7 +1235,7 @@ export function PiProviderForm({
             validateAbsoluteHttpUrl(
               baseUrl.trim(),
               t("pi.form.absoluteHttpUrlRequired", {
-                label: t("opencode.baseUrl", { defaultValue: "Base URL" }),
+                label: t("pi.form.baseUrl", { defaultValue: "Base URL" }),
               }),
             ),
           "#pi-provider-base-url",
@@ -1374,11 +1391,11 @@ export function PiProviderForm({
                     />
                     <p className="text-xs text-muted-foreground">
                       {isEdit
-                        ? t("opencode.providerKeyLockedHint", {
+                        ? t("pi.form.providerKeyLockedHint", {
                             defaultValue:
                               "该供应商已添加到应用配置中，供应商标识不可修改",
                           })
-                        : t("opencode.providerKeyHint", {
+                        : t("pi.form.providerKeyHint", {
                             defaultValue:
                               "配置文件中的唯一标识符，只能使用小写字母、数字和连字符",
                           })}
@@ -1389,7 +1406,7 @@ export function PiProviderForm({
             />
 
             <Field
-              label={t("opencode.npmPackage", {
+              label={t("pi.form.apiFormat", {
                 defaultValue: "接口格式",
               })}
               htmlFor="pi-provider-api-select"
@@ -1410,7 +1427,7 @@ export function PiProviderForm({
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                {t("opencode.npmPackageHint", {
+                {t("pi.form.apiFormatHint", {
                   defaultValue: "选择 AI 服务的 API 接口格式",
                 })}
               </p>
@@ -1440,13 +1457,13 @@ export function PiProviderForm({
             <div className="space-y-2">
               <EndpointField
                 id="pi-provider-base-url"
-                label={t("opencode.baseUrl", { defaultValue: "Base URL" })}
+                label={t("pi.form.baseUrl", { defaultValue: "Base URL" })}
                 value={baseUrl}
                 onChange={handleBaseUrlChange}
                 placeholder="https://api.example.com/v1"
               />
               <p className="text-xs text-muted-foreground">
-                {t("opencode.baseUrlHint", {
+                {t("pi.form.baseUrlHint", {
                   defaultValue: "自定义 API 端点地址",
                 })}
               </p>
@@ -1479,7 +1496,7 @@ export function PiProviderForm({
             >
               <div className="flex items-center justify-between gap-3">
                 <FormLabel>
-                  {t("opencode.models", { defaultValue: "模型配置" })}
+                  {t("pi.form.models", { defaultValue: "模型配置" })}
                 </FormLabel>
                 <div className="flex gap-1">
                   <Button
@@ -1980,10 +1997,15 @@ export function PiProviderForm({
               )}
 
               <p className="text-xs text-muted-foreground">
-                {t("opencode.modelsHint", {
+                {t("pi.form.modelsHint", {
                   defaultValue: "配置可用的模型及其显示名称。",
                 })}
               </p>
+              {models.some((model) => modelBaseUrlValue(model).length > 0) && (
+                <p className="text-xs leading-relaxed text-destructive">
+                  {t("pi.form.modelBaseUrlUnsupported")}
+                </p>
+              )}
             </div>
           </fieldset>
         )}

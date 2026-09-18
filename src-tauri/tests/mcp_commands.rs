@@ -55,9 +55,28 @@ fn import_default_config_claude_persists_provider() {
         .expect("get current provider");
     assert_eq!(current_id.as_deref(), Some("default"));
     let default_provider = providers.get("default").expect("default provider");
+    // §3.1-5：live 回填同样是凭据进入 DB 的入口，导入后 DB 行必须已剥离，
+    // 密钥与 Base URL 只在凭据管理器里（测试用内存实现）。
     assert_eq!(
-        default_provider.settings_config, settings,
-        "default provider should capture live settings"
+        default_provider.settings_config,
+        json!({ "env": {} }),
+        "default provider should capture live settings minus credentials"
+    );
+    let stored_key = futures::executor::block_on(state.secrets.get(
+        &cc_switch_lib::secrets::SecretTarget::provider_api_key(AppType::Claude, "default"),
+    ))
+    .expect("read api key from secret store");
+    assert_eq!(
+        stored_key.as_deref().map(|key| key.as_str()),
+        Some("test-key")
+    );
+    let stored_url = futures::executor::block_on(state.secrets.get(
+        &cc_switch_lib::secrets::SecretTarget::provider_base_url(AppType::Claude, "default"),
+    ))
+    .expect("read base url from secret store");
+    assert_eq!(
+        stored_url.as_deref().map(|url| url.as_str()),
+        Some("https://api.test")
     );
 
     // 验证数据已持久化到数据库（v3.7.0+ 使用 SQLite 而非 config.json）

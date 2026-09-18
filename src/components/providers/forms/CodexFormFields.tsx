@@ -65,9 +65,11 @@ interface CodexFormFieldsProps {
   websiteUrl: string;
   isPartner?: boolean;
   partnerPromotionKey?: string;
+  /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显、给末 4 位提示 */
+  apiKeyConfiguredStatus?: { present: boolean; hint: string | null } | null;
 
   // Base URL
-  shouldShowSpeedTest: boolean;
+  isNonOfficialCategory: boolean;
   codexBaseUrl: string;
   onBaseUrlChange: (url: string) => void;
   isFullUrl: boolean;
@@ -324,7 +326,8 @@ export function CodexFormFields({
   websiteUrl,
   isPartner,
   partnerPromotionKey,
-  shouldShowSpeedTest,
+  apiKeyConfiguredStatus,
+  isNonOfficialCategory,
   codexBaseUrl,
   onBaseUrlChange,
   isFullUrl,
@@ -579,6 +582,7 @@ export function CodexFormFields({
         websiteUrl={websiteUrl}
         isPartner={isPartner}
         partnerPromotionKey={partnerPromotionKey}
+        configuredStatus={apiKeyConfiguredStatus}
         placeholder={{
           official: t("providerForm.codexOfficialNoApiKey", {
             defaultValue: "官方供应商无需 API Key",
@@ -590,7 +594,7 @@ export function CodexFormFields({
       />
 
       {/* Codex Base URL 输入框 */}
-      {shouldShowSpeedTest && (
+      {isNonOfficialCategory && (
         <EndpointField
           id="codexBaseUrl"
           label={t("codexConfig.apiUrlLabel")}
@@ -705,9 +709,9 @@ export function CodexFormFields({
           )}
           <CollapsibleContent className="space-y-3 pt-3">
             {/* 上游格式 —— Chat 需开启路由接管（走代理转换），Responses 原生直连。
-                沿用 shouldShowSpeedTest 门控，cloud_provider 保持不可切换；
+                沿用 isNonOfficialCategory 门控，cloud_provider 保持不可切换；
                 xAI OAuth 托管预设格式钉死 Responses，不可切换。 */}
-            {shouldShowSpeedTest && (
+            {isNonOfficialCategory && (
               <div className="space-y-3">
                 <div className="space-y-1.5">
                   <FormLabel htmlFor="codex-upstream-format">
@@ -857,7 +861,8 @@ export function CodexFormFields({
               <div
                 className={cn(
                   "space-y-3",
-                  shouldShowSpeedTest && "border-t border-border-default pt-3",
+                  isNonOfficialCategory &&
+                    "border-t border-border-default pt-3",
                 )}
               >
                 <div className="space-y-2">
@@ -972,7 +977,8 @@ export function CodexFormFields({
               <div
                 className={cn(
                   "space-y-4",
-                  (shouldShowSpeedTest || (isChatFormat && canEditReasoning)) &&
+                  (isNonOfficialCategory ||
+                    (isChatFormat && canEditReasoning)) &&
                     "border-t border-border-default pt-3",
                 )}
               >

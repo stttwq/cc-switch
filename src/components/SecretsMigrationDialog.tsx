@@ -22,6 +22,9 @@ interface MigratedProviderInfo {
 interface MigrationReport {
   migrated_providers: MigratedProviderInfo[];
   errors: string[];
+  warnings?: string[];
+  dropped_codex_oauth?: string[];
+  live_reapply_failures?: string[];
 }
 
 interface BackupInfo {
@@ -76,6 +79,18 @@ export function SecretsMigrationDialog() {
     }
   };
 
+  // §6.4 / §6.5：live 重写失败项提供重试——重新置位标志，下次启动自动补完。
+  const retryLiveReapply = async () => {
+    setBusy(true);
+    try {
+      await invoke("retry_live_reapply");
+    } catch (error) {
+      console.error("[SecretsMigrationDialog] retry", error);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (!report) return null;
 
   return (
@@ -105,6 +120,41 @@ export function SecretsMigrationDialog() {
               </li>
             ))}
           </ul>
+          {report.warnings && report.warnings.length > 0 && (
+            <div className="space-y-1">
+              <p className="text-sm text-muted-foreground">
+                {t("secretsMigration.warningsTitle")}
+              </p>
+              <ul className="max-h-24 overflow-auto text-xs list-disc pl-5 text-muted-foreground">
+                {report.warnings.map((w) => (
+                  <li key={w}>{w}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {report.dropped_codex_oauth &&
+            report.dropped_codex_oauth.length > 0 && (
+              <p className="text-sm text-amber-600 dark:text-amber-400">
+                {t("secretsMigration.codexLogin", {
+                  numProviders: report.dropped_codex_oauth.length,
+                })}
+              </p>
+            )}
+          {report.live_reapply_failures &&
+            report.live_reapply_failures.length > 0 && (
+              <div className="space-y-1">
+                <p className="text-sm text-destructive">
+                  {t("secretsMigration.liveFailures", {
+                    count: report.live_reapply_failures.length,
+                  })}
+                </p>
+                <ul className="max-h-24 overflow-auto text-xs break-all list-disc pl-5 text-muted-foreground">
+                  {report.live_reapply_failures.map((f) => (
+                    <li key={f}>{f}</li>
+                  ))}
+                </ul>
+              </div>
+            )}
           {backups.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm">{t("secretsMigration.backupsTitle")}</p>
@@ -117,6 +167,16 @@ export function SecretsMigrationDialog() {
           )}
         </div>
         <DialogFooter>
+          {report.live_reapply_failures &&
+            report.live_reapply_failures.length > 0 && (
+              <Button
+                variant="outline"
+                disabled={busy}
+                onClick={() => void retryLiveReapply()}
+              >
+                {t("secretsMigration.retry")}
+              </Button>
+            )}
           {backups.length > 0 && (
             <Button
               variant="destructive"

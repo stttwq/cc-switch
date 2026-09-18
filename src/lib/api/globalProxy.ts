@@ -16,23 +16,6 @@ export interface ProxyTestResult {
 }
 
 /**
- * 出站代理状态
- */
-export interface UpstreamProxyStatus {
-  enabled: boolean;
-  proxyUrl: string | null;
-}
-
-/**
- * 检测到的代理
- */
-export interface DetectedProxy {
-  url: string;
-  proxyType: string;
-  port: number;
-}
-
-/**
  * 获取全局代理 URL
  *
  * @returns 代理 URL，null 表示未配置（直连）
@@ -66,20 +49,3 @@ export async function testProxyUrl(url: string): Promise<ProxyTestResult> {
   return invoke<ProxyTestResult>("test_proxy_url", { url });
 }
 
-/**
- * 获取当前出站代理状态
- *
- * @returns 代理状态，包含是否启用和代理 URL
- */
-export async function getUpstreamProxyStatus(): Promise<UpstreamProxyStatus> {
-  return invoke<UpstreamProxyStatus>("get_upstream_proxy_status");
-}
-
-/**
- * 扫描本地代理
- *
- * @returns 检测到的代理列表
- */
-export async function scanLocalProxies(): Promise<DetectedProxy[]> {
-  return invoke<DetectedProxy[]>("scan_local_proxies");
-}

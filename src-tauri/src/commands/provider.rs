@@ -48,7 +48,8 @@ fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -
             present: api.is_some(),
             hint,
         },
-        base_url: base,
+        // baseUrl 允许回显（§5.2.2）；从 Zeroizing 里短生命周期取出后即刻丢弃。
+        base_url: base.map(|url| url.to_string()),
         extra_env: extra_env_keys(state, app_type, provider_id),
     }
 }

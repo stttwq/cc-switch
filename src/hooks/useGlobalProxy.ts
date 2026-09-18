@@ -1,7 +1,5 @@
 /**
- * 全局出站代理 React Hooks
- *
- * 提供获取、设置和测试全局代理的 React Query hooks。
+ * 全局出站代理 React Hooks（D10）
  */
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -11,11 +9,7 @@ import {
   getGlobalProxyUrl,
   setGlobalProxyUrl,
   testProxyUrl,
-  getUpstreamProxyStatus,
-  scanLocalProxies,
   type ProxyTestResult,
-  type UpstreamProxyStatus,
-  type DetectedProxy,
 } from "@/lib/api/globalProxy";
 
 /**
@@ -41,7 +35,6 @@ export function useSetGlobalProxyUrl() {
     onSuccess: () => {
       toast.success(t("settings.globalProxy.saved"));
       queryClient.invalidateQueries({ queryKey: ["globalProxyUrl"] });
-      queryClient.invalidateQueries({ queryKey: ["upstreamProxyStatus"] });
     },
     onError: (error: unknown) => {
       const message =
@@ -79,31 +72,3 @@ export function useTestProxy() {
     },
   });
 }
-
-/**
- * 获取当前出站代理状态
- */
-export function useUpstreamProxyStatus() {
-  return useQuery<UpstreamProxyStatus>({
-    queryKey: ["upstreamProxyStatus"],
-    queryFn: getUpstreamProxyStatus,
-  });
-}
-
-/**
- * 扫描本地代理
- */
-export function useScanProxies() {
-  const { t } = useTranslation();
-
-  return useMutation({
-    mutationFn: scanLocalProxies,
-    onError: (error: Error) => {
-      toast.error(
-        t("settings.globalProxy.scanFailed", { error: error.message }),
-      );
-    },
-  });
-}
-
-export type { DetectedProxy };

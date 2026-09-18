@@ -32,7 +32,7 @@ import {
   type AppId,
   type ProviderSwitchEvent,
 } from "@/lib/api";
-import { checkAllEnvConflicts, checkEnvConflicts } from "@/lib/api/env";
+import { checkAllEnvConflicts, envDeliveryScan } from "@/lib/api/env";
 import { useProviderActions } from "@/hooks/useProviderActions";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 import { useLastValidValue } from "@/hooks/useLastValidValue";
@@ -332,19 +332,6 @@ function App() {
     },
   );
 
-  useTauriEvent<{ appType: string; providerName: string }>(
-    "proxy-official-warning",
-    (payload) => {
-      toast.warning(
-        t("notifications.proxyOfficialWarning", {
-          name: payload.providerName,
-          defaultValue: `当前供应商 ${payload.providerName} 是官方供应商，建议切换到第三方供应商后再使用代理接管`,
-        }),
-        { duration: 8000 },
-      );
-    },
-  );
-
   useEffect(() => {
     let active = true;
     let unlistenResize: (() => void) | undefined;
@@ -463,7 +450,7 @@ function App() {
   useEffect(() => {
     const checkEnvOnSwitch = async () => {
       try {
-        const conflicts = await checkEnvConflicts(activeApp);
+        const conflicts = await envDeliveryScan(activeApp);
 
         if (conflicts.length > 0) {
           setEnvConflicts((prev) => {

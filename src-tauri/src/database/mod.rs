@@ -142,8 +142,8 @@ impl Database {
 
         db.apply_schema_migrations()?;
 
-        // Execute credential migration if pending
-        db.execute_credential_migration_if_pending()?;
+        // §6.1：凭据迁移不在这里跑。DB init 只做纯 SQL；迁移需要凭据管理器
+        // 可用，由启动流程在 AppState::new（含 probe）之后用同一份 store 触发。
 
         if let Err(e) = db.ensure_incremental_auto_vacuum() {
             log::warn!("Failed to ensure incremental auto-vacuum: {e}");
@@ -159,8 +159,12 @@ impl Database {
         Ok(db)
     }
 
-    /// 如果存在 `secrets_migration_pending` 标志，执行凭据迁移
-    fn execute_credential_migration_if_pending(&self) -> Result<(), AppError> {
+    /// 如果存在 `secrets_migration_pending` 标志，用启动流程 probe 过的 store 执行凭据迁移。
+    /// 返回 `true` 表示本次真的跑了迁移。
+    pub fn run_credential_migration_if_pending(
+        &self,
+        store: &dyn crate::secrets::SecretStore,
+    ) -> Result<bool, AppError> {
         let pending: Option<String> = {
             let conn = lock_conn!(self.conn);
             conn.query_row(
@@ -173,13 +177,12 @@ impl Database {
         };
 
         if pending.as_deref() != Some("1") {
-            return Ok(());
+            return Ok(false);
         }
 
         log::info!("检测到 secrets_migration_pending=1，开始执行凭据迁移");
 
-        let store = crate::secrets::WindowsSecretStore::new()?;
-        let migrator = crate::secrets::migration::CredentialMigrator::new(self, &store);
+        let migrator = crate::secrets::migration::CredentialMigrator::new(self, store);
 
         let runtime = tokio::runtime::Runtime::new()
             .map_err(|e| AppError::Config(format!("创建 tokio runtime 失败: {e}")))?;
@@ -211,7 +214,7 @@ impl Database {
                 .map_err(|e| AppError::Database(format!("设置 live 重写标志失败: {e}")))?;
 
                 log::info!("凭据迁移标志已清除，live_reapply_pending=1");
-                Ok(())
+                Ok(true)
             }
             Err(e) => {
                 log::error!("凭据迁移失败: {e}");

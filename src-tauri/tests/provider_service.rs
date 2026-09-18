@@ -234,10 +234,21 @@ command = "say"
         .get("auth")
         .and_then(|v| v.get("OPENAI_API_KEY"))
         .and_then(|v| v.as_str())
-        .unwrap_or("");
+        .unwrap_or("")
+        .to_string();
+    // §5.4-③：回填经提取器，用户在 live 里手改的密钥收进凭据管理器，DB 行只留剥离后的配置。
     assert_eq!(
-        legacy_auth_value, "legacy-key",
-        "previous provider should be backfilled with live auth"
+        legacy_auth_value, "",
+        "previous provider row must not keep plaintext auth in DB"
+    );
+    let stored = futures::executor::block_on(state.secrets.get(
+        &cc_switch_lib::secrets::SecretTarget::provider_api_key(AppType::Codex, "old-provider"),
+    ))
+    .expect("read backfilled key from secret store");
+    assert_eq!(
+        stored.as_deref().map(|key| key.as_str()),
+        Some("legacy-key"),
+        "backfill should carry the live key into the credential manager"
     );
 }
 

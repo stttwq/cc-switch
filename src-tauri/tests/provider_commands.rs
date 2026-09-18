@@ -136,15 +136,31 @@ experimental_bearer_token = "live-key"
         Some(&json!({})),
         "missing auth.json should import as an empty auth object"
     );
+    let imported_config = provider
+        .settings_config
+        .get("config")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default()
+        .to_string();
     assert!(
-        provider
-            .settings_config
-            .get("config")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default()
-            .contains("experimental_bearer_token"),
-        "config.toml content should still be imported"
+        imported_config.contains("wire_api = \"responses\""),
+        "config.toml 的非敏感内容应照常导入: {imported_config}"
     );
+    // §5.2.3：experimental_bearer_token 与激活表的 base_url 都属凭据材料，
+    // 只能进凭据管理器，DB 行里必须已剥离。
+    assert!(
+        !imported_config.contains("experimental_bearer_token"),
+        "DB 行不得保留 bearer token: {imported_config}"
+    );
+    assert!(
+        !imported_config.contains("https://aihubmix.example/v1"),
+        "DB 行不得保留激活表 base_url: {imported_config}"
+    );
+    let stored = futures::executor::block_on(state.secrets.get(
+        &cc_switch_lib::secrets::SecretTarget::provider_api_key(AppType::Codex, "default"),
+    ))
+    .expect("read codex key from secret store");
+    assert_eq!(stored.as_deref().map(|key| key.as_str()), Some("live-key"));
 }
 
 #[test]
@@ -179,10 +195,20 @@ command = "echo"
         Some("official"),
         "OAuth-only live Codex installs should keep official behavior"
     );
+    // §5.2.3 / D3：OAuth 登录态不提取、不保留，直接丢弃——cc-switch 不再代管
+    // ChatGPT 登录，live auth.json 由 Codex 自己持有，切换时不覆盖也不删除。
     assert_eq!(
-        provider.settings_config.pointer("/auth/tokens/id_token"),
-        Some(&json!("oauth-id")),
-        "import should preserve OAuth login material"
+        provider.settings_config.pointer("/auth/tokens"),
+        None,
+        "import 不得把 OAuth tokens 写进 DB"
+    );
+    assert_eq!(
+        provider
+            .settings_config
+            .pointer("/auth/auth_mode")
+            .and_then(|value| value.as_str()),
+        Some("chatgpt"),
+        "登录方式标记保留，登录材料丢弃"
     );
 }
 
@@ -373,12 +399,22 @@ command = "say"
         .get("auth")
         .and_then(|v| v.get("OPENAI_API_KEY"))
         .and_then(|v| v.as_str())
-        .unwrap_or("");
-    // 回填机制：切换前会将 live 配置回填到当前供应商
-    // 这保护了用户在 live 文件中的手动修改
+        .unwrap_or("")
+        .to_string();
+    // §5.4-③：回填仍保护用户在 live 文件里的手改，但改由提取器收进凭据管理器，
+    // DB 行只留剥离后的配置。
     assert_eq!(
-        legacy_auth_value, "legacy-key",
-        "previous provider should be backfilled with live auth"
+        legacy_auth_value, "",
+        "previous provider row must not keep plaintext auth in DB"
+    );
+    let stored = futures::executor::block_on(app_state.secrets.get(
+        &cc_switch_lib::secrets::SecretTarget::provider_api_key(AppType::Codex, "old-provider"),
+    ))
+    .expect("read backfilled key from secret store");
+    assert_eq!(
+        stored.as_deref().map(|key| key.as_str()),
+        Some("legacy-key"),
+        "backfill should carry the live key into the credential manager"
     );
 }
 

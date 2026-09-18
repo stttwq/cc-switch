@@ -38,6 +38,16 @@ pub fn sanitize_claude_settings_for_live_write(settings: &Value) -> Result<Value
                 env.remove(&key);
             }
         }
+
+        // 顶层同样不得出现敏感键（否则写盘门控只能报错、live 无法投递）
+        let top_level: Vec<String> = obj
+            .keys()
+            .filter(|key| is_claude_env_secret(key))
+            .cloned()
+            .collect();
+        for key in top_level {
+            obj.remove(&key);
+        }
     }
 
     // Final safety check: ensure no secret patterns remain

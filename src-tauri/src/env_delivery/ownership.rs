@@ -134,7 +134,7 @@ pub fn check_conflict(
 
     match current {
         None => Ok(None), // No conflict, variable doesn't exist
-        Some(existing_value) if existing_value == new_value => {
+        Some(existing_value) if existing_value.as_str() == new_value => {
             Ok(None) // Same value, no conflict
         }
         Some(_existing_value) if managed.is_managed(name) => {

@@ -3,15 +3,12 @@ import { useTranslation } from "react-i18next";
 import { Loader2, Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FullScreenPanel } from "@/components/common/FullScreenPanel";
-import type { Provider, CustomEndpoint } from "@/types";
+import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import {
   ProviderForm,
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
-import { providerPresets } from "@/config/claudeProviderPresets";
-import { codexProviderPresets } from "@/config/codexProviderPresets";
-import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 
 interface AddProviderDialogProps {
   open: boolean;
@@ -87,85 +84,6 @@ export function AddProviderDialog({
       // Pi 的原生配置有稳定的 provider key，用它作为管理的供应商标识。
       if (appId === "pi" && values.providerKey) {
         providerData.providerKey = values.providerKey;
-      }
-      const hasCustomEndpoints =
-        providerData.meta?.custom_endpoints &&
-        Object.keys(providerData.meta.custom_endpoints).length > 0;
-
-      if (!hasCustomEndpoints && values.presetCategory !== "omo") {
-        const urlSet = new Set<string>();
-
-        const addUrl = (rawUrl?: string) => {
-          const url = (rawUrl || "").trim().replace(/\/+$/, "");
-          if (url && url.startsWith("http")) {
-            urlSet.add(url);
-          }
-        };
-
-        if (values.presetId) {
-          if (appId === "claude") {
-            const presets = providerPresets;
-            const presetIndex = parseInt(
-              values.presetId.replace("claude-", ""),
-            );
-            if (
-              !isNaN(presetIndex) &&
-              presetIndex >= 0 &&
-              presetIndex < presets.length
-            ) {
-              const preset = presets[presetIndex];
-              if (preset?.endpointCandidates) {
-                preset.endpointCandidates.forEach(addUrl);
-              }
-            }
-          } else if (appId === "codex") {
-            const presets = codexProviderPresets;
-            const presetIndex = parseInt(values.presetId.replace("codex-", ""));
-            if (
-              !isNaN(presetIndex) &&
-              presetIndex >= 0 &&
-              presetIndex < presets.length
-            ) {
-              const preset = presets[presetIndex];
-              if (Array.isArray(preset.endpointCandidates)) {
-                preset.endpointCandidates.forEach(addUrl);
-              }
-            }
-          }
-        }
-
-        if (appId === "claude") {
-          const env = parsedConfig.env as Record<string, any> | undefined;
-          if (env?.ANTHROPIC_BASE_URL) {
-            addUrl(env.ANTHROPIC_BASE_URL);
-          }
-        } else if (appId === "codex") {
-          const config = parsedConfig.config as string | undefined;
-          if (config) {
-            const extractedBaseUrl = extractCodexBaseUrl(config);
-            if (extractedBaseUrl) {
-              addUrl(extractedBaseUrl);
-            }
-          }
-        }
-
-        const urls = Array.from(urlSet);
-        if (urls.length > 0) {
-          const now = Date.now();
-          const customEndpoints: Record<string, CustomEndpoint> = {};
-          urls.forEach((url) => {
-            customEndpoints[url] = {
-              url,
-              addedAt: now,
-              lastUsed: undefined,
-            };
-          });
-
-          providerData.meta = {
-            ...(providerData.meta ?? {}),
-            custom_endpoints: customEndpoints,
-          };
-        }
       }
 
       await onSubmit(providerData);

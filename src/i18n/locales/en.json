@@ -113,9 +113,6 @@
     "currentlyUsing": "Currently Using",
     "enable": "Enable",
     "inUse": "In Use",
-    "needsRouting": "Needs Routing",
-    "noRoutingSupport": "No Routing Support",
-    "blockedByProxyHint": "Can't switch to an official provider while proxy takeover is active",
     "editProvider": "Edit Provider",
     "editProviderHint": "Configuration will be applied to the current provider immediately after update.",
     "deleteProvider": "Delete Provider",
@@ -123,8 +120,6 @@
     "addFooterHint": "💡 After choosing a preset, fill in the fields below (e.g. API Key)",
     "addClaudeProvider": "Add Claude Code Provider",
     "addCodexProvider": "Add Codex Provider",
-    "addGeminiProvider": "Add Gemini Provider",
-    "addOpenCodeProvider": "Add OpenCode Provider",
     "addToConfig": "Add",
     "removeFromConfig": "Remove",
     "setAsDefault": "Set Default",
@@ -147,9 +142,6 @@
     "noSearchResults": "No providers match your search.",
     "duplicate": "Duplicate",
     "sortUpdateFailed": "Failed to update sort order",
-    "configureUsage": "Configure usage query",
-    "managedByHermes": "Hermes Managed",
-    "managedByHermesHint": "Defined in Hermes' providers: dict. Edit or remove it via Hermes Web UI.",
     "openTerminal": "Open Terminal",
     "terminalOpened": "Terminal opened",
     "terminalOpenFailed": "Failed to open terminal",
@@ -166,28 +158,12 @@
     "editCommonConfigHint": "Common config snippet will be merged into all providers that enable it",
     "addProvider": "Add Provider",
     "sortUpdated": "Sort order updated",
-    "usageSaved": "Usage query configuration saved",
-    "usageSaveFailed": "Failed to save usage query configuration",
-    "geminiConfig": "Gemini Configuration",
-    "geminiConfigHint": "Use .env format to configure Gemini",
-    "form": {
-      "gemini": {
-        "model": "Model",
-        "oauthTitle": "OAuth Authentication Mode",
-        "oauthHint": "Google official uses OAuth personal authentication, no need to fill in API Key. The browser will automatically open for login on first use.",
-        "apiKeyPlaceholder": "Enter Gemini API Key"
-      }
-    },
-    "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again"
+    "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again",
+    "keyMissing": "Key required",
+    "keyMissingHint": "Keys are never synced or exported. Edit this provider to re-enter its API key."
   },
-  "claudeCode": {
-    "needsRouting": "Needs Routing",
-    "noRoutingSupport": "No Routing Support"
-  },
+  "claudeCode": {},
   "codex": {
-    "needsRouting": "Needs Routing",
-    "noRoutingSupport": "No Routing Support",
-    "officialRouting": "Official Account Routing",
     "nativeLogin": "Codex Sign-in",
     "followCodexLogin": "Follow Codex login",
     "followCodexLoginDescription": "The account changes with the current Codex CLI login",
@@ -204,7 +180,6 @@
     "providerDeleted": "Provider deleted successfully",
     "switchSuccess": "Switch successful!",
     "codexRestartRequired": "Switched successfully. Restart the client to apply changes.",
-    "claudeDesktopRestartRequired": "Switched successfully. Restart Claude Desktop to apply changes.",
     "addToConfigSuccess": "Added to config",
     "removeFromConfigSuccess": "Removed from config",
     "removeFromConfigFailed": "Could not remove provider",
@@ -229,8 +204,7 @@
     "openLinkFailed": "Failed to open link",
     "backfillWarning": "Switched successfully, but failed to save changes back to the previous provider",
     "codexAuthCleanupFailed": "Switched successfully, but auth.json could not be removed — the official login credentials are still on disk; delete auth.json from the Codex config directory to remove them",
-    "windowControlFailed": "Window control failed: {{error}}",
-    "proxyOfficialWarning": "Current provider {{name}} is official. Consider switching to a third-party provider before using local routing."
+    "windowControlFailed": "Window control failed: {{error}}"
   },
   "confirm": {
     "deleteProvider": "Delete Provider",
@@ -238,16 +212,6 @@
     "removeProvider": "Remove Provider",
     "removeProviderMessage": "Are you sure you want to remove provider \"{{name}}\" from the configuration?\n\nAfter removal, this provider will no longer be active, but the configuration data will be retained in CC Switch. You can re-add it at any time.",
     "piDefaultProviderWarning": "Pi's global default currently points to this provider. If you continue, Pi will try another available model; use /model to choose one or /login to sign in to another provider.",
-    "proxy": {
-      "title": "Enable Local Routing",
-      "message": "Local routing is an advanced feature. Please make sure you understand how it works before enabling.\n\nWe recommend consulting the relevant documentation or your provider for proper configuration.",
-      "confirm": "I understand, enable"
-    },
-    "failover": {
-      "title": "Enable Failover",
-      "message": "Failover is an advanced feature. Please make sure you understand how it works before enabling.\n\nWe recommend configuring provider priorities in the failover queue first.",
-      "confirm": "I understand, enable"
-    },
     "unifyCodexHistory": {
       "title": "Unified Codex session history",
       "message": "When enabled, the official subscription and third-party providers share one session history list. Note: resuming an old session across providers may fail because its encrypted_content reasoning cannot be decrypted by another backend.\n\nYou can also migrate your existing official session history into the shared list (originals are backed up to ~/.cc-switch/backups first and can be restored when you turn this off).",
@@ -259,11 +223,6 @@
       "message": "After turning this off, the official subscription and third-party providers return to separate history lists. Sessions created while it was on cannot be attributed to a provider, so they stay in the third-party history and the official subscription will not see them.",
       "restoreBackup": "Restore the official sessions migrated at enable time back to the official history (exact restore from backup)",
       "confirm": "Turn off"
-    },
-    "usage": {
-      "title": "Configure Usage Query",
-      "message": "Usage query requires a custom script or API parameters. Please make sure you have obtained the necessary information from your provider.\n\nIf unsure how to configure, please consult your provider's documentation first.",
-      "confirm": "I understand, configure"
     },
     "autoSync": {
       "title": "Enable Auto Sync",
@@ -290,10 +249,6 @@
       "connectivityCheck": {
         "title": "Connectivity Check Settings",
         "description": "Configure timeout, retries, and the slow-response threshold for provider reachability checks"
-      },
-      "pricing": {
-        "title": "Cost Pricing",
-        "description": "Manage token pricing rules for each model"
       },
       "globalProxy": {
         "title": "Global Outbound Proxy",
@@ -333,6 +288,10 @@
           "debug": "Detailed info including SSE stream and request/response",
           "trace": "All logs, most verbose"
         }
+      },
+      "secretStore": {
+        "title": "Credential Manager Maintenance",
+        "description": "Remove credential entries left behind by providers you deleted"
       }
     },
     "language": "Language",
@@ -595,7 +554,7 @@
     "skipClaudeOnboardingDescription": "When enabled, Claude Code will skip the first-run confirmation",
     "codexAuth": "Codex App Enhancements",
     "preserveCodexOfficialAuthOnSwitch": "Keep official login for direct switches",
-    "preserveCodexOfficialAuthOnSwitchDescription": "Controls third-party switches when local routing is off. Takeover routing always preserves the Codex official login.",
+    "preserveCodexOfficialAuthOnSwitchDescription": "Whether switching to a third-party provider keeps Codex's official login file `auth.json`. When off, that file is removed after the switch; keys in the credential manager are unaffected.",
     "unifyCodexSessionHistory": "Unified Codex session history",
     "unifyCodexSessionHistoryDescription": "When enabled, the official subscription runs under the shared \"custom\" provider id so official and third-party sessions appear in one history list, optionally migrating existing official sessions in (backed up first). When turning it off, the migrated sessions can be restored from backup. Note: resuming an old session across providers may fail because its encrypted_content reasoning can only be decrypted by the backend that created it.",
     "unifyCodexHistoryRestoreCompleted": "Official session history restored from backup ({{files}} session files, {{rows}} index rows)",
@@ -676,17 +635,8 @@
     "browsePlaceholderPi": "e.g., /home/<your-username>/.pi/agent",
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
-    "checkForUpdates": "Check for Updates",
-    "updateTo": "Update to v{{version}}",
-    "updating": "Updating...",
-    "checking": "Checking...",
-    "upToDate": "Up to Date",
     "aboutHint": "View version information and update status.",
     "portableMode": "Portable mode: updates require manual download.",
-    "updateAvailable": "New version available: {{version}}",
-    "updateBadge": "Update available",
-    "updateFailed": "Update installation failed, attempted to open download page.",
-    "checkUpdateFailed": "Failed to check for updates, please try again later.",
     "openReleaseNotesFailed": "Failed to open release notes",
     "releaseNotes": "Release Notes",
     "viewReleaseNotes": "View release notes for this version",
@@ -694,7 +644,7 @@
     "officialWebsite": "Official Website",
     "github": "GitHub",
     "manualInstallCommands": "Manual Install Commands",
-    "oneClickInstallHint": "Install or upgrade Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
+    "oneClickInstallHint": "Install or upgrade Claude Code / Codex / Pi",
     "localEnvCheck": "Local environment check",
     "updateAllTools": "Update All ({{count}})",
     "currentVersion": "Current Version",
@@ -745,12 +695,7 @@
     "devModeRestartHint": "Dev Mode: Automatic restart not supported, please manually restart the application.",
     "saving": "Saving...",
     "globalProxy": {
-      "label": "Global Proxy",
-      "hint": "Proxy all requests (API, Skills download, etc.). When local routing is enabled, app traffic is also routed through this proxy. Leave empty for direct connection.",
       "test": "Test Connection",
-      "scan": "Scan Local Proxies",
-      "clear": "Clear",
-      "scanFailed": "Scan failed: {{error}}",
       "saved": "Proxy settings saved",
       "saveFailed": "Save failed: {{error}}",
       "testSuccess": "Connected! Latency {{latency}}ms",
@@ -776,11 +721,6 @@
     "claude": "Claude",
     "claudeCode": "Claude Code",
     "codex": "Codex",
-    "gemini": "Gemini",
-    "grokbuild": "Grok Build",
-    "opencode": "OpenCode",
-    "openclaw": "OpenClaw",
-    "hermes": "Hermes",
     "pi": "Pi"
   },
   "pi": {
@@ -797,6 +737,12 @@
     "form": {
       "providerKey": "Provider key",
       "providerKeyRequired": "Provider key is required",
+      "providerKeyHint": "Unique identifier in config file. Use lowercase letters, numbers, and hyphens only.",
+      "providerKeyLockedHint": "This provider has already been added to the app config, so its key can no longer be changed.",
+      "apiFormat": "API Format",
+      "apiFormatHint": "Select the API format for the AI service",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "Custom API endpoint URL",
       "selectPresetRequired": "Select a preset or custom configuration first",
       "fixJsonFirst": "Fix the configuration JSON below before editing the structured fields.",
       "nameRequired": "Display name is required",
@@ -805,6 +751,8 @@
       "absoluteHttpUrlRequired": "{{label}} must be an absolute HTTP or HTTPS URL",
       "positiveNumberRequired": "{{label}} must be a number greater than 0",
       "models": "Model configuration",
+      "modelsHint": "Configure available models and their display names",
+      "modelBaseUrlUnsupported": "Model-level baseUrl is not supported; use the provider-level Base URL instead",
       "noModels": "No models configured",
       "addModel": "Add model",
       "removeModel": "Remove model",
@@ -844,6 +792,15 @@
       "optionKey": "Option",
       "optionValue": "Value",
       "removeCompatibilityOption": "Remove compatibility option",
+      "headers": "Headers",
+      "headersHint": "Optional HTTP headers sent with provider requests, such as HTTP-Referer or X-Title.",
+      "addHeader": "Add header",
+      "noHeaders": "No custom headers configured",
+      "headerName": "Header",
+      "headerValue": "Value",
+      "headerNamePlaceholder": "X-Title",
+      "headerValuePlaceholder": "CC Switch",
+      "removeHeader": "Remove header",
       "effectiveApiRequired": "Model {{id}} needs an API, either directly or from the provider",
       "effectiveBaseUrlRequired": "Model {{id}} needs a base URL, either directly or from the provider",
       "duplicateModel": "Model ID {{id}} is duplicated",
@@ -1049,7 +1006,6 @@
     "aggregatorApiKeyHint": "💡 Only need to fill in API Key, endpoint is preset",
     "thirdPartyApiKeyHint": "💡 Only need to fill in API Key, endpoint is preset",
     "customApiKeyHint": "💡 Custom configuration requires manually filling all necessary fields",
-    "omoHint": "💡 OMO config manages Agent model assignments and supports both oh-my-openagent.jsonc and oh-my-opencode.jsonc",
     "officialHint": "💡 Official provider uses browser login, no API Key needed",
     "providerKeyStatusLoading": "Provider identifier status is still loading. Please try again shortly.",
     "getApiKey": "Get API Key",
@@ -1112,7 +1068,7 @@
     "modelHint": "💡 Leave blank to use provider's default model",
     "apiHint": "💡 Fill in Claude API compatible service endpoint, avoid trailing slash",
     "apiHintOAI": "💡 Fill in OpenAI Chat Completions compatible service endpoint, avoid trailing slash",
-    "apiHintGeminiNative": "💡 Prefer a Gemini Native base URL such as https://generativelanguage.googleapis.com or https://generativelanguage.googleapis.com/v1beta; the proxy will append models/*:generateContent automatically",
+    "apiHintGeminiNative": "💡 The upstream speaks the Gemini generateContent API. Enter its base URL, for example https://generativelanguage.googleapis.com or https://generativelanguage.googleapis.com/v1beta",
     "codexApiHint": "💡 Fill in service endpoint compatible with OpenAI Response format",
     "fillSupplierName": "Please fill in provider name",
     "fillConfigContent": "Please fill in configuration content",
@@ -1134,29 +1090,18 @@
     "anthropicModel": "Main Model",
     "anthropicSmallFastModel": "Fast Model",
     "apiFormat": "Upstream Format",
-    "apiFormatHint": "Pick Anthropic Messages when your provider is natively an Anthropic Messages API (direct, no format conversion); pick Chat when it uses Chat Completions; pick Responses when it uses the Responses API; pick Gemini Native when it uses Gemini generateContent. Chat, Responses, and Gemini Native require routing takeover to convert to Anthropic Messages.",
-    "customUserAgent": "Custom User-Agent",
-    "customUserAgentHint": "Only takes effect when local routing/proxy takeover is enabled; replaces the User-Agent in requests forwarded to the provider API.",
-    "customUserAgentInvalid": "User-Agent must not contain control characters (e.g. line breaks); otherwise it will be ignored.",
-    "customUserAgentPresets": "Presets",
-    "localProxyRequestOverrides": "Local proxy request overrides",
-    "localProxyRequestOverridesHint": "Only takes effect after local routing/proxy takeover; applied to the transformed upstream request.",
-    "localProxyRequestOverridesInvalid": "Local proxy request overrides format error: {{error}}",
-    "localProxyHeaderOverrides": "Header overrides",
-    "localProxyHeaderOverridesInvalidDetail": "Header overrides format error: {{error}}",
-    "localProxyBodyOverrides": "Body overrides",
-    "localProxyBodyOverridesInvalidDetail": "Body overrides format error: {{error}}",
+    "apiFormatHint": "Pick the wire API your provider speaks natively (Anthropic Messages / Chat Completions / Responses / Gemini generateContent). CC Switch uses it only to choose the model catalog and field shapes — it never converts request or response formats.",
     "fullUrlLabel": "Full URL",
     "fullUrlEnabled": "Full URL Mode",
     "fullUrlDisabled": "Mark as Full URL",
-    "fullUrlHint": "💡 Enter the full request URL. This mode requires routing to be enabled, and routing will use the URL as-is without appending a path",
-    "fullUrlHintGeminiNative": "💡 In Gemini Native full URL mode, two inputs are supported: 1. official/structured Gemini URLs, which will still be normalized to the requested model and streaming method; 2. opaque custom relay URLs, which will be used mostly as-is with only query parameters appended",
+    "fullUrlHint": "Full request URL including the path your provider expects (e.g. https://api.example.com/v1). It is written as ANTHROPIC_BASE_URL and used directly — no gateway or local proxy is involved.",
+    "fullUrlHintGeminiNative": "💡 Full URL mode for the Gemini generateContent API: enter the complete request URL exactly as the provider documents it, including the model path and any query parameters",
     "apiFormatAnthropic": "Anthropic Messages (Native)",
-    "apiFormatOpenAIChat": "OpenAI Chat Completions (Requires routing)",
-    "apiFormatOpenAIResponses": "OpenAI Responses API (Requires routing)",
-    "apiFormatGeminiNative": "Gemini Native generateContent (Requires routing)",
+    "apiFormatOpenAIChat": "Native Chat Completions API. Affects catalog and field detection only; no format conversion is performed.",
+    "apiFormatOpenAIResponses": "Native Responses API. Affects catalog and field detection only; no format conversion is performed.",
+    "apiFormatGeminiNative": "Gemini Native generateContent",
     "codexApiFormatResponses": "OpenAI Responses API (Native)",
-    "codexApiFormatOpenAIChat": "OpenAI Chat Completions (Requires routing)",
+    "codexApiFormatOpenAIChat": "OpenAI Chat Completions",
     "codexApiFormatHint": "Select the Codex API format actually supported by this provider; the config stays on Responses for newer Codex versions, while Chat Completions is converted through local routing.",
     "authField": "Auth Field",
     "authFieldAuthToken": "ANTHROPIC_AUTH_TOKEN (Default)",
@@ -1245,10 +1190,10 @@
     "modelNameHint": "Specify the model to use, will be auto-updated in config.toml",
     "modelName": "Model Name",
     "upstreamFormatLabel": "Upstream Format",
-    "upstreamFormatHint": "Pick Responses when your provider is natively a Responses API (direct, no format conversion); pick Chat when it uses the Chat Completions protocol; pick Anthropic Messages when it only offers the native Anthropic Messages protocol. Chat and Anthropic Messages both require routing takeover to convert to Responses.",
-    "upstreamFormatChat": "Chat Completions (routing required)",
+    "upstreamFormatHint": "Pick Responses when your provider is natively a Responses API, Chat when it speaks Chat Completions, Anthropic Messages when it only offers native Anthropic Messages. This choice only drives model-catalog and field-shape detection — no request/response conversion happens.",
+    "upstreamFormatChat": "Chat Completions",
     "upstreamFormatResponses": "Responses (native)",
-    "upstreamFormatAnthropic": "Anthropic Messages (routing required)",
+    "upstreamFormatAnthropic": "Anthropic Messages",
     "anthropicAuthFieldLabel": "Auth field",
     "anthropicAuthFieldAuthToken": "ANTHROPIC_AUTH_TOKEN (Authorization)",
     "anthropicAuthFieldApiKey": "ANTHROPIC_API_KEY (x-api-key)",
@@ -1301,57 +1246,8 @@
     "reasoningEffortHint": "Enable when the upstream supports thinking-depth control such as low/high/max. Enabling this also turns on thinking mode and converts Codex's reasoning.effort into the upstream Chat parameter.",
     "reasoningGroupTitle": "Reasoning Capability",
     "reasoningSectionHint": "Preset providers are configured automatically; custom providers are inferred from name/URL. Override manually only when auto-detection is wrong.",
-    "advancedSectionHint": "Includes upstream format, model mapping, reasoning overrides and custom User-Agent. Providers using the Chat Completions protocol require routing takeover to be enabled.",
+    "advancedSectionHint": "Covers upstream format, model mapping, reasoning overrides and a custom User-Agent. These settings only shape the config written to the CLI; nothing goes through a local proxy or format conversion.",
     "noCommonConfigToApply": "The common config snippet is empty or contains nothing to write"
-  },
-  "opencode": {
-    "npmPackage": "API Format",
-    "selectPackage": "Select API format",
-    "npmPackageHint": "Select the API format for the AI service",
-    "baseUrl": "Base URL",
-    "baseUrlHint": "Custom API endpoint URL",
-    "models": "Models",
-    "modelsHint": "Configure available models and their display names",
-    "addModel": "Add Model",
-    "modelId": "Model ID",
-    "modelName": "Display Name",
-    "noModels": "No models configured",
-    "modelsRequired": "Please add at least one model",
-    "toggleModelDetails": "Toggle model details",
-    "providerKey": "Provider Key",
-    "providerKeyPlaceholder": "my-provider",
-    "providerKeyHint": "Unique identifier in config file. Use lowercase letters, numbers, and hyphens only.",
-    "providerKeyLockedHint": "This provider has already been added to the app config, so its key can no longer be changed.",
-    "providerKeyRequired": "Provider key is required",
-    "providerKeyDuplicate": "This key is already in use",
-    "providerKeyInvalid": "Invalid format. Use lowercase letters, numbers, and hyphens only.",
-    "headers": "Headers",
-    "headersHint": "Optional HTTP headers sent with provider requests, such as HTTP-Referer or X-Title.",
-    "addHeader": "Add header",
-    "headerName": "Header",
-    "headerValue": "Value",
-    "headerNamePlaceholder": "X-Title",
-    "headerValuePlaceholder": "CC Switch",
-    "removeHeader": "Remove header",
-    "noHeaders": "No custom headers configured",
-    "extraOptions": "Extra Options",
-    "extraOptionsHint": "Configure extra SDK options like timeout, setCacheKey, etc. Values are auto-parsed to appropriate types (number, boolean, etc.).",
-    "addExtraOption": "Add",
-    "extraOptionKey": "Key",
-    "extraOptionValue": "Value",
-    "extraOptionKeyPlaceholder": "timeout",
-    "extraOptionValuePlaceholder": "600000",
-    "noExtraOptions": "No extra options configured",
-    "noModelOptions": "Model options, click + to add",
-    "modelLimits": "Token Limits",
-    "limitContext": "Context",
-    "limitOutput": "Output",
-    "modelExtraFields": "Model Properties",
-    "noModelExtraFields": "Model properties (variants, cost, etc.), click + to add",
-    "modelExtraFieldKeyPlaceholder": "variants",
-    "sdkOptions": "SDK Options",
-    "modelOptionKeyPlaceholder": "provider",
-    "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "providerPreset": {
     "label": "Provider Preset",
@@ -1376,7 +1272,6 @@
     "quit": "Quit"
   },
   "errors": {
-    "usage_query_failed": "Usage query failed",
     "configLoadFailedTitle": "Configuration Load Failed",
     "configLoadFailedMessage": "Unable to read configuration file:\n{{path}}\n\nError details:\n{{detail}}\n\nPlease check if the JSON is valid, or restore from a backup file (e.g., config.json.bak) in the same directory.\n\nThe app will exit so you can fix this.",
     "frontendCrashTitle": "Something went wrong in the interface",
@@ -1397,7 +1292,6 @@
     "addMcp": "Add MCP",
     "claudeTitle": "Claude Code MCP Management",
     "codexTitle": "Codex MCP Management",
-    "geminiTitle": "Gemini MCP Management",
     "unifiedPanel": {
       "title": "MCP Server Management",
       "addServer": "Add Server",
@@ -1413,12 +1307,7 @@
       "noSearchResults": "No MCP servers match your search",
       "apps": {
         "claude": "Claude",
-        "codex": "Codex",
-        "gemini": "Gemini",
-        "grokbuild": "Grok Build",
-        "opencode": "OpenCode",
-        "openclaw": "OpenClaw",
-        "hermes": "Hermes"
+        "codex": "Codex"
       }
     },
     "userLevelPath": "User-level MCP path",
@@ -1598,7 +1487,6 @@
     "switcherAriaLabel": "Project: {{name}}",
     "switcherTooltip": {
       "claude": "Projects: switch the Claude Code provider / MCP / Skills / memory files in one click",
-      "claude-desktop": "Projects: switch the Claude Desktop provider in one click",
       "codex": "Projects: switch the Codex provider / MCP / Skills / memory files in one click"
     },
     "none": "No project",
@@ -1607,7 +1495,6 @@
     "createFromCurrent": "New project",
     "createDescription": {
       "claude": "Save the current Claude Code provider, MCP, Skills and memory file as a project you can switch to later.",
-      "claude-desktop": "Save the current Claude Desktop provider as a project you can switch to later.",
       "codex": "Save the current Codex provider, MCP, Skills and memory file configuration as a project you can switch to later."
     },
     "manage": "Manage projects…",
@@ -1665,6 +1552,15 @@
     "error": {
       "noSelection": "Please select environment variables to delete"
     }
+  },
+  "envConflict": {
+    "title": "Environment Variable Conflict",
+    "overwriteNotice": "Switching would overwrite variables that CC Switch does not manage. After take-over the original values are overwritten and NOT kept.",
+    "colName": "Variable",
+    "colHint": "Last 4 chars",
+    "adopt": "Take Over & Switch",
+    "cancel": "Cancel",
+    "adoptFailed": "Failed to take over the variables"
   },
   "skills": {
     "manage": "Skills",
@@ -1820,13 +1716,6 @@
       "success": "Skill {{name}} restored from backup",
       "failed": "Failed to restore from backup"
     },
-    "apps": {
-      "claude": "Claude",
-      "codex": "Codex",
-      "gemini": "Gemini",
-      "opencode": "OpenCode",
-      "openclaw": "OpenClaw"
-    },
     "installFromZip": {
       "button": "Install from ZIP",
       "installing": "Installing...",
@@ -1868,6 +1757,13 @@
     "summary": "Migrated keys for {{numProviders}} provider(s). Already-open terminals must be restarted to pick up the new environment variables.",
     "backupsTitle": "Historical database backups that still contain plaintext (kept for rollback, safe to delete later):",
     "deleteBackups": "Delete all backups",
-    "gotIt": "Got it"
+    "gotIt": "Got it",
+    "codexLogin": "Discarded the Codex OAuth login state of {{numProviders}} provider(s) — sign in again with `codex login`.",
+    "liveFailures": "{{count}} live configuration(s) could not be rewritten (usually the file is held by a running CLI):",
+    "retry": "Retry on next launch",
+    "cleanupOrphans": "Clean up orphan credentials",
+    "cleanupOrphansHint": "Only removes credential entries whose provider no longer exists in the database.",
+    "cleanupOrphansDone": "Removed {count} orphan credential(s)",
+    "warningsTitle": "Migration notes (fields only, no values):"
   }
 }

@@ -17,6 +17,8 @@ interface ApiKeySectionProps {
   disabled?: boolean;
   isPartner?: boolean;
   partnerPromotionKey?: string;
+  /** 后端凭据状态（secretStatus.apiKey）：present=true 时不回显、显示末 4 位提示 */
+  configuredStatus?: { present: boolean; hint: string | null } | null;
 }
 
 export function ApiKeySection({
@@ -30,6 +32,7 @@ export function ApiKeySection({
   placeholder,
   disabled,
   partnerPromotionKey,
+  configuredStatus,
 }: ApiKeySectionProps) {
   const { t } = useTranslation();
 
@@ -57,6 +60,7 @@ export function ApiKeySection({
             : finalPlaceholder.thirdParty
         }
         disabled={disabled ?? category === "official"}
+        configuredStatus={configuredStatus}
       />
       {/* API Key 获取链接 */}
       {shouldShowLink && websiteUrl && (

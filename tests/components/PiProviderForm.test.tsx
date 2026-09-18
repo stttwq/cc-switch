@@ -2248,7 +2248,6 @@ describe("PiProviderForm", () => {
             models: [completeModel("model", "Model")],
           },
           meta: {
-            endpointAutoSelect: true,
             custom_endpoints: {
               "https://failover.example/v1": {
                 url: "https://failover.example/v1",

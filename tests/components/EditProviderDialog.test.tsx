@@ -417,7 +417,6 @@ describe("EditProviderDialog", () => {
       },
       meta: {
         isPartner: true,
-        endpointAutoSelect: true,
         custom_endpoints: {
           "https://failover.example.com/v1": {
             url: "https://failover.example.com/v1",

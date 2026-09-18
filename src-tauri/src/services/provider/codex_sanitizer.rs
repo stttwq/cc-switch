@@ -48,6 +48,26 @@ fn sanitize_codex_config_for_live_write_with_has_key(
     // Remove experimental_bearer_token if present (forbidden per plan 5.3.1)
     doc.remove("experimental_bearer_token");
 
+    // §5.2.3 / S5：非激活表的 bearer token 同样禁止落 live，逐表清掉。
+    let all_provider_ids: Vec<String> = doc
+        .get("model_providers")
+        .and_then(|v| v.as_table_like())
+        .map(|table| table.iter().map(|(key, _)| key.to_string()).collect())
+        .unwrap_or_default();
+    for provider_id in &all_provider_ids {
+        if let Some(provider_table) = doc
+            .get_mut("model_providers")
+            .and_then(|v| v.as_table_like_mut())
+            .and_then(|providers_table| {
+                providers_table
+                    .get_mut(provider_id.as_str())
+                    .and_then(|v| v.as_table_like_mut())
+            })
+        {
+            provider_table.remove("experimental_bearer_token");
+        }
+    }
+
     // Get the active model_provider to determine where to inject env_key
     let active_provider = doc
         .get("model_provider")
@@ -88,7 +108,14 @@ fn sanitize_codex_config_for_live_write_with_has_key(
         );
     }
 
-    Ok(doc.to_string())
+    let result = doc.to_string();
+    // S5 写盘门控：仍残留 bearer token 即报错不写，绝不 fail-open。
+    if result.contains("experimental_bearer_token") {
+        return Err(AppError::Config(
+            "安全检查失败：Codex 配置中仍包含 experimental_bearer_token".to_string(),
+        ));
+    }
+    Ok(result)
 }
 
 #[cfg(test)]
@@ -164,5 +191,26 @@ base_url = "https://api.anthropic.com"
 
         // Should inject env_key even when no token was present
         assert!(result.contains(r#"env_key = "CC_SWITCH_CODEX_API_KEY""#));
+    }
+
+    #[test]
+    fn test_strips_bearer_token_from_inactive_provider() {
+        // §5.2.3：非激活 [model_providers.*] 表的 bearer token 也绝不能落 live。
+        let toml = r#"
+model_provider = "active"
+
+[model_providers.active]
+base_url = "https://api.active.example.com/v1"
+
+[model_providers.inactive]
+base_url = "https://api.inactive.example.com/v1"
+experimental_bearer_token = "sk-fixture-inactive-0009"
+"#;
+
+        let result = sanitize_codex_config_for_live_write(toml).unwrap();
+
+        assert!(!result.contains("sk-fixture-inactive-0009"));
+        assert!(!result.contains("experimental_bearer_token"));
+        assert!(result.contains("[model_providers.inactive]"));
     }
 }

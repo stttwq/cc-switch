@@ -2,8 +2,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use crate::config::{
-    atomic_write, delete_file, get_home_dir, path_is_within, read_json_file,
-    sanitize_provider_name, write_json_file, write_text_file,
+    atomic_write, delete_file, get_home_dir, path_is_within, read_json_file, write_json_file,
+    write_text_file,
 };
 use crate::error::AppError;
 use crate::provider::Provider;
@@ -569,36 +569,6 @@ pub fn get_codex_config_path() -> PathBuf {
 
 pub fn get_codex_model_catalog_path() -> PathBuf {
     get_codex_config_dir().join(CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME)
-}
-
-/// 获取 Codex 供应商配置文件路径
-#[allow(dead_code)]
-pub fn get_codex_provider_paths(
-    provider_id: &str,
-    provider_name: Option<&str>,
-) -> (PathBuf, PathBuf) {
-    let base_name = provider_name
-        .map(sanitize_provider_name)
-        .unwrap_or_else(|| sanitize_provider_name(provider_id));
-
-    let auth_path = get_codex_config_dir().join(format!("auth-{base_name}.json"));
-    let config_path = get_codex_config_dir().join(format!("config-{base_name}.toml"));
-
-    (auth_path, config_path)
-}
-
-/// 删除 Codex 供应商配置文件
-#[allow(dead_code)]
-pub fn delete_codex_provider_config(
-    provider_id: &str,
-    provider_name: &str,
-) -> Result<(), AppError> {
-    let (auth_path, config_path) = get_codex_provider_paths(provider_id, Some(provider_name));
-
-    delete_file(&auth_path).ok();
-    delete_file(&config_path).ok();
-
-    Ok(())
 }
 
 /// 原子写 Codex 的 `auth.json` 与 `config.toml`，在第二步失败时回滚第一步
@@ -2808,7 +2778,19 @@ pub fn remove_codex_experimental_bearer_token_if(
         .parse::<DocumentMut>()
         .map_err(|e| AppError::Message(format!("Invalid Codex config.toml: {e}")))?;
 
-    if let Some(provider_id) = active_codex_model_provider_id(&doc) {
+    // §5.2.3：任何 `[model_providers.*].experimental_bearer_token` 都要删行，
+    // 不能只处理激活表——非激活表的残留 token 会随 config 文本一起落 live。
+    let provider_ids: Vec<String> = doc
+        .get("model_providers")
+        .and_then(|item| item.as_table_like())
+        .map(|table| {
+            table
+                .iter()
+                .map(|(key, _)| key.to_string())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    for provider_id in provider_ids {
         if let Some(provider_table) = doc
             .get_mut("model_providers")
             .and_then(|item| item.as_table_like_mut())

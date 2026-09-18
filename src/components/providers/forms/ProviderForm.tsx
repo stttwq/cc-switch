@@ -3,7 +3,6 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
@@ -46,10 +45,6 @@ import { ClaudeFormFields } from "./ClaudeFormFields";
 import { CodexFormFields } from "./CodexFormFields";
 import { PiProviderForm } from "./PiProviderForm";
 import {
-  ProviderAdvancedConfig,
-  type PricingModelSourceOption,
-} from "./ProviderAdvancedConfig";
-import {
   useProviderCategory,
   useApiKeyState,
   useBaseUrlState,
@@ -69,17 +64,6 @@ import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
 
 const CLAUDE_DEFAULT_CONFIG = JSON.stringify({ env: {} }, null, 2);
 const CODEX_DEFAULT_CONFIG = JSON.stringify({ auth: {}, config: "" }, null, 2);
-
-const NON_NEGATIVE_DECIMAL_REGEX = /^\d+(\.\d+)?$/;
-
-function isNonNegativeDecimalString(value: string): boolean {
-  const trimmed = value.trim();
-  if (!NON_NEGATIVE_DECIMAL_REGEX.test(trimmed)) return false;
-  return Number.isFinite(Number(trimmed));
-}
-
-const normalizePricingSource = (value?: string): PricingModelSourceOption =>
-  value === "request" || value === "response" ? value : "inherit";
 
 type PresetEntry = {
   id: string;
@@ -263,20 +247,6 @@ function ProviderFormFull({
     return initialData?.meta?.isFullUrl ?? false;
   });
 
-  const [pricingConfig, setPricingConfig] = useState<{
-    enabled: boolean;
-    costMultiplier?: string;
-    pricingModelSource: PricingModelSourceOption;
-  }>(() => ({
-    enabled:
-      initialData?.meta?.costMultiplier !== undefined ||
-      initialData?.meta?.pricingModelSource !== undefined,
-    costMultiplier: initialData?.meta?.costMultiplier,
-    pricingModelSource: normalizePricingSource(
-      initialData?.meta?.pricingModelSource,
-    ),
-  }));
-
   const { category } = useProviderCategory({
     appId,
     selectedPresetId,
@@ -293,15 +263,6 @@ function ProviderFormFull({
     setLocalIsFullUrl(
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
-    setPricingConfig({
-      enabled:
-        initialData?.meta?.costMultiplier !== undefined ||
-        initialData?.meta?.pricingModelSource !== undefined,
-      costMultiplier: initialData?.meta?.costMultiplier,
-      pricingModelSource: normalizePricingSource(
-        initialData?.meta?.pricingModelSource,
-      ),
-    });
     setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
     setPromptCacheRouting(initialData?.meta?.promptCacheRouting ?? "auto");
   }, [appId, initialData, supportsFullUrl]);
@@ -648,20 +609,6 @@ function ProviderFormFull({
       );
     }
 
-    const costMultiplier = pricingConfig.costMultiplier?.trim();
-    if (
-      pricingConfig.enabled &&
-      costMultiplier &&
-      !isNonNegativeDecimalString(costMultiplier)
-    ) {
-      toast.error(
-        t("settings.globalProxy.defaultCostMultiplierInvalid", {
-          defaultValue: "成本倍率必须为非负数",
-        }),
-      );
-      return;
-    }
-
     // 非官方供应商端点 / API Key 空：A 类
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
     if (category !== "official" && category !== "cloud_provider") {
@@ -804,13 +751,6 @@ function ProviderFormFull({
         promptCacheRouting !== "auto"
           ? promptCacheRouting
           : undefined,
-      costMultiplier: pricingConfig.enabled
-        ? pricingConfig.costMultiplier
-        : undefined,
-      pricingModelSource:
-        pricingConfig.enabled && pricingConfig.pricingModelSource !== "inherit"
-          ? pricingConfig.pricingModelSource
-          : undefined,
       apiFormat:
         appId === "claude" && category !== "official"
           ? localApiFormat
@@ -856,7 +796,7 @@ function ProviderFormFull({
     await onSubmit(payload);
   };
 
-  const shouldShowSpeedTest =
+  const isNonOfficialCategory =
     category !== "official" && category !== "cloud_provider";
 
   const {
@@ -1010,11 +950,12 @@ function ProviderFormFull({
               websiteUrl={claudeWebsiteUrl}
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
+              apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}
               onTemplateValueChange={handleTemplateValueChange}
-              shouldShowSpeedTest={shouldShowSpeedTest}
+              isNonOfficialCategory={isNonOfficialCategory}
               baseUrl={baseUrl}
               onBaseUrlChange={handleClaudeBaseUrlChange}
               showEndpointTools
@@ -1048,7 +989,8 @@ function ProviderFormFull({
               websiteUrl={codexWebsiteUrl}
               isPartner={isCodexPartner}
               partnerPromotionKey={codexPartnerPromotionKey}
-              shouldShowSpeedTest={shouldShowSpeedTest}
+              apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
+              isNonOfficialCategory={isNonOfficialCategory}
               codexBaseUrl={codexBaseUrl}
               onBaseUrlChange={handleCodexBaseUrlChange}
               isFullUrl={localIsFullUrl}
@@ -1116,11 +1058,6 @@ function ProviderFormFull({
               {settingsConfigErrorField}
             </>
           )}
-
-          <ProviderAdvancedConfig
-            pricingConfig={pricingConfig}
-            onPricingConfigChange={setPricingConfig}
-          />
 
           {showButtons && (
             <div className="flex justify-end gap-2">

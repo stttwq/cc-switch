@@ -113,9 +113,6 @@
     "currentlyUsing": "現在使用中",
     "enable": "有効化",
     "inUse": "使用中",
-    "needsRouting": "ルーティングが必要",
-    "noRoutingSupport": "ルーティング非対応",
-    "blockedByProxyHint": "プロキシ引き継ぎモードでは公式プロバイダーに切り替えできません",
     "editProvider": "プロバイダーを編集",
     "editProviderHint": "保存すると現在のプロバイダーにすぐ反映されます。",
     "deleteProvider": "プロバイダーを削除",
@@ -123,8 +120,6 @@
     "addFooterHint": "💡 プリセットを選んだら、下のフィールド（API Key など）を入力してください",
     "addClaudeProvider": "Claude Code プロバイダーを追加",
     "addCodexProvider": "Codex プロバイダーを追加",
-    "addGeminiProvider": "Gemini プロバイダーを追加",
-    "addOpenCodeProvider": "OpenCode プロバイダーを追加",
     "addToConfig": "追加",
     "removeFromConfig": "削除",
     "setAsDefault": "デフォルトに設定",
@@ -147,9 +142,6 @@
     "noSearchResults": "一致するプロバイダーがありません。",
     "duplicate": "複製",
     "sortUpdateFailed": "並び順の更新に失敗しました",
-    "configureUsage": "利用状況を設定",
-    "managedByHermes": "Hermes 管理",
-    "managedByHermesHint": "Hermes の providers: dict で定義されています。Hermes Web UI で編集または削除してください。",
     "openTerminal": "ターミナルを開く",
     "terminalOpened": "ターミナルを開きました",
     "terminalOpenFailed": "ターミナルを開けませんでした",
@@ -166,28 +158,12 @@
     "editCommonConfigHint": "共通設定スニペットは、この機能をオンにしたすべてのプロバイダーへマージされます",
     "addProvider": "プロバイダーを追加",
     "sortUpdated": "並び順を更新しました",
-    "usageSaved": "利用状況の設定を保存しました",
-    "usageSaveFailed": "利用状況設定の保存に失敗しました",
-    "geminiConfig": "Gemini 設定",
-    "geminiConfigHint": ".env 形式で Gemini を設定してください",
-    "form": {
-      "gemini": {
-        "model": "モデル",
-        "oauthTitle": "OAuth 認証モード",
-        "oauthHint": "Google 公式は OAuth 個人認証を使用するため API Key は不要です。初回利用時にブラウザが開きます。",
-        "apiKeyPlaceholder": "Gemini API Key を入力"
-      }
-    },
-    "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください"
+    "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください",
+    "keyMissing": "キーが必要",
+    "keyMissingHint": "キーは同期・エクスポートされません。このプロバイダーを編集して API キーを再入力してください。"
   },
-  "claudeCode": {
-    "needsRouting": "ルーティングが必要",
-    "noRoutingSupport": "ルーティング非対応"
-  },
+  "claudeCode": {},
   "codex": {
-    "needsRouting": "ルーティングが必要",
-    "noRoutingSupport": "ルーティング非対応",
-    "officialRouting": "公式アカウントルーティング",
     "nativeLogin": "Codex ログイン",
     "followCodexLogin": "Codex のログインに追従",
     "followCodexLoginDescription": "Codex CLI で現在ログイン中のアカウントに追従します",
@@ -204,7 +180,6 @@
     "providerDeleted": "プロバイダーを削除しました",
     "switchSuccess": "切り替え成功！",
     "codexRestartRequired": "切り替えました。反映するにはクライアントを再起動してください",
-    "claudeDesktopRestartRequired": "切り替えました。反映するには Claude Desktop を再起動してください",
     "addToConfigSuccess": "設定に追加しました",
     "removeFromConfigSuccess": "設定から削除しました",
     "removeFromConfigFailed": "プロバイダーを削除できません",
@@ -229,8 +204,7 @@
     "openLinkFailed": "リンクを開けませんでした",
     "backfillWarning": "切り替え成功しましたが、前のプロバイダーへの設定保存に失敗しました",
     "codexAuthCleanupFailed": "切り替えは成功しましたが、auth.json を削除できませんでした。公式ログイン資格情報がディスクに残っています。完全に削除するには Codex 設定ディレクトリの auth.json を手動で削除してください",
-    "windowControlFailed": "ウィンドウ操作に失敗しました: {{error}}",
-    "proxyOfficialWarning": "現在のプロバイダー {{name}} は公式です。ローカルルーティングを使用する前にサードパーティプロバイダーに切り替えてください。"
+    "windowControlFailed": "ウィンドウ操作に失敗しました: {{error}}"
   },
   "confirm": {
     "deleteProvider": "プロバイダーを削除",
@@ -238,16 +212,6 @@
     "removeProvider": "プロバイダーを解除",
     "removeProviderMessage": "プロバイダー「{{name}}」を設定から解除してもよろしいですか？\n\n解除後、このプロバイダーは無効になりますが、設定データは CC Switch に保持されます。いつでも再追加できます。",
     "piDefaultProviderWarning": "Pi のグローバルデフォルトは現在このプロバイダーを参照しています。続行すると、Pi は別の利用可能なモデルを試します。/model で再選択するか、/login で別のプロバイダーにログインできます。",
-    "proxy": {
-      "title": "ローカルルーティングの有効化",
-      "message": "ローカルルーティングは上級機能です。有効にする前に、その仕組みを理解していることをご確認ください。\n\n適切な設定方法については、関連ドキュメントまたはプロバイダーにご相談ください。",
-      "confirm": "理解しました、有効にする"
-    },
-    "failover": {
-      "title": "フェイルオーバーの有効化",
-      "message": "フェイルオーバーは上級機能です。有効にする前に、その仕組みを理解していることをご確認ください。\n\nフェイルオーバーキューでプロバイダーの優先順位を先に設定することをお勧めします。",
-      "confirm": "理解しました、有効にする"
-    },
     "unifyCodexHistory": {
       "title": "Codex セッション履歴を統一",
       "message": "オンにすると、公式サブスクリプションとサードパーティが同じセッション履歴リストを共有します。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content を相手のバックエンドが復号できず失敗する場合があります。\n\n既存の公式セッション履歴を共有リストへ移行することもできます（移行前に ~/.cc-switch/backups へ自動バックアップされ、オフにする際に復元を選択できます）。",
@@ -259,11 +223,6 @@
       "message": "オフにすると、公式サブスクリプションとサードパーティはそれぞれ独立した履歴リストに戻ります。オン期間中に作成されたセッションは提供元を判別できないため、サードパーティの履歴に残り、公式サブスクリプションからは見えなくなります。",
       "restoreBackup": "オンにした際に移行した公式セッションを公式履歴へ復元する（バックアップから正確に復元）",
       "confirm": "オフにする"
-    },
-    "usage": {
-      "title": "使用量クエリの設定",
-      "message": "使用量クエリにはカスタムスクリプトまたは API パラメータが必要です。プロバイダーから必要な情報を取得していることをご確認ください。\n\n設定方法が不明な場合は、プロバイダーのドキュメントを先にご確認ください。",
-      "confirm": "理解しました、設定する"
     },
     "autoSync": {
       "title": "自動同期を有効にする",
@@ -290,10 +249,6 @@
       "connectivityCheck": {
         "title": "接続チェック設定",
         "description": "プロバイダー接続チェックのタイムアウト、リトライ、低速判定しきい値を設定"
-      },
-      "pricing": {
-        "title": "コスト計算",
-        "description": "各モデルのトークン料金ルールを管理"
       },
       "globalProxy": {
         "title": "グローバル送信プロキシ",
@@ -333,6 +288,10 @@
           "debug": "SSE ストリームとリクエスト/レスポンスを含む詳細情報",
           "trace": "すべてのログ、最も詳細"
         }
+      },
+      "secretStore": {
+        "title": "資格情報マネージャーのメンテナンス",
+        "description": "削除したプロバイダーが残した資格情報エントリを消去します"
       }
     },
     "language": "言語",
@@ -595,7 +554,7 @@
     "skipClaudeOnboardingDescription": "オンにすると Claude Code の初回インストール確認をスキップします",
     "codexAuth": "Codex アプリ拡張",
     "preserveCodexOfficialAuthOnSwitch": "直接切替時に公式ログインを保持",
-    "preserveCodexOfficialAuthOnSwitchDescription": "ローカルルーティングが無効な場合のサードパーティ切替を制御します。ルーティング接管中は常に Codex の公式ログインを保持します。",
+    "preserveCodexOfficialAuthOnSwitchDescription": "サードパーティのプロバイダーへの切替時に Codex の公式ログインファイル `auth.json` を保持するかどうか。オフにすると切替後に削除されますが、資格情報マネージャーのキーには影響しません。",
     "unifyCodexSessionHistory": "Codex セッション履歴を統一",
     "unifyCodexSessionHistoryDescription": "オンにすると、公式サブスクリプションも共有の custom プロバイダー ID で動作し、公式とサードパーティのセッションが同じ履歴リストに表示されます。既存の公式セッションの移行も選択できます（移行前に自動バックアップ）。オフにする際はバックアップから復元できます。注意：プロバイダーをまたいで古いセッションを再開すると、encrypted_content の推論内容を相手のバックエンドが復号できず、再開に失敗する場合があります。",
     "unifyCodexHistoryRestoreCompleted": "バックアップから公式セッション履歴を復元しました（セッションファイル {{files}} 件、インデックス {{rows}} 行）",
@@ -676,17 +635,8 @@
     "browsePlaceholderPi": "例: /home/<your-username>/.pi/agent",
     "browseDirectory": "ディレクトリを選択",
     "resetDefault": "デフォルトに戻す（保存後に反映）",
-    "checkForUpdates": "アップデートを確認",
-    "updateTo": "v{{version}} に更新",
-    "updating": "更新中...",
-    "checking": "確認中...",
-    "upToDate": "最新バージョンです",
     "aboutHint": "バージョン情報と更新状況を表示します。",
     "portableMode": "ポータブルモード: 更新は手動ダウンロードが必要です。",
-    "updateAvailable": "新しいバージョンがあります: {{version}}",
-    "updateBadge": "更新あり",
-    "updateFailed": "更新のインストールに失敗しました。ダウンロードページを開こうとしました。",
-    "checkUpdateFailed": "更新の確認に失敗しました。時間をおいて再試行してください。",
     "openReleaseNotesFailed": "リリースノートの表示に失敗しました",
     "releaseNotes": "リリースノート",
     "viewReleaseNotes": "このバージョンのリリースノートを見る",
@@ -694,7 +644,7 @@
     "officialWebsite": "公式サイト",
     "github": "GitHub",
     "manualInstallCommands": "手動インストールコマンド",
-    "oneClickInstallHint": "Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi をインストールまたは更新",
+    "oneClickInstallHint": "Claude Code / Codex / Pi をインストールまたは更新",
     "localEnvCheck": "ローカル環境チェック",
     "updateAllTools": "すべて更新（{{count}}）",
     "currentVersion": "現在のバージョン",
@@ -745,12 +695,7 @@
     "devModeRestartHint": "開発モードでは自動再起動をサポートしていません。手動で再起動してください。",
     "saving": "保存中...",
     "globalProxy": {
-      "label": "グローバルプロキシ",
-      "hint": "すべてのリクエスト（API、Skills ダウンロードなど）をプロキシ経由で送信します。ローカルルーティング有効時、アプリのリクエストもこのプロキシを経由します。空欄で直接接続。",
       "test": "接続テスト",
-      "scan": "ローカルプロキシをスキャン",
-      "clear": "クリア",
-      "scanFailed": "スキャンに失敗しました: {{error}}",
       "saved": "ルーティング設定を保存しました",
       "saveFailed": "保存に失敗しました: {{error}}",
       "testSuccess": "接続成功！遅延 {{latency}}ms",
@@ -776,11 +721,6 @@
     "claude": "Claude",
     "claudeCode": "Claude Code",
     "codex": "Codex",
-    "gemini": "Gemini",
-    "grokbuild": "Grok Build",
-    "opencode": "OpenCode",
-    "openclaw": "OpenClaw",
-    "hermes": "Hermes",
     "pi": "Pi"
   },
   "pi": {
@@ -797,6 +737,12 @@
     "form": {
       "providerKey": "プロバイダーキー",
       "providerKeyRequired": "プロバイダーキーを入力してください",
+      "providerKeyHint": "設定ファイルの一意の識別子です。小文字、数字、ハイフンのみ使用できます。",
+      "providerKeyLockedHint": "このプロバイダーは既にアプリ設定へ追加されているため、キーは変更できません。",
+      "apiFormat": "API フォーマット",
+      "apiFormatHint": "AI サービスの API フォーマットを選択",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "カスタム API エンドポイント URL",
       "selectPresetRequired": "先にプリセットまたはカスタム設定を選択してください",
       "fixJsonFirst": "下の設定 JSON を修正してから、構造化フィールドを編集してください。",
       "nameRequired": "表示名を入力してください",
@@ -805,6 +751,8 @@
       "absoluteHttpUrlRequired": "{{label}} は絶対 HTTP または HTTPS URL で指定してください",
       "positiveNumberRequired": "{{label}} は 0 より大きい数値で指定してください",
       "models": "モデル設定",
+      "modelsHint": "利用可能なモデルとその表示名を設定",
+      "modelBaseUrlUnsupported": "モデル単位の baseUrl は設定できません。プロバイダー単位の Base URL を使用してください",
       "noModels": "モデルはまだ設定されていません",
       "addModel": "モデルを追加",
       "removeModel": "モデルを削除",
@@ -844,6 +792,15 @@
       "optionKey": "オプション",
       "optionValue": "値",
       "removeCompatibilityOption": "互換性オプションを削除",
+      "headers": "ヘッダー",
+      "headersHint": "HTTP-Referer や X-Title など、プロバイダーリクエストに付与する任意の HTTP ヘッダーです。",
+      "addHeader": "ヘッダーを追加",
+      "noHeaders": "カスタムヘッダーはありません",
+      "headerName": "ヘッダー",
+      "headerValue": "値",
+      "headerNamePlaceholder": "X-Title",
+      "headerValuePlaceholder": "CC Switch",
+      "removeHeader": "ヘッダーを削除",
       "effectiveApiRequired": "モデル {{id}} には、直接またはプロバイダーから継承した API が必要です",
       "effectiveBaseUrlRequired": "モデル {{id}} には、直接またはプロバイダーから継承したベース URL が必要です",
       "duplicateModel": "モデル ID {{id}} が重複しています",
@@ -1049,7 +1006,6 @@
     "aggregatorApiKeyHint": "💡 API Key のみ入力すれば OK。エンドポイントはプリセット済みです",
     "thirdPartyApiKeyHint": "💡 API Key のみ入力すれば OK。エンドポイントはプリセット済みです",
     "customApiKeyHint": "💡 カスタム設定では必要な項目をすべて手動で入力してください",
-    "omoHint": "💡 OMO 設定は Agent のモデル割り当てを管理し、oh-my-openagent.jsonc / oh-my-opencode.jsonc の両方に対応します",
     "officialHint": "💡 公式プロバイダーはブラウザログインで、API Key は不要です",
     "providerKeyStatusLoading": "プロバイダー識別子の状態を読み込んでいます。しばらくしてからもう一度お試しください",
     "getApiKey": "API Key を取得",
@@ -1112,7 +1068,7 @@
     "modelHint": "💡 空欄ならプロバイダーのデフォルトモデルを使用します",
     "apiHint": "💡 Claude API 互換サービスのエンドポイントを入力してください。末尾にスラッシュを付けないでください",
     "apiHintOAI": "💡 OpenAI Chat Completions 互換サービスのエンドポイントを入力してください。末尾にスラッシュを付けないでください",
-    "apiHintGeminiNative": "💡 Gemini Native では https://generativelanguage.googleapis.com または https://generativelanguage.googleapis.com/v1beta のような base URL を推奨します。プロキシが models/*:generateContent を自動補完します",
+    "apiHintGeminiNative": "💡 上流が Gemini generateContent API を使用します。ベース URL を入力してください（例: https://generativelanguage.googleapis.com または https://generativelanguage.googleapis.com/v1beta）",
     "codexApiHint": "💡 OpenAI Response 互換のサービスエンドポイントを入力してください",
     "fillSupplierName": "プロバイダー名を入力してください",
     "fillConfigContent": "設定内容を入力してください",
@@ -1134,29 +1090,18 @@
     "anthropicModel": "メインモデル",
     "anthropicSmallFastModel": "高速モデル",
     "apiFormat": "上流フォーマット",
-    "apiFormatHint": "プロバイダーがネイティブ Anthropic Messages API なら Anthropic Messages を選択（直結、フォーマット変換なし）。Chat Completions プロトコルなら Chat、Responses API なら Responses、Gemini generateContent プロトコルなら Gemini Native を選択。Chat、Responses、Gemini Native は Anthropic Messages への変換にルーティング引き継ぎの有効化が必要です。",
-    "customUserAgent": "カスタム User-Agent",
-    "customUserAgentHint": "ローカルルーティング/プロキシ引き継ぎが有効な場合にのみ適用され、プロバイダー API へ転送するリクエストの User-Agent を置き換えます。",
-    "customUserAgentInvalid": "User-Agent に制御文字（改行など）を含めることはできません。含まれている場合は無視されます。",
-    "customUserAgentPresets": "プリセット",
-    "localProxyRequestOverrides": "ローカルプロキシのリクエスト上書き",
-    "localProxyRequestOverridesHint": "ローカルルーティング/プロキシ引き継ぎ後にのみ有効で、変換後の上流リクエストへ適用されます。",
-    "localProxyRequestOverridesInvalid": "ローカルプロキシのリクエスト上書き形式エラー: {{error}}",
-    "localProxyHeaderOverrides": "Header 上書き",
-    "localProxyHeaderOverridesInvalidDetail": "Header 上書きの形式エラー: {{error}}",
-    "localProxyBodyOverrides": "Body 上書き",
-    "localProxyBodyOverridesInvalidDetail": "Body 上書きの形式エラー: {{error}}",
+    "apiFormatHint": "プロバイダーがネイティブで話す wire API（Anthropic Messages / Chat Completions / Responses / Gemini generateContent）を選択します。CC Switch はモデルカタログとフィールド形の選択にのみ使い、リクエスト/レスポンスの形式変換は行いません。",
     "fullUrlLabel": "フル URL",
     "fullUrlEnabled": "フル URL モード",
     "fullUrlDisabled": "フル URL として設定",
-    "fullUrlHint": "💡 完全なリクエスト URL を入力してください。このモードはルーティングを有効にして使用する必要があり、ルーティングはこの URL をそのまま使用し、パスを追加しません",
-    "fullUrlHintGeminiNative": "💡 Gemini Native のフル URL モードでは 2 種類の入力を扱えます。1. 公式/構造化された Gemini URL は、要求されたモデルやストリーミング方式に合わせて正規化されます。2. カスタム relay の opaque な完全 URL は、主にそのまま使用され、必要なクエリだけ追加されます",
+    "fullUrlHint": "プロバイダーが要求するパスを含む完全なリクエスト URL（例: https://api.example.com/v1）。ANTHROPIC_BASE_URL としてそのまま書かれ、ゲートウェイやローカルプロキシは経由しません。",
+    "fullUrlHintGeminiNative": "💡 Gemini generateContent API の完全 URL モード: プロバイダーが文書化している完全なリクエスト URL を、モデルパスとクエリパラメータを含めて入力してください",
     "apiFormatAnthropic": "Anthropic Messages（ネイティブ）",
-    "apiFormatOpenAIChat": "OpenAI Chat Completions（ルーティングが必要）",
-    "apiFormatOpenAIResponses": "OpenAI Responses API（ルーティングが必要）",
-    "apiFormatGeminiNative": "Gemini Native generateContent（ルーティングが必要）",
+    "apiFormatOpenAIChat": "ネイティブの Chat Completions API です。カタログとフィールドの判定にのみ影響し、形式変換は行われません。",
+    "apiFormatOpenAIResponses": "ネイティブの Responses API です。カタログとフィールドの判定にのみ影響し、形式変換は行われません。",
+    "apiFormatGeminiNative": "Gemini Native generateContent",
     "codexApiFormatResponses": "OpenAI Responses API（ネイティブ）",
-    "codexApiFormatOpenAIChat": "OpenAI Chat Completions（ルーティングが必要）",
+    "codexApiFormatOpenAIChat": "OpenAI Chat Completions",
     "codexApiFormatHint": "このプロバイダーが実際に対応している Codex API フォーマットを選択します。新しい Codex との互換性のため設定は Responses のままにし、Chat Completions はローカルルーティングで変換します。",
     "authField": "認証フィールド",
     "authFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（デフォルト）",
@@ -1245,10 +1190,10 @@
     "modelNameHint": "使用するモデルを指定します。config.toml に自動更新されます",
     "modelName": "モデル名",
     "upstreamFormatLabel": "上流フォーマット",
-    "upstreamFormatHint": "プロバイダーがネイティブ Responses API なら Responses を選択（直結、フォーマット変換なし）。Chat Completions プロトコルなら Chat を選択。ネイティブ Anthropic Messages プロトコルのみ提供する場合は Anthropic Messages を選択。Chat と Anthropic Messages はどちらも Responses への変換にルーティング引き継ぎの有効化が必要です。",
-    "upstreamFormatChat": "Chat Completions（ルーティング必須）",
+    "upstreamFormatHint": "プロバイダーがネイティブ Responses API なら Responses、Chat Completions プロトコルなら Chat、ネイティブ Anthropic Messages のみなら Anthropic Messages を選択します。この選択はモデルカタログとフィールド形の判定にのみ使われ、リクエスト/レスポンスの変換は行われません。",
+    "upstreamFormatChat": "Chat Completions",
     "upstreamFormatResponses": "Responses（ネイティブ）",
-    "upstreamFormatAnthropic": "Anthropic Messages（ルーティング必須）",
+    "upstreamFormatAnthropic": "Anthropic Messages",
     "anthropicAuthFieldLabel": "認証フィールド",
     "anthropicAuthFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（Authorization）",
     "anthropicAuthFieldApiKey": "ANTHROPIC_API_KEY（x-api-key）",
@@ -1301,57 +1246,8 @@
     "reasoningEffortHint": "上流が low/high/max などの思考の深さの制御に対応している場合に有効化します。有効にすると思考モードも自動的にオンになり、Codex の reasoning.effort を上流の Chat パラメータに変換します。",
     "reasoningGroupTitle": "思考能力",
     "reasoningSectionHint": "プリセットの供給元は自動的に設定され、カスタム供給元は名前/URL から自動推論されます。自動識別が正しくない場合のみ手動で上書きしてください。",
-    "advancedSectionHint": "上流フォーマット、モデルマッピング、思考能力、カスタム User-Agent の設定を含みます。Chat Completions プロトコルを使用するプロバイダーはルーティング引き継ぎの有効化が必要です。",
+    "advancedSectionHint": "上流フォーマット、モデルマッピング、思考能力、カスタム User-Agent の設定を含みます。これらは CLI に書き込む設定の形を決めるものであり、ローカルプロキシや形式変換は一切行いません。",
     "noCommonConfigToApply": "共通設定スニペットが空か、書き込む内容がありません"
-  },
-  "opencode": {
-    "npmPackage": "API フォーマット",
-    "selectPackage": "API フォーマットを選択",
-    "npmPackageHint": "AI サービスの API フォーマットを選択",
-    "baseUrl": "Base URL",
-    "baseUrlHint": "カスタム API エンドポイント URL",
-    "models": "モデル設定",
-    "modelsHint": "利用可能なモデルとその表示名を設定",
-    "addModel": "モデルを追加",
-    "modelId": "モデル ID",
-    "modelName": "表示名",
-    "noModels": "モデルが設定されていません",
-    "modelsRequired": "モデルを少なくとも1つ追加してください",
-    "toggleModelDetails": "モデル詳細を開閉",
-    "providerKey": "プロバイダーキー",
-    "providerKeyPlaceholder": "my-provider",
-    "providerKeyHint": "設定ファイルの一意の識別子です。小文字、数字、ハイフンのみ使用できます。",
-    "providerKeyLockedHint": "このプロバイダーは既にアプリ設定へ追加されているため、キーは変更できません。",
-    "providerKeyRequired": "プロバイダーキーを入力してください",
-    "providerKeyDuplicate": "このキーは既に使用されています",
-    "providerKeyInvalid": "無効な形式です。小文字、数字、ハイフンのみ使用できます。",
-    "headers": "ヘッダー",
-    "headersHint": "HTTP-Referer や X-Title など、プロバイダーリクエストに付与する任意の HTTP ヘッダーです。",
-    "addHeader": "ヘッダーを追加",
-    "headerName": "ヘッダー",
-    "headerValue": "値",
-    "headerNamePlaceholder": "X-Title",
-    "headerValuePlaceholder": "CC Switch",
-    "removeHeader": "ヘッダーを削除",
-    "noHeaders": "カスタムヘッダーはありません",
-    "extraOptions": "追加オプション",
-    "extraOptionsHint": "timeout、setCacheKey などの SDK オプションを設定。値は自動的に適切な型（数値、真偽値など）に変換されます。",
-    "addExtraOption": "追加",
-    "extraOptionKey": "キー名",
-    "extraOptionValue": "値",
-    "extraOptionKeyPlaceholder": "timeout",
-    "extraOptionValuePlaceholder": "600000",
-    "noExtraOptions": "追加オプションはありません",
-    "noModelOptions": "モデルオプション、+ をクリックして追加",
-    "modelLimits": "トークン制限",
-    "limitContext": "コンテキスト",
-    "limitOutput": "出力",
-    "modelExtraFields": "モデルプロパティ",
-    "noModelExtraFields": "モデルプロパティ（variants、cost など）、+ をクリックして追加",
-    "modelExtraFieldKeyPlaceholder": "variants",
-    "sdkOptions": "SDK オプション",
-    "modelOptionKeyPlaceholder": "provider",
-    "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "providerPreset": {
     "label": "プロバイダータイプ",
@@ -1376,7 +1272,6 @@
     "quit": "終了"
   },
   "errors": {
-    "usage_query_failed": "利用状況の取得に失敗しました",
     "configLoadFailedTitle": "設定の読み込みに失敗しました",
     "configLoadFailedMessage": "設定ファイルを読み込めません:\n{{path}}\n\nエラー詳細:\n{{detail}}\n\nJSON が正しいか確認するか、同じディレクトリのバックアップファイル（config.json.bak など）から復元してください。\n\nアプリを終了して修正してください。",
     "frontendCrashTitle": "画面で問題が発生しました",
@@ -1397,7 +1292,6 @@
     "addMcp": "MCPを追加",
     "claudeTitle": "Claude Code MCP 管理",
     "codexTitle": "Codex MCP 管理",
-    "geminiTitle": "Gemini MCP 管理",
     "unifiedPanel": {
       "title": "MCP サーバー管理",
       "addServer": "サーバーを追加",
@@ -1413,12 +1307,7 @@
       "noSearchResults": "検索に一致する MCP サーバーがありません",
       "apps": {
         "claude": "Claude",
-        "codex": "Codex",
-        "gemini": "Gemini",
-        "grokbuild": "Grok Build",
-        "opencode": "OpenCode",
-        "openclaw": "OpenClaw",
-        "hermes": "Hermes"
+        "codex": "Codex"
       }
     },
     "userLevelPath": "ユーザーレベルの MCP パス",
@@ -1598,7 +1487,6 @@
     "switcherAriaLabel": "プロジェクト：{{name}}",
     "switcherTooltip": {
       "claude": "プロジェクト：Claude Code のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え",
-      "claude-desktop": "プロジェクト：Claude Desktop のプロバイダーをワンクリックで切り替え",
       "codex": "プロジェクト：Codex のプロバイダー / MCP / Skills / メモリファイルをワンクリックで切り替え"
     },
     "none": "プロジェクトを使用しない",
@@ -1607,7 +1495,6 @@
     "createFromCurrent": "新規プロジェクト",
     "createDescription": {
       "claude": "Claude Code の現在のプロバイダー、MCP、Skills、メモリファイルをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
-      "claude-desktop": "Claude Desktop の現在のプロバイダーをプロジェクトとして保存し、後からワンクリックで切り替えられます。",
       "codex": "Codex の現在のプロバイダー、MCP、Skills、メモリファイルの設定をプロジェクトとして保存し、後からワンクリックで切り替えられます。"
     },
     "manage": "プロジェクトを管理…",
@@ -1665,6 +1552,15 @@
     "error": {
       "noSelection": "削除する環境変数を選択してください"
     }
+  },
+  "envConflict": {
+    "title": "環境変数の競合",
+    "overwriteNotice": "このまま切り替えると、CC Switch が管理していない環境変数を上書きします。引き継ぐと元の値は上書きされ、保存されません。",
+    "colName": "変数名",
+    "colHint": "末尾 4 文字",
+    "adopt": "引き継いで切り替える",
+    "cancel": "キャンセル",
+    "adoptFailed": "引き継ぎに失敗しました"
   },
   "skills": {
     "manage": "Skills",
@@ -1820,13 +1716,6 @@
       "success": "スキル {{name}} をバックアップから復元しました",
       "failed": "バックアップからの復元に失敗しました"
     },
-    "apps": {
-      "claude": "Claude",
-      "codex": "Codex",
-      "gemini": "Gemini",
-      "opencode": "OpenCode",
-      "openclaw": "OpenClaw"
-    },
     "installFromZip": {
       "button": "ZIP からインストール",
       "installing": "インストール中...",
@@ -1868,6 +1757,13 @@
     "summary": "{{numProviders}} 個のプロバイダーのキーを移行しました。開いているターミナルは、新しい環境変数を読み込むために再起動が必要です。",
     "backupsTitle": "平文が残っている履歴データベースバックアップ（ロールバック用、後で削除できます）：",
     "deleteBackups": "すべてのバックアップを削除",
-    "gotIt": "了解"
+    "gotIt": "了解",
+    "codexLogin": "{{numProviders}} 件のプロバイダーの Codex OAuth ログイン状態を破棄しました。`codex login` で再ログインしてください。",
+    "liveFailures": "{{count}} 件の live 設定を書き換えできませんでした（実行中の CLI がファイルをロックしている可能性があります）：",
+    "retry": "次回起動時に再試行",
+    "cleanupOrphans": "クリーンアップ",
+    "cleanupOrphansHint": "DB に存在しないプロバイダーの資格情報エントリのみ削除します。",
+    "cleanupOrphansDone": "{count} 件の残存資格情報を削除しました",
+    "warningsTitle": "移行時の注意点（フィールドのみ、値は含みません）："
   }
 }

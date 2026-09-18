@@ -236,6 +236,7 @@ Modern AI-powered coding relies on tools like Claude Code, Codex, and Pi — but
 ### Credentials
 
 - API keys and Base URLs live in **Windows Credential Manager**, not SQLite
+- Keys are **never** exported, synced or backed up: after restoring a profile on another machine every provider shows "Key required" until you re-enter it (by design)
 - Delivery is via **user environment variables** (`HKCU\\Environment`); reopen terminals after switching
 - Live files must not contain secret values (Codex/Pi still write the active Base URL because those CLIs require it)
 

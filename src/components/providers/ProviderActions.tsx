@@ -28,8 +28,6 @@ interface ProviderActionsProps {
   onDelete: () => void;
   onRemoveFromConfig?: () => void;
   onOpenTerminal?: () => void;
-  // Hermes v12+ providers: dict overlay — edit/delete must go through Web UI
-  isReadOnly?: boolean;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
 }
@@ -58,7 +56,6 @@ export function ProviderActions({
   onDelete,
   onRemoveFromConfig,
   onOpenTerminal,
-  isReadOnly = false,
   isRemovalProtected = false,
   isStateChangeProtected = false,
 }: ProviderActionsProps) {
@@ -152,17 +149,11 @@ export function ProviderActions({
   };
 
   const buttonState = getMainButtonState();
-  const canDelete =
-    !isReadOnly && (appId === "pi" ? !isStateChangeProtected : true);
-  const readOnlyHint = t("provider.managedByHermes", {
-    defaultValue: "由 Hermes 管理，请在 Hermes Web UI 中编辑",
-  });
+  const canDelete = appId === "pi" ? !isStateChangeProtected : true;
   const deleteHint =
     appId === "pi" && isStateChangeProtected
       ? piStateChangeHint
-      : isReadOnly
-        ? readOnlyHint
-        : t("common.delete");
+      : t("common.delete");
 
   return (
     <div className="flex items-center gap-1.5">
@@ -191,14 +182,10 @@ export function ProviderActions({
         <Button
           size="icon"
           variant="ghost"
-          onClick={isReadOnly ? undefined : onEdit}
-          disabled={isReadOnly}
+          onClick={onEdit}
           aria-label={t("common.edit")}
-          title={isReadOnly ? readOnlyHint : t("common.edit")}
-          className={cn(
-            iconButtonClass,
-            isReadOnly && "opacity-40 cursor-not-allowed text-muted-foreground",
-          )}
+          title={t("common.edit")}
+          className={iconButtonClass}
         >
           <Edit className="h-4 w-4" />
         </Button>

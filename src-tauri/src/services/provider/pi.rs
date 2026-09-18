@@ -188,6 +188,19 @@ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// §5.3.1：把凭据管理器里的 baseUrl 合入待写入 models.json 的节点。
+/// DB 行已剥掉 baseUrl，只有 live 侧需要它（Pi CLI 不支持 baseUrl 的环境变量引用）。
+fn hydrate_pi_base_url_for_live(state: &AppState, provider: &Provider) -> Result<Value, AppError> {
+    let mut config = provider.settings_config.clone();
+    let target = crate::secrets::SecretTarget::provider_base_url(AppType::Pi, provider.id.clone());
+    if let Some(url) = futures::executor::block_on(state.secrets.get(&target))? {
+        if let Some(obj) = config.as_object_mut() {
+            obj.insert("baseUrl".to_string(), Value::String(url.to_string()));
+        }
+    }
+    Ok(config)
+}
+
 pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
@@ -204,7 +217,10 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
 
     ProviderService::validate_provider_settings(&app_type, &provider)?;
     ProviderService::preflight_env_delivery(state, &app_type, &provider)?;
-    crate::pi_config::insert_pi_provider(id, &provider.settings_config)?;
+    // §5.3.1：Pi 的 baseUrl 没有环境变量间接引用，live 节点必须写凭据管理器里的
+    // 那一份；DB 行已剥离 baseUrl，直接写会让模型不可用。
+    let live_config = hydrate_pi_base_url_for_live(state, &provider)?;
+    crate::pi_config::insert_pi_provider(id, &live_config)?;
     let mut result = SwitchResult::default();
     ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut result)?;
     Ok(result)

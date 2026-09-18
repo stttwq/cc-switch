@@ -51,17 +51,47 @@ pub fn cleanup_auto_deletable_plaintext() {
         for entry in entries.flatten() {
             let name = entry.file_name();
             let name = name.to_string_lossy();
-            if name.starts_with("claude_") && name.ends_with(".json") {
-                let path = entry.path();
-                let Ok(text) = fs::read_to_string(&path) else {
-                    continue;
-                };
-                if text.contains("\"env\"") {
-                    let _ = fs::remove_file(&path);
+            // §6.3：旧终端启动器写的 `%TEMP%/claude_<id>_<pid>.json`，按文件名模式
+            // 匹配 **且** 内容确实解析为含 `env` 的 JSON 对象才删，避免误伤同名文件。
+            if !is_legacy_terminal_settings_name(&name) {
+                continue;
+            }
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let is_legacy = serde_json::from_str::<serde_json::Value>(&text)
+                .ok()
+                .and_then(|v| v.get("env").map(|e| e.is_object()))
+                .unwrap_or(false);
+            if is_legacy {
+                if let Err(e) = fs::remove_file(&path) {
+                    log::warn!("删除 {} 失败: {e}", path.display());
                 }
             }
         }
     }
+}
+
+/// `claude_<id>_<pid>.json`：前缀后必须是两段非空、以 `_` 分隔的名称，最后 `.json`。
+fn is_legacy_terminal_settings_name(name: &str) -> bool {
+    let Some(rest) = name
+        .strip_prefix("claude_")
+        .and_then(|s| s.strip_suffix(".json"))
+    else {
+        return false;
+    };
+    let mut parts = rest.split('_');
+    let Some(first) = parts.next() else {
+        return false;
+    };
+    let Some(second) = parts.next() else {
+        return false;
+    };
+    parts.next().is_none() && !first.is_empty() && !second.is_empty()
 }
 
 pub fn list_plaintext_db_backups() -> Result<Vec<PlaintextBackupInfo>, AppError> {

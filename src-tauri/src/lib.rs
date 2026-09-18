@@ -132,6 +132,13 @@ fn redact_known_secrets_with_min_length(
             output = output.replace(secret.as_str(), "[REDACTED]");
         }
     }
+    // S2：本次会话写入 / 投递过的密钥（含 CC_SWITCH_* 环境变量的值）自动参与脱敏，
+    // 不依赖每个调用方记得把它们传进来。
+    for secret in crate::secrets::scan::session_secret_snapshot() {
+        if secret.chars().count() >= minimum_chars {
+            output = output.replace(secret.as_str(), "[REDACTED]");
+        }
+    }
     output
 }
 
@@ -530,10 +537,45 @@ pub fn run() {
             };
             let app_state = AppState::new(db, secrets);
 
+            // §6.1：DB init 只做纯 SQL，凭据迁移在 AppState::new（含 probe）之后
+            // 用同一份已探测通过的 store 触发；§6.3 的明文残留清理紧随其后。
+            // 失败按 §6.6 走「重试 / 退出」阻断对话框，不提供跳过。
+            loop {
+                match app_state
+                    .db
+                    .run_credential_migration_if_pending(app_state.secrets.as_ref())
+                {
+                    Ok(true) => {
+                        crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
+                        break;
+                    }
+                    Ok(false) => break,
+                    Err(e) => {
+                        log::error!("凭据迁移失败: {e}");
+                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                            log::info!("用户选择退出程序");
+                            std::process::exit(1);
+                        }
+                    }
+                }
+            }
+
+            // settings.json 里的 WebDAV / S3 明文残留：无条件扫一次（幂等 no-op）。
+            // 已清过 pending 标志的老用户不会再走上面的迁移批次，靠这条收掉明文。
+            if let Ok(rt) = tokio::runtime::Runtime::new() {
+                if let Err(e) = rt.block_on(crate::secrets::migration::sweep_plaintext_app_settings(
+                    &app_state.db,
+                    app_state.secrets.as_ref(),
+                )) {
+                    log::warn!("settings.json 明文凭据清扫失败: {e}");
+                }
+            }
+
             match app_state.db.get_setting("live_reapply_pending") {
                 Ok(Some(flag)) if flag == "1" => {
                     log::info!("检测到 live_reapply_pending=1，开始重写 live 并投递环境变量");
                     let mut ok = true;
+                    let mut failures: Vec<String> = Vec::new();
                     for app_type in [
                         crate::app_config::AppType::Claude,
                         crate::app_config::AppType::Codex,
@@ -554,6 +596,10 @@ pub fn run() {
                                     ),
                                     Err(e) => {
                                         ok = false;
+                                        failures.push(format!(
+                                            "{}: {e}",
+                                            app_type.as_str()
+                                        ));
                                         log::warn!(
                                             "✗ live reapply {} failed: {e}",
                                             app_type.as_str()
@@ -564,6 +610,7 @@ pub fn run() {
                             Ok(None) => {}
                             Err(e) => {
                                 ok = false;
+                                failures.push(format!("读取当前供应商失败: {e}"));
                                 log::warn!("✗ live reapply 读取当前供应商失败: {e}");
                             }
                         }
@@ -572,10 +619,28 @@ pub fn run() {
                         Ok(n) => log::info!("✓ live reapply pi ({n} providers)"),
                         Err(e) => {
                             ok = false;
+                            failures.push(format!("pi: {e}"));
                             log::warn!("✗ live reapply pi failed: {e}");
                         }
                     }
-                    crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
+                    // §6.4：只有 live 全部重写成功才清理已迁移的 Codex auth.json。
+                    if ok {
+                        if let Err(e) =
+                            tokio::runtime::Runtime::new().map(|rt| {
+                                rt.block_on(crate::secrets::migration::prune_migrated_codex_auth_file(
+                                    &app_state.db,
+                                    app_state.secrets.as_ref(),
+                                ))
+                            })
+                        {
+                            log::warn!("Codex auth.json 残留检查跳过: {e}");
+                        }
+                    }
+                    // §6.4 / §6.5：失败项写进报告，前端列出处数并提供重试。
+                    crate::secrets::migration::record_live_reapply_failures(
+                        &app_state.db,
+                        &failures,
+                    );
                     if ok {
                         let _ = app_state.db.set_setting("live_reapply_pending", "0");
                         log::info!("live_reapply_pending 已清零");
@@ -1035,6 +1100,7 @@ pub fn run() {
             commands::confirm_secrets_migration,
             commands::list_plaintext_backups,
             commands::delete_plaintext_backups,
+            commands::retry_live_reapply,
             commands::secrets_cleanup_orphans,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
@@ -1132,8 +1198,8 @@ pub fn run() {
             commands::sync_current_providers_live,
             update_tray_menu,
             // Environment variable management
-            commands::check_env_conflicts,
-            commands::delete_env_vars,
+            commands::env_delivery_scan,
+            commands::env_delivery_remove,
             commands::env_delivery_conflicts,
             commands::env_delivery_adopt,
             // Skill management (v3.10.0+ unified)

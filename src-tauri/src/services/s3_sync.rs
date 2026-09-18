@@ -254,8 +254,10 @@ async fn creds_for(
 ) -> Result<S3Credentials, AppError> {
     let (access_key_id, secret_access_key) = restore_s3_credentials(secrets).await?;
     Ok(S3Credentials {
-        access_key_id: access_key_id.unwrap_or_default(),
-        secret_access_key: secret_access_key.unwrap_or_default(),
+        access_key_id: access_key_id.map(|key| key.to_string()).unwrap_or_default(),
+        secret_access_key: secret_access_key
+            .map(|key| key.to_string())
+            .unwrap_or_default(),
         region: settings.region.clone(),
         bucket: settings.bucket.clone(),
         endpoint: settings.endpoint.clone(),

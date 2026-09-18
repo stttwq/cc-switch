@@ -442,6 +442,6 @@ mod tests {
             .await
             .expect("restore should succeed")
             .expect("password should be stored");
-        assert_eq!(restored, "secret-password");
+        assert_eq!(restored.as_str(), "secret-password");
     }
 }

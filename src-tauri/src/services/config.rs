@@ -207,7 +207,7 @@ impl ConfigService {
             fs::create_dir_all(parent).map_err(|e| AppError::io(parent, e))?;
         }
 
-        let settings = sanitize_claude_settings_for_live(&provider.settings_config);
+        let settings = sanitize_claude_settings_for_live(&provider.settings_config)?;
         write_json_file(&settings_path, &settings)?;
 
         let live_after = read_json_file::<serde_json::Value>(&settings_path)?;

@@ -6,8 +6,7 @@ use serde_json::Value;
 use toml_edit::{DocumentMut, Item, TableLike};
 
 use crate::app_config::AppType;
-use crate::codex_config::{get_codex_auth_path, get_codex_config_path};
-use crate::config::{delete_file, get_claude_settings_path, read_json_file, write_json_file};
+use crate::config::{get_claude_settings_path, read_json_file, write_json_file};
 use crate::database::Database;
 use crate::error::AppError;
 use crate::provider::Provider;
@@ -58,28 +57,10 @@ fn apply_kimi_for_coding_context_defaults(settings: &mut Value, provider: &Provi
     }
 }
 
-pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Value {
-    // Delegate to the new sanitizer with safety checks
-    // This function is kept for backward compatibility but now enforces security
-    match super::live_sanitizer::sanitize_claude_settings_for_live_write(settings) {
-        Ok(sanitized) => sanitized,
-        Err(e) => {
-            log::error!("Failed to sanitize Claude settings for live write: {}", e);
-            // Fallback：只剥离敏感 env（密钥/Base URL/命中敏感规则的键），
-            // 保留用户的模型名等非敏感 env，而不是整块删除。绝不写密钥。
-            let mut v = settings.clone();
-            if let Some(obj) = v.as_object_mut() {
-                obj.remove("api_format");
-                obj.remove("apiFormat");
-                obj.remove("openrouter_compat_mode");
-                obj.remove("openrouterCompatMode");
-                if let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) {
-                    env.retain(|key, _| !super::live_sanitizer::is_claude_env_secret(key));
-                }
-            }
-            v
-        }
-    }
+/// S5 / §5.3.1：写 live 前的门控是**失败关闭**的——净化流程一旦判定配置里
+/// 仍有无法剥离的敏感材料，直接报错不写，绝不退回"尽量写干净"。
+pub(crate) fn sanitize_claude_settings_for_live(settings: &Value) -> Result<Value, AppError> {
+    super::live_sanitizer::sanitize_claude_settings_for_live_write(settings)
 }
 
 pub(crate) fn provider_exists_in_live_config(
@@ -796,51 +777,6 @@ pub(crate) fn normalize_provider_common_config_for_storage(
     Ok(())
 }
 
-/// Live configuration snapshot for backup/restore
-#[derive(Clone)]
-#[allow(dead_code)]
-pub(crate) enum LiveSnapshot {
-    Claude {
-        settings: Option<Value>,
-    },
-    Codex {
-        auth: Option<Value>,
-        config: Option<String>,
-    },
-}
-
-impl LiveSnapshot {
-    #[allow(dead_code)]
-    pub(crate) fn restore(&self) -> Result<(), AppError> {
-        match self {
-            LiveSnapshot::Claude { settings } => {
-                let path = get_claude_settings_path();
-                if let Some(value) = settings {
-                    write_json_file(&path, value)?;
-                } else if path.exists() {
-                    delete_file(&path)?;
-                }
-            }
-            LiveSnapshot::Codex { auth, config } => {
-                let auth_path = get_codex_auth_path();
-                let config_path = get_codex_config_path();
-                if let Some(value) = auth {
-                    write_json_file(&auth_path, value)?;
-                } else if auth_path.exists() {
-                    delete_file(&auth_path)?;
-                }
-
-                if let Some(text) = config {
-                    crate::config::write_text_file(&config_path, text)?;
-                } else if config_path.exists() {
-                    delete_file(&config_path)?;
-                }
-            }
-        }
-        Ok(())
-    }
-}
-
 /// Write live configuration snapshot for a provider
 pub(crate) fn write_live_snapshot(
     state: &AppState,
@@ -850,7 +786,7 @@ pub(crate) fn write_live_snapshot(
     match app_type {
         AppType::Claude => {
             let path = get_claude_settings_path();
-            let settings = sanitize_claude_settings_for_live(&provider.settings_config);
+            let settings = sanitize_claude_settings_for_live(&provider.settings_config)?;
             write_json_file(&path, &settings)?;
         }
         AppType::Codex => {
@@ -885,7 +821,7 @@ pub(crate) fn write_live_snapshot(
                 let sanitized =
                     super::codex_sanitizer::sanitize_codex_config_for_live_write_with_base_url(
                         config_text,
-                        base_url.as_deref(),
+                        base_url.as_ref().map(|url| url.as_str()),
                     )?;
                 Some(sanitized)
             } else {
@@ -1055,26 +991,37 @@ fn read_live_settings_with_auth(app_type: &AppType, strip_auth: bool) -> Result<
         AppType::Codex => {
             let mut result = crate::codex_config::read_codex_live_settings()?;
 
-            // Sanitize auth object - remove bearer tokens
+            // 前端 IPC 路径按敏感规则逐个剥（原则 3.1-3：IPC 零密钥），不能只靠
+            // 固定三键白名单，否则用户自写的 `*_API_KEY` 仍会过 IPC。
+            // 内部回填路径（strip_auth=false）保留原文，交给提取器剥（§5.4-③）。
             if let Some(obj) = result.as_object_mut() {
-                if let Some(auth) = obj.get_mut("auth").and_then(|v| v.as_object_mut()) {
-                    // Remove experimental_bearer_token if present
-                    auth.remove("experimental_bearer_token");
-                    auth.remove("bearer_token");
-                    auth.remove("api_key");
-                    if strip_auth {
-                        // 前端 IPC：连用户自己的 API key 与 ChatGPT OAuth 登录态也不外泄。
-                        auth.remove("OPENAI_API_KEY");
-                        auth.remove("tokens");
-                        auth.remove("last_refresh");
+                if strip_auth {
+                    if let Some(auth) = obj.get_mut("auth").and_then(|v| v.as_object_mut()) {
+                        let sensitive: Vec<String> = auth
+                            .keys()
+                            .filter(|key| {
+                                crate::secrets::is_sensitive_config_key(key)
+                                    || matches!(
+                                        key.as_str(),
+                                        "experimental_bearer_token"
+                                            | "bearer_token"
+                                            | "api_key"
+                                            | "tokens"
+                                            | "last_refresh"
+                                    )
+                            })
+                            .cloned()
+                            .collect();
+                        for key in sensitive {
+                            auth.remove(&key);
+                        }
                     }
                 }
 
-                // Sanitize config text - remove bearer tokens and api keys
+                // Sanitize config text - 净化失败绝不退回原文（否则等于把 token 原样送出）
                 if let Some(config_text) = obj.get("config").and_then(|v| v.as_str()) {
-                    if let Ok(sanitized) = sanitize_codex_config_text(config_text) {
-                        obj.insert("config".to_string(), Value::String(sanitized));
-                    }
+                    let sanitized = sanitize_codex_config_text(config_text)?;
+                    obj.insert("config".to_string(), Value::String(sanitized));
                 }
             }
 
@@ -1103,12 +1050,28 @@ fn read_live_settings_with_auth(app_type: &AppType, strip_auth: bool) -> Result<
             }
             let mut settings: serde_json::Value = read_json_file(&path)?;
 
-            // Sanitize Claude settings - remove API keys and auth tokens
-            if let Some(obj) = settings.as_object_mut() {
-                if let Some(env) = obj.get_mut("env").and_then(|v| v.as_object_mut()) {
-                    env.remove("ANTHROPIC_API_KEY");
-                    env.remove("ANTHROPIC_AUTH_TOKEN");
-                    env.remove("ANTHROPIC_BASE_URL");
+            // IPC 路径按敏感规则剥（§5.2.2）：固定三键之外，用户自写的
+            // `OPENROUTER_API_KEY` 等敏感 env 同样不得回传 WebView。
+            if strip_auth {
+                if let Some(obj) = settings.as_object_mut() {
+                    if let Some(env) = obj.get_mut("env").and_then(|v| v.as_object_mut()) {
+                        let sensitive: Vec<String> = env
+                            .keys()
+                            .filter(|key| {
+                                super::live_sanitizer::is_claude_env_secret(key)
+                                    || matches!(
+                                        key.as_str(),
+                                        "ANTHROPIC_API_KEY"
+                                            | "ANTHROPIC_AUTH_TOKEN"
+                                            | "ANTHROPIC_BASE_URL"
+                                    )
+                            })
+                            .cloned()
+                            .collect();
+                        for key in sensitive {
+                            env.remove(&key);
+                        }
+                    }
                 }
             }
 
@@ -1197,6 +1160,9 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         }
         .to_string(),
     );
+
+    // §3.1-5：从 live 文件回填也是入口之一，落 DB 前必须剥凭据。
+    super::strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
 
     state.db.save_provider(app_type.as_str(), &provider)?;
     state

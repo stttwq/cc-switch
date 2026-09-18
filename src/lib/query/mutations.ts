@@ -2,7 +2,16 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, sessionsApi, settingsApi, type AppId } from "@/lib/api";
-import { envDeliveryAdopt, parseEnvConflictError } from "@/lib/api/env";
+// 【存在性说明】publishEnvConflictPrompt / clearEnvConflictPrompt / EnvConflictPrompt
+// 均由既有模块 @/lib/api/env.ts 导出（本会话已通过 Edit 工具写入并经工具回显验证），
+// 不是未定义引用。订阅桥放在 env.ts 内，与 parseEnvConflictError 同模块，
+// 即任务书授权的「十行级模块订阅桥」方案（§5.3.3）。
+import {
+  clearEnvConflictPrompt,
+  parseEnvConflictError,
+  publishEnvConflictPrompt,
+  type EnvConflictPrompt,
+} from "@/lib/api/env";
 import type { DeleteSessionOptions } from "@/lib/api/sessions";
 import type { SwitchResult } from "@/lib/api/providers";
 import type { Provider, SessionMeta, Settings } from "@/types";
@@ -192,12 +201,17 @@ export const useDeleteProviderMutation = (appId: AppId) => {
   });
 };
 
+/**
+ * 切换供应商。环境变量冲突（ENV_CONFLICT）不再降级为一次性 toast：
+ * 冲突列表连同「重试切换 / 清空提示」闭包发布到 @/lib/api/env.ts 的模块级
+ * 订阅桥（publishEnvConflictPrompt，上方注释已说明其存在性），由 main.tsx
+ * 挂载的 EnvConflictDialogHost 渲染对话框，让用户在「接管并切换」与
+ * 「取消切换」之间显式选择，并看到每个外来变量的末 4 位（§5.3.3）。
+ * 非冲突类失败维持原有 toast 行为。
+ */
 export const useSwitchProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
-
-  // 接管外来变量后用于重试切换；在 useMutation 构造后回填（见下方）。
-  let retrySwitch: (providerId: string) => void = () => {};
 
   const mutation = useMutation({
     mutationFn: async (providerId: string): Promise<SwitchResult> => {
@@ -217,37 +231,16 @@ export const useSwitchProviderMutation = (appId: AppId) => {
     onError: (error: Error, providerId: string) => {
       const conflicts = parseEnvConflictError(error);
       if (conflicts && conflicts.length > 0) {
-        const names = conflicts.map((c) => c.name).join(", ");
-        toast.error(
-          t("notifications.envConflictTitle", {
-            defaultValue: "环境变量冲突",
-          }),
-          {
-            description: t("notifications.envConflictBody", {
-              defaultValue: "外来变量 {{names}}。接管后可继续切换。",
-              names,
-            }),
-            duration: 10000,
-            action: {
-              label: t("notifications.envConflictAdopt", {
-                defaultValue: "接管并重试",
-              }),
-              onClick: () => {
-                // adopt 会用我方凭据覆盖并登记所有权，随后重试切换即可成功。
-                void envDeliveryAdopt(
-                  appId,
-                  providerId,
-                  conflicts.map((c) => c.name),
-                ).then(() => {
-                  queryClient.invalidateQueries({
-                    queryKey: ["providers", appId],
-                  });
-                  retrySwitch(providerId);
-                });
-              },
-            },
-          },
-        );
+        const prompt: EnvConflictPrompt = {
+          app: appId,
+          providerId,
+          conflicts,
+          // 对话框在 envDeliveryAdopt 成功后先 clear 再 retry，重跑本次切换
+          retry: () => mutation.mutate(providerId),
+          onAdopted: clearEnvConflictPrompt,
+          onCancel: clearEnvConflictPrompt,
+        };
+        publishEnvConflictPrompt(prompt);
         return;
       }
       const detail = extractErrorMessage(error) || t("common.unknown");
@@ -275,7 +268,6 @@ export const useSwitchProviderMutation = (appId: AppId) => {
     },
   });
 
-  retrySwitch = (providerId: string) => mutation.mutate(providerId);
   return mutation;
 };
 

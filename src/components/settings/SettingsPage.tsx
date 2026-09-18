@@ -15,6 +15,8 @@ import {
   Cloud,
   ScrollText,
   HardDriveDownload,
+  Globe,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -34,6 +36,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
+import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
+import { SecretStoreMaintenance } from "@/components/settings/SecretStoreMaintenance";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
 import { AppVisibilitySettings } from "@/components/settings/AppVisibilitySettings";
@@ -435,6 +439,50 @@ export function SettingsPage({
                         </AccordionTrigger>
                         <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
                           <LogConfigPanel />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem
+                        value="globalProxy"
+                        className="rounded-xl glass-card overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <Globe className="h-5 w-5 text-cyan-500" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold">
+                                {t("settings.advanced.globalProxy.title")}
+                              </h3>
+                              <p className="text-sm text-muted-foreground font-normal">
+                                {t("settings.advanced.globalProxy.description")}
+                              </p>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
+                          <GlobalProxySettings />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem
+                        value="secretStore"
+                        className="rounded-xl glass-card overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <ShieldCheck className="h-5 w-5 text-cyan-500" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold">
+                                {t("settings.advanced.secretStore.title")}
+                              </h3>
+                              <p className="text-sm text-muted-foreground font-normal">
+                                {t("settings.advanced.secretStore.description")}
+                              </p>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
+                          <SecretStoreMaintenance />
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>

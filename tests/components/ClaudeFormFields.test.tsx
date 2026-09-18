@@ -25,7 +25,7 @@ const renderClaudeForm = (overrides: Partial<ClaudeFormFieldsProps> = {}) => {
     templateValues: {},
     templatePresetName: "",
     onTemplateValueChange: vi.fn(),
-    shouldShowSpeedTest: false,
+    isNonOfficialCategory: false,
     baseUrl: "",
     onBaseUrlChange: vi.fn(),
     showEndpointTools: true,

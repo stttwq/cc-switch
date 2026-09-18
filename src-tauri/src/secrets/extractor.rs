@@ -120,7 +120,9 @@ impl<'a> SecretExtractor<'a> {
     }
 
     /// Restore WebDAV password from SecretStore
-    pub async fn restore_webdav_password(&self) -> Result<Option<String>, AppError> {
+    pub async fn restore_webdav_password(
+        &self,
+    ) -> Result<Option<zeroize::Zeroizing<String>>, AppError> {
         let target = SecretTarget::app("webdav", "password");
         self.store.retrieve(&target).await
     }
@@ -145,7 +147,13 @@ impl<'a> SecretExtractor<'a> {
     /// Restore S3 credentials from SecretStore
     pub async fn restore_s3_credentials(
         &self,
-    ) -> Result<(Option<String>, Option<String>), AppError> {
+    ) -> Result<
+        (
+            Option<zeroize::Zeroizing<String>>,
+            Option<zeroize::Zeroizing<String>>,
+        ),
+        AppError,
+    > {
         let access_key_id = self
             .store
             .retrieve(&SecretTarget::app("s3", "access_key_id"))
@@ -165,6 +173,8 @@ async fn persist_secrets(
     secrets: &ProviderSecrets,
 ) -> Result<(), AppError> {
     if let Some(key) = secrets.api_key.as_ref() {
+        // §5.5：登记进"本次会话已知密钥"，导出护栏按字面量兜底。
+        crate::secrets::scan::note_session_secret(key.as_str());
         store
             .store(
                 &SecretTarget::provider_api_key(app.clone(), provider_id),
@@ -201,6 +211,36 @@ pub(crate) async fn persist_extracted_secrets(
         record_known_targets(db, &extractor.app, provider_id, secrets)?;
     }
     Ok(())
+}
+
+/// 只写凭据、不动 `known_secret_targets`：批量迁移用它把凭据写入与 DB 事务分开，
+/// 目标名由调用方在同一事务里落库（§6.2 第 3、4 步）。
+pub(crate) async fn persist_secrets_only(
+    store: &dyn SecretStore,
+    app: &AppType,
+    provider_id: &str,
+    secrets: &ProviderSecrets,
+) -> Result<(), AppError> {
+    persist_secrets(store, app, provider_id, secrets).await
+}
+
+/// §5.4：凭据管理器无法枚举，target 名要自己登记；这里给出某供应商本次写入的全部 target。
+pub fn provider_secret_targets(
+    app: &AppType,
+    provider_id: &str,
+    secrets: &ProviderSecrets,
+) -> Vec<SecretTarget> {
+    let mut targets = Vec::new();
+    if secrets.api_key.is_some() {
+        targets.push(SecretTarget::provider_api_key(app.clone(), provider_id));
+    }
+    if secrets.base_url.is_some() {
+        targets.push(SecretTarget::provider_base_url(app.clone(), provider_id));
+    }
+    for name in secrets.extra_env.keys() {
+        targets.push(SecretTarget::provider_env(app.clone(), provider_id, name));
+    }
+    targets
 }
 
 fn record_known_targets(
@@ -369,10 +409,10 @@ fn extract_claude(raw: &Value, api_key_field: Option<&str>) -> Result<Extracted,
     let mut stripped = raw.clone();
     let mut secrets = ProviderSecrets::new();
     let Some(root) = stripped.as_object_mut() else {
-        return Ok(Extracted { stripped, secrets });
+        return Ok(Extracted::new(stripped, secrets));
     };
     let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) else {
-        return Ok(Extracted { stripped, secrets });
+        return Ok(Extracted::new(stripped, secrets));
     };
 
     let auth_token = take_string_field(env, "ANTHROPIC_AUTH_TOKEN");
@@ -411,20 +451,24 @@ fn extract_claude(raw: &Value, api_key_field: Option<&str>) -> Result<Extracted,
         }
     }
 
-    Ok(Extracted { stripped, secrets })
+    Ok(Extracted::new(stripped, secrets))
 }
 
 fn extract_codex(raw: &Value) -> Result<Extracted, AppError> {
     let mut stripped = raw.clone();
     let mut secrets = ProviderSecrets::new();
     let Some(root) = stripped.as_object_mut() else {
-        return Ok(Extracted { stripped, secrets });
+        return Ok(Extracted::new(stripped, secrets));
     };
 
+    let mut dropped_oauth_tokens = false;
     if let Some(auth) = root.get_mut("auth").and_then(Value::as_object_mut) {
         if let Some(key) = take_string_field(auth, "OPENAI_API_KEY") {
             secrets = secrets.with_api_key(key);
         }
+        // §5.2.3：OAuth 登录态不提取、不保留、直接丢弃（D3 后 cc-switch 不再持有），
+        // 但要在报告里记下"确实丢弃过"，供 §6.5 提示改用 `codex login`。
+        dropped_oauth_tokens = auth.contains_key("tokens");
         auth.remove("tokens");
         auth.remove("last_refresh");
     }
@@ -444,7 +488,9 @@ fn extract_codex(raw: &Value) -> Result<Extracted, AppError> {
         root.insert("config".to_string(), Value::String(config_text));
     }
 
-    Ok(Extracted { stripped, secrets })
+    let mut extracted = Extracted::new(stripped, secrets);
+    extracted.dropped_codex_oauth_tokens = dropped_oauth_tokens;
+    Ok(extracted)
 }
 
 fn strip_active_codex_base_url(config_text: &str) -> Result<String, AppError> {
@@ -474,7 +520,7 @@ fn extract_pi(provider_id: &str, raw: &Value) -> Result<Extracted, AppError> {
     let mut stripped = raw.clone();
     let mut secrets = ProviderSecrets::new();
     let Some(root) = stripped.as_object_mut() else {
-        return Ok(Extracted { stripped, secrets });
+        return Ok(Extracted::new(stripped, secrets));
     };
 
     match root.get("apiKey").and_then(Value::as_str) {
@@ -507,7 +553,27 @@ fn extract_pi(provider_id: &str, raw: &Value) -> Result<Extracted, AppError> {
         }
     }
 
-    Ok(Extracted { stripped, secrets })
+    // §5.2.3：Pi 模型级 `models[i].baseUrl` 不提取（CLI 侧无环境变量间接引用），
+    // 迁移时只记一条 warning，不阻断。
+    let model_level_urls = root
+        .get("models")
+        .and_then(Value::as_array)
+        .map(|models| {
+            models
+                .iter()
+                .filter(|m| m.get("baseUrl").and_then(Value::as_str).is_some())
+                .count()
+        })
+        .unwrap_or(0);
+
+    let mut extracted = Extracted::new(stripped, secrets);
+    if model_level_urls > 0 {
+        extracted.warnings.push(format!(
+            "pi:{provider_id}:models[].baseUrl x{model_level_urls} 未被接管，请改用供应商级 baseUrl"
+        ));
+        log::warn!("Pi 供应商 {provider_id} 存在 {model_level_urls} 个模型级 baseUrl（不提取）");
+    }
+    Ok(extracted)
 }
 
 #[cfg(test)]
@@ -703,6 +769,88 @@ mod tests {
             .unwrap();
         assert_eq!(restored["env"]["OPENROUTER_API_KEY"], "sk-or-secret");
         assert_eq!(restored["env"]["ANTHROPIC_AUTH_TOKEN"], "sk-ant-main");
+    }
+
+    #[test]
+    fn extract_codex_drops_oauth_tokens() {
+        // §5.2.3：官方卡的 OAuth 登录态不提取、不保留、直接丢弃，
+        // 但要在返回值里记下"丢弃过"，供 §6.5 提示改用 codex login。
+        let raw = json!({
+            "auth": {
+                "OPENAI_API_KEY": "sk-fixture-official",
+                "tokens": { "access_token": "chatgpt-secret", "refresh_token": "chatgpt-refresh" },
+                "last_refresh": "2026-09-01T00:00:00Z"
+            },
+            "config": "model = \"gpt-5\"\n"
+        });
+        let extracted = SecretExtractor::extract("c-oauth", &AppType::Codex, &raw).unwrap();
+        assert!(extracted.dropped_codex_oauth_tokens);
+        assert_eq!(
+            extracted.secrets.api_key.as_ref().unwrap().as_str(),
+            "sk-fixture-official"
+        );
+        let auth = extracted.stripped["auth"].as_object().unwrap();
+        assert!(
+            auth.is_empty(),
+            "tokens/last_refresh 必须一并丢弃: {auth:?}"
+        );
+    }
+
+    #[test]
+    fn extract_codex_strips_all_provider_tables_but_keeps_inactive_base_url() {
+        // §5.2.3：任何 [model_providers.*].experimental_bearer_token 都要删行；
+        // base_url 只提取"当前激活"那一张表的，其余表的 base_url 留在 DB。
+        let raw = json!({
+            "auth": {},
+            "config": "model_provider = \"active\"\n\n\
+                [model_providers.active]\nbase_url = \"https://active.example/v1\"\nexperimental_bearer_token = \"sk-fixture-active\"\n\n\
+                [model_providers.inactive]\nbase_url = \"https://inactive.example/v1\"\nexperimental_bearer_token = \"sk-fixture-inactive\"\n"
+        });
+        let extracted = SecretExtractor::extract("c-multi", &AppType::Codex, &raw).unwrap();
+        assert_eq!(
+            extracted.secrets.api_key.as_ref().unwrap().as_str(),
+            "sk-fixture-active"
+        );
+        assert_eq!(
+            extracted.secrets.base_url.as_ref().unwrap().as_str(),
+            "https://active.example/v1"
+        );
+        let config = extracted.stripped["config"].as_str().unwrap();
+        assert!(!config.contains("sk-fixture-active"));
+        assert!(!config.contains("sk-fixture-inactive"));
+        assert!(!config.contains("experimental_bearer_token"));
+        assert!(config.contains("https://inactive.example/v1"));
+        assert!(!config.contains("https://active.example/v1"));
+    }
+
+    #[test]
+    fn extract_pi_treats_escaped_dollar_as_literal_key() {
+        // §5.2.3：`$$VAR` / `$!VAR` 是转义后的字面量，要当真实密钥提取。
+        let raw = json!({ "apiKey": "$$LITERAL_KEY", "baseUrl": "https://pi.example" });
+        let extracted = SecretExtractor::extract("p-esc", &AppType::Pi, &raw).unwrap();
+        assert_eq!(
+            extracted.secrets.api_key.as_ref().unwrap().as_str(),
+            "$LITERAL_KEY"
+        );
+        assert!(extracted.stripped.get("apiKey").is_none());
+    }
+
+    #[test]
+    fn extract_pi_warns_on_model_level_base_url() {
+        // §5.2.3：模型级 baseUrl 不提取，但必须记一条 warning（不含值）。
+        let raw = json!({
+            "baseUrl": "https://pi.example",
+            "models": [{ "id": "m1", "baseUrl": "https://m1.example" }]
+        });
+        let extracted = SecretExtractor::extract("p-model", &AppType::Pi, &raw).unwrap();
+        assert_eq!(extracted.warnings.len(), 1);
+        assert!(extracted.warnings[0].contains("models[].baseUrl"));
+        assert!(!extracted.warnings[0].contains("https://m1.example"));
+        // 模型级 baseUrl 原样保留，不剥离
+        assert_eq!(
+            extracted.stripped["models"][0]["baseUrl"],
+            "https://m1.example"
+        );
     }
 
     #[tokio::test]

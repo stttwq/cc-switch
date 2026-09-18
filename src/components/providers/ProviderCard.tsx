@@ -10,7 +10,6 @@ import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
 import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
-import { ProviderStatusBadge } from "@/components/providers/ProviderStatusBadge";
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -189,14 +188,18 @@ export function ProviderCard({
               >
                 {provider.name}
               </h3>
-
-              {appId === "claude" && provider.category === "official" && (
-                <ProviderStatusBadge
-                  label={t("provider.noRoutingSupport", {
-                    defaultValue: "不支持路由",
-                  })}
-                />
-              )}
+              {/* §5.5：密钥不随同步/导出走，跨机还原后要重新输入才能切换 */}
+              {provider.secretStatus &&
+                !provider.secretStatus.apiKey.present &&
+                provider.category !== "official" &&
+                !codexOfficialIdentity && (
+                  <span
+                    className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400"
+                    title={t("provider.keyMissingHint")}
+                  >
+                    {t("provider.keyMissing")}
+                  </span>
+                )}
             </div>
 
             {codexOfficialIdentity === "native_login" ? (

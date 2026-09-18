@@ -2,6 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { DatabaseUpgrade } from "./components/DatabaseUpgrade";
+// §5.3.3：环境变量冲突对话框宿主（订阅 lib/api/env.ts 的冲突提示桥）
+import { EnvConflictDialogHost } from "./components/env/EnvConflictDialogHost";
 import "./index.css";
 // 导入国际化配置
 import i18n from "./i18n";
@@ -118,6 +120,7 @@ async function bootstrap() {
         <QueryClientProvider client={queryClient}>
           <ThemeProvider defaultTheme="system" storageKey="cc-switch-theme">
             <App />
+            <EnvConflictDialogHost />
             <Toaster />
           </ThemeProvider>
         </QueryClientProvider>

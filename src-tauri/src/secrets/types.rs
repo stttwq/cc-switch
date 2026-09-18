@@ -73,6 +73,21 @@ pub struct Extracted {
     pub stripped: serde_json::Value,
     /// The extracted secrets
     pub secrets: ProviderSecrets,
+    /// §5.2.3 / §6.2-6：Codex 官方卡里被丢弃的 OAuth 登录态（值不保留，只记事实）。
+    pub dropped_codex_oauth_tokens: bool,
+    /// §5.2.3 / §6.2-6：不阻断迁移的告警（如 Pi 模型级 baseUrl），只含字段名不含值。
+    pub warnings: Vec<String>,
+}
+
+impl Extracted {
+    pub fn new(stripped: serde_json::Value, secrets: ProviderSecrets) -> Self {
+        Self {
+            stripped,
+            secrets,
+            dropped_codex_oauth_tokens: false,
+            warnings: Vec::new(),
+        }
+    }
 }
 
 #[cfg(test)]

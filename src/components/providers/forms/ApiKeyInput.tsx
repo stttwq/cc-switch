@@ -10,6 +10,12 @@ interface ApiKeyInputProps {
   required?: boolean;
   label?: string;
   id?: string;
+  /**
+   * 后端凭据状态（Provider.secretStatus.apiKey，§5.2.2 前端零密钥）。
+   * present=true 时输入框一律留空、不回显任何已存值，
+   * 只在下方展示「已配置（末 4 位）」提示。
+   */
+  configuredStatus?: { present: boolean; hint: string | null } | null;
 }
 
 const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
@@ -20,9 +26,15 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
   required = false,
   label = "API Key",
   id = "apiKey",
+  configuredStatus = null,
 }) => {
   const { t } = useTranslation();
   const [showKey, setShowKey] = useState(false);
+  // 零密钥要求：已配置时不回显存量值。即便上层误把密钥传进 value，
+  // 在用户真正编辑前也强制显示为空（后端已剥离配置，正常路径 value 即为 ""）。
+  const [userEdited, setUserEdited] = useState(false);
+  const configured = configuredStatus?.present === true;
+  const displayValue = configured && !userEdited ? "" : value;
 
   const toggleShowKey = () => {
     setShowKey(!showKey);
@@ -43,15 +55,18 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
         <input
           type={showKey ? "text" : "password"}
           id={id}
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          value={displayValue}
+          onChange={(e) => {
+            setUserEdited(true);
+            onChange(e.target.value);
+          }}
           placeholder={placeholder ?? t("apiKeyInput.placeholder")}
           disabled={disabled}
           required={required}
           autoComplete="off"
           className={inputClass}
         />
-        {!disabled && value && (
+        {!disabled && displayValue && (
           <button
             type="button"
             onClick={toggleShowKey}
@@ -62,6 +77,13 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
           </button>
         )}
       </div>
+      {configured && (
+        <p className="text-xs text-muted-foreground">
+          {t("providerForm.apiKeyConfigured", {
+            hint: configuredStatus?.hint ?? "****",
+          })}
+        </p>
+      )}
     </div>
   );
 };

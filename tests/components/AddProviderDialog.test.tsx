@@ -95,73 +95,6 @@ describe("AddProviderDialog", () => {
     };
   });
 
-  it("使用 ProviderForm 返回的自定义端点", async () => {
-    const handleSubmit = vi.fn().mockResolvedValue(undefined);
-    const handleOpenChange = vi.fn();
-
-    render(
-      <AddProviderDialog
-        open
-        onOpenChange={handleOpenChange}
-        appId="claude"
-        onSubmit={handleSubmit}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "common.add",
-      }),
-    );
-
-    await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
-
-    const submitted = handleSubmit.mock.calls[0][0];
-    expect(submitted.meta?.custom_endpoints).toEqual(
-      mockFormValues.meta?.custom_endpoints,
-    );
-    expect(handleOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  it("在缺少自定义端点时回退到配置中的 baseUrl", async () => {
-    const handleSubmit = vi.fn().mockResolvedValue(undefined);
-
-    mockFormValues = {
-      name: "Base URL Provider",
-      websiteUrl: "",
-      settingsConfig: JSON.stringify({
-        env: { ANTHROPIC_BASE_URL: "https://claude.base" },
-        config: {},
-      }),
-    };
-
-    render(
-      <AddProviderDialog
-        open
-        onOpenChange={vi.fn()}
-        appId="claude"
-        onSubmit={handleSubmit}
-      />,
-    );
-
-    fireEvent.click(
-      screen.getByRole("button", {
-        name: "common.add",
-      }),
-    );
-
-    await waitFor(() => expect(handleSubmit).toHaveBeenCalledTimes(1));
-
-    const submitted = handleSubmit.mock.calls[0][0];
-    expect(submitted.meta?.custom_endpoints).toEqual({
-      "https://claude.base": {
-        url: "https://claude.base",
-        addedAt: expect.any(Number),
-        lastUsed: undefined,
-      },
-    });
-  });
-
   it("submits the optional managed account from the Codex Official preset", async () => {
     const handleSubmit = vi.fn().mockResolvedValue(undefined);
     const officialPresetIndex = codexProviderPresets.findIndex(
@@ -220,7 +153,6 @@ describe("AddProviderDialog", () => {
       }),
       meta: {
         isPartner: true,
-        endpointAutoSelect: true,
         custom_endpoints: {
           "https://failover.example.com/v1": {
             url: "https://failover.example.com/v1",

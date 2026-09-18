@@ -1,22 +1,22 @@
 use crate::app_config::AppType;
 use crate::services::env_checker::{
-    check_env_conflicts as check_conflicts, delete_env_vars as delete_vars, EnvConflict,
+    check_env_conflicts as check_conflicts, delete_env_vars as remove_vars, EnvConflict,
 };
 use crate::services::ProviderService;
 use crate::store::AppState;
 use std::str::FromStr;
 use tauri::State;
 
-/// Check environment variable conflicts for a specific app
+/// §5.3.3：只读扫描该应用的用户级/系统级同名冲突变量（值仅回传末 4 位）。
 #[tauri::command]
-pub fn check_env_conflicts(app: String) -> Result<Vec<EnvConflict>, String> {
+pub fn env_delivery_scan(app: String) -> Result<Vec<EnvConflict>, String> {
     check_conflicts(&app)
 }
 
-/// Delete conflicting environment variables by name (originals are not retained)
+/// 移除用户选中的外来变量（原值不备份、不保留；系统级一律拒绝）。
 #[tauri::command]
-pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
-    delete_vars(conflicts)
+pub fn env_delivery_remove(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
+    remove_vars(conflicts)
 }
 
 #[tauri::command]

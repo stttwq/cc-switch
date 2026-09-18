@@ -5,9 +5,7 @@
   "windows": ["main"],
   "permissions": [
     "core:default",
-    "opener:default",
     "log:default",
-    "core:window:allow-set-skip-taskbar",
     "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
@@ -15,7 +13,6 @@
     "core:window:allow-close",
     "core:window:allow-set-decorations",
     "process:allow-exit",
-    "process:allow-restart",
     "dialog:default"
   ]
 }

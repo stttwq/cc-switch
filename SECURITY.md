@@ -17,9 +17,13 @@ CC Switch is a local desktop application. It manages configuration files for AI 
 
 CC Switch 是一个本地桌面应用，用于管理本机上各 AI 编程 CLI 的配置文件。本项目不运营任何云端后端，没有多用户模型，也不与运行它的用户之间存在权限隔离。
 
-Credentials (API keys and Base URLs) are stored only in **Windows Credential Manager**. Delivery to CLIs is via **user-level environment variables** (`HKCU\Environment`); live files must not contain secret values. Codex and Pi currently still write the **active** Base URL into live config because those CLIs have no env-var indirection for it.
+Credentials (API keys and Base URLs) are stored only in **Windows Credential Manager**. Delivery to CLIs is via **user-level environment variables** (`HKCU\Environment`); live files must not contain secret values. Those environment variables are kept in **plaintext on disk** under `HKCU\Environment`, and only the **active** provider's copy is ever present — switching providers removes the previous values before writing the new ones. Codex and Pi currently still write the **active** Base URL into live config because those CLIs have no env-var indirection for it.
 
-密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
+密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。这些环境变量的值在 `HKCU\Environment` 中**明文存储**，且任何时刻只保留**当前激活**供应商的那一份——切换供应商时会先删掉旧值再写入新值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
+
+**Credential persistence scope and portability / 凭据持久化范围与可移植性.** Entries are written through `keyring` with `CRED_PERSIST_ENTERPRISE`, so on a domain-joined machine they roam with the Windows user profile to every machine that user signs into; domain users who want machine-local persistence can change the entry's scope in the Credential Manager control panel. Secret values live outside the database and are **never** part of SQL export, WebDAV / S3 sync payloads or backups — after restoring a config on another machine every provider needs its key typed in again. That is by design, not a defect.
+
+凭据条目经 `keyring` 以 `CRED_PERSIST_ENTERPRISE` 写入，因而在域环境下会随 Windows 用户配置文件漫游到该用户登录的每一台机器；希望只保留在本机的域环境用户，可在凭据管理器控制面板中改该条目的持久化范围。密钥存放在数据库之外，**不进入** SQL 导出、WebDAV / S3 同步载荷与备份——因此在另一台机器还原配置后，每个供应商都要重新输入密钥。这是设计，不是缺陷。
 
 **Rolling back to a pre-migration version / 回滚到迁移前的旧版本.** The v18→v19 upgrade keeps one dated backup `~/.cc-switch/backups/pre-secrets-migration-*.db` that still contains the old plaintext schema; it is intentionally NOT auto-deleted. Overwriting `cc-switch.db` with it lets an older build read it normally. Extra `cc-switch/`-prefixed entries left in Windows Credential Manager are then harmless and can be removed manually from the Credential Manager control panel.
 

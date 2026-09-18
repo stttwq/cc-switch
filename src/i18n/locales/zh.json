@@ -113,9 +113,6 @@
     "currentlyUsing": "当前使用",
     "enable": "启用",
     "inUse": "使用中",
-    "needsRouting": "需要路由",
-    "noRoutingSupport": "不支持路由",
-    "blockedByProxyHint": "代理接管模式下不可切换到官方供应商",
     "editProvider": "编辑供应商",
     "editProviderHint": "更新配置后将立即应用到当前供应商。",
     "deleteProvider": "删除供应商",
@@ -123,8 +120,6 @@
     "addFooterHint": "💡 选择预设后，请在下方填写 API Key 等字段",
     "addClaudeProvider": "添加 Claude Code 供应商",
     "addCodexProvider": "添加 Codex 供应商",
-    "addGeminiProvider": "添加 Gemini 供应商",
-    "addOpenCodeProvider": "添加 OpenCode 供应商",
     "addToConfig": "添加",
     "removeFromConfig": "移除",
     "setAsDefault": "设为默认",
@@ -147,9 +142,6 @@
     "noSearchResults": "没有符合搜索条件的供应商。",
     "duplicate": "复制",
     "sortUpdateFailed": "排序更新失败",
-    "configureUsage": "配置用量查询",
-    "managedByHermes": "Hermes 托管",
-    "managedByHermesHint": "该条目定义在 Hermes 的 providers: dict，请在 Hermes Web UI 中编辑或删除。",
     "openTerminal": "打开终端",
     "terminalOpened": "终端已打开",
     "terminalOpenFailed": "打开终端失败",
@@ -166,28 +158,12 @@
     "editCommonConfigHint": "通用配置片段将合并到所有启用它的供应商配置中",
     "addProvider": "添加供应商",
     "sortUpdated": "排序已更新",
-    "usageSaved": "用量查询配置已保存",
-    "usageSaveFailed": "用量查询配置保存失败",
-    "geminiConfig": "Gemini 配置",
-    "geminiConfigHint": "使用 .env 格式配置 Gemini",
-    "form": {
-      "gemini": {
-        "model": "模型",
-        "oauthTitle": "OAuth 认证模式",
-        "oauthHint": "Google 官方使用 OAuth 个人认证，无需填写 API Key。首次使用时会自动打开浏览器进行登录。",
-        "apiKeyPlaceholder": "请输入 Gemini API Key"
-      }
-    },
-    "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试"
+    "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试",
+    "keyMissing": "需要密钥",
+    "keyMissingHint": "密钥不参与同步与导出，请编辑该供应商重新输入 API 密钥。"
   },
-  "claudeCode": {
-    "needsRouting": "需要路由",
-    "noRoutingSupport": "不支持路由"
-  },
+  "claudeCode": {},
   "codex": {
-    "needsRouting": "需要路由",
-    "noRoutingSupport": "不支持路由",
-    "officialRouting": "官方账号路由",
     "nativeLogin": "Codex 登录",
     "followCodexLogin": "跟随 Codex 登录",
     "followCodexLoginDescription": "账号会随 Codex CLI 当前登录变化",
@@ -204,7 +180,6 @@
     "providerDeleted": "供应商删除成功",
     "switchSuccess": "切换成功！",
     "codexRestartRequired": "切换成功，请重启客户端以生效",
-    "claudeDesktopRestartRequired": "切换成功，重启 Claude Desktop 后生效",
     "addToConfigSuccess": "已添加到配置",
     "removeFromConfigSuccess": "已从配置移除",
     "removeFromConfigFailed": "无法移除供应商",
@@ -229,8 +204,7 @@
     "openLinkFailed": "链接打开失败",
     "backfillWarning": "切换成功，但旧供应商配置回填失败，您手动修改的配置可能未保存",
     "codexAuthCleanupFailed": "切换成功，但未能删除 auth.json，官方登录凭据仍留在磁盘上；如需彻底移除请手动删除 Codex 配置目录中的 auth.json",
-    "windowControlFailed": "窗口控制失败：{{error}}",
-    "proxyOfficialWarning": "当前供应商 {{name}} 是官方供应商，建议切换到第三方供应商后再使用本地路由"
+    "windowControlFailed": "窗口控制失败：{{error}}"
   },
   "confirm": {
     "deleteProvider": "删除供应商",
@@ -238,16 +212,6 @@
     "removeProvider": "移除供应商",
     "removeProviderMessage": "确定要从配置中移除供应商 \"{{name}}\" 吗？\n\n移除后该供应商将不再生效，但配置数据会保留在 CC Switch 中，您可以随时重新添加。",
     "piDefaultProviderWarning": "Pi 的全局默认项当前指向此供应商。继续后，Pi 会尝试其他可用模型；你可以在 Pi 中使用 /model 重新选择，或使用 /login 登录其他供应商。",
-    "proxy": {
-      "title": "启用本地路由服务",
-      "message": "本地路由是一项高级功能，启用前请确保您已了解其工作原理。\n\n建议先查阅相关文档或咨询您的供应商，以获取正确的配置方式。",
-      "confirm": "我已了解，继续启用"
-    },
-    "failover": {
-      "title": "启用故障转移功能",
-      "message": "故障转移是一项高级功能，启用前请确保您已了解其工作原理。\n\n建议先在故障转移队列中配置好供应商优先级。",
-      "confirm": "我已了解，继续启用"
-    },
     "unifyCodexHistory": {
       "title": "统一 Codex 会话历史",
       "message": "开启后，官方订阅与第三方将共用同一个会话历史列表。注意：跨供应商继续旧会话时，可能因对方后端无法解密 encrypted_content 推理内容而失败。\n\n可选择同时把现有官方会话历史迁入共享列表（迁移前自动备份到 ~/.cc-switch/backups，关闭开关时可选择恢复）。",
@@ -259,11 +223,6 @@
       "message": "关闭后，官方订阅与第三方将恢复各自独立的会话历史列表。开启期间产生的会话因无法区分来源，将留在第三方历史中，官方订阅将看不到它们。",
       "restoreBackup": "把开启时迁入的官方会话还原回官方历史（按备份精确还原）",
       "confirm": "关闭"
-    },
-    "usage": {
-      "title": "配置用量查询",
-      "message": "用量查询需要配置专用的查询脚本或 API 参数，请确保您已从供应商处获取相关信息。\n\n如不确定如何配置，请先查阅供应商文档。",
-      "confirm": "我已了解，继续配置"
     },
     "autoSync": {
       "title": "开启自动同步",
@@ -290,10 +249,6 @@
       "connectivityCheck": {
         "title": "连通检测配置",
         "description": "配置供应商地址探测的超时、重试和较慢阈值"
-      },
-      "pricing": {
-        "title": "成本定价",
-        "description": "管理各模型 Token 计费规则"
       },
       "globalProxy": {
         "title": "全局出站代理",
@@ -333,6 +288,10 @@
           "debug": "详细信息，包含 SSE 流和请求/响应详情",
           "trace": "全部日志，最详细"
         }
+      },
+      "secretStore": {
+        "title": "凭据管理器维护",
+        "description": "清理已删除供应商在 Windows 凭据管理器里残留的条目"
       }
     },
     "language": "界面语言",
@@ -595,7 +554,7 @@
     "skipClaudeOnboardingDescription": "开启后跳过 Claude Code 初次安装确认",
     "codexAuth": "Codex 应用增强",
     "preserveCodexOfficialAuthOnSwitch": "非接管切换时保留官方登录",
-    "preserveCodexOfficialAuthOnSwitchDescription": "控制未开启路由接管时切换第三方供应商是否保留 Codex 官方登录；路由接管期间始终保留",
+    "preserveCodexOfficialAuthOnSwitchDescription": "控制切换到第三方供应商时是否保留 Codex 官方登录文件 `auth.json`；关闭时切换后删除该文件，凭据管理器里的密钥不受影响。",
     "unifyCodexSessionHistory": "统一 Codex 会话历史",
     "unifyCodexSessionHistoryDescription": "开启后，官方订阅将以共享的 custom 供应商标识运行，官方与第三方会话出现在同一历史列表中，并可选择把现有官方会话一并迁入（迁移前自动备份）。关闭开关时可按备份恢复迁入的会话。注意：跨供应商继续旧会话时，对方后端可能无法解密会话中的 encrypted_content 推理内容，导致继续失败",
     "unifyCodexHistoryRestoreCompleted": "已按备份还原官方会话历史（{{files}} 个会话文件、{{rows}} 条索引记录）",
@@ -676,17 +635,8 @@
     "browsePlaceholderPi": "例如：/home/<你的用户名>/.pi/agent",
     "browseDirectory": "浏览目录",
     "resetDefault": "恢复默认目录（需保存后生效）",
-    "checkForUpdates": "检查更新",
-    "updateTo": "更新到 v{{version}}",
-    "updating": "更新中...",
-    "checking": "检查中...",
-    "upToDate": "已是最新",
     "aboutHint": "查看版本信息与更新状态。",
     "portableMode": "当前为便携版，更新需手动下载。",
-    "updateAvailable": "检测到新版本：{{version}}",
-    "updateBadge": "有更新可用",
-    "updateFailed": "更新安装失败，已尝试打开下载页面。",
-    "checkUpdateFailed": "检查更新失败，请稍后重试。",
     "openReleaseNotesFailed": "打开更新日志失败",
     "releaseNotes": "更新日志",
     "viewReleaseNotes": "查看该版本更新日志",
@@ -694,7 +644,7 @@
     "officialWebsite": "官方网站",
     "github": "GitHub",
     "manualInstallCommands": "手动安装命令",
-    "oneClickInstallHint": "安装或升级 Claude Code / Codex / Gemini CLI / OpenCode / OpenClaw / Hermes / Pi",
+    "oneClickInstallHint": "安装或升级 Claude Code / Codex / Pi",
     "localEnvCheck": "本地环境检查",
     "updateAllTools": "全部升级（{{count}}）",
     "currentVersion": "当前版本",
@@ -745,12 +695,7 @@
     "devModeRestartHint": "开发模式下不支持自动重启，请手动重新启动应用。",
     "saving": "正在保存...",
     "globalProxy": {
-      "label": "全局代理",
-      "hint": "代理所有请求（API、Skills 下载等）。开启本地路由时，应用的请求也会经过此代理。留空表示直连。",
       "test": "测试连接",
-      "scan": "扫描本地代理",
-      "clear": "清除",
-      "scanFailed": "扫描失败：{{error}}",
       "saved": "代理设置已保存",
       "saveFailed": "保存失败：{{error}}",
       "testSuccess": "连接成功！延迟 {{latency}}ms",
@@ -776,11 +721,6 @@
     "claude": "Claude",
     "claudeCode": "Claude Code",
     "codex": "Codex",
-    "gemini": "Gemini",
-    "grokbuild": "Grok Build",
-    "opencode": "OpenCode",
-    "openclaw": "OpenClaw",
-    "hermes": "Hermes",
     "pi": "Pi"
   },
   "pi": {
@@ -797,6 +737,12 @@
     "form": {
       "providerKey": "供应商标识",
       "providerKeyRequired": "供应商标识不能为空",
+      "providerKeyHint": "配置文件中的唯一标识符，只能使用小写字母、数字和连字符",
+      "providerKeyLockedHint": "该供应商已添加到应用配置中，供应商标识不可修改",
+      "apiFormat": "接口格式",
+      "apiFormatHint": "选择 AI 服务的 API 接口格式",
+      "baseUrl": "Base URL",
+      "baseUrlHint": "自定义 API 端点地址",
       "selectPresetRequired": "请先选择一个预设或自定义配置",
       "fixJsonFirst": "请先修复下方配置 JSON，再编辑结构化字段。",
       "nameRequired": "显示名称不能为空",
@@ -805,6 +751,8 @@
       "absoluteHttpUrlRequired": "{{label}} 必须是绝对 HTTP 或 HTTPS 地址",
       "positiveNumberRequired": "{{label}} 必须是大于 0 的数字",
       "models": "模型配置",
+      "modelsHint": "配置可用的模型及其显示名称",
+      "modelBaseUrlUnsupported": "不支持在模型级配置 baseUrl，请改用供应商级 Base URL",
       "noModels": "暂无模型配置",
       "addModel": "添加模型",
       "removeModel": "移除模型",
@@ -844,6 +792,15 @@
       "optionKey": "选项",
       "optionValue": "值",
       "removeCompatibilityOption": "移除兼容性选项",
+      "headers": "请求头",
+      "headersHint": "随供应商请求发送的可选 HTTP 请求头，如 HTTP-Referer 或 X-Title。",
+      "addHeader": "添加请求头",
+      "noHeaders": "暂无自定义请求头",
+      "headerName": "请求头",
+      "headerValue": "值",
+      "headerNamePlaceholder": "X-Title",
+      "headerValuePlaceholder": "CC Switch",
+      "removeHeader": "删除请求头",
       "effectiveApiRequired": "模型 {{id}} 必须直接配置或继承一个 API",
       "effectiveBaseUrlRequired": "模型 {{id}} 必须直接配置或继承一个基础地址",
       "duplicateModel": "模型 ID {{id}} 重复",
@@ -1049,7 +1006,6 @@
     "aggregatorApiKeyHint": "💡 只需填写 API Key，请求地址已预设",
     "thirdPartyApiKeyHint": "💡 只需填写 API Key，请求地址已预设",
     "customApiKeyHint": "💡 自定义配置需手动填写所有必要字段",
-    "omoHint": "💡 OMO 配置管理 Agent 模型分配，兼容 oh-my-openagent.jsonc / oh-my-opencode.jsonc",
     "officialHint": "💡 官方供应商使用浏览器登录，无需配置 API Key",
     "providerKeyStatusLoading": "正在加载供应商标识状态，请稍后再试",
     "getApiKey": "获取 API Key",
@@ -1112,7 +1068,7 @@
     "modelHint": "💡 留空将使用供应商的默认模型",
     "apiHint": "💡 填写兼容 Claude API 的服务端点地址，不要以斜杠结尾",
     "apiHintOAI": "💡 填写兼容 OpenAI Chat Completions 的服务端点地址，不要以斜杠结尾",
-    "apiHintGeminiNative": "💡 建议填写 Gemini Native 的 base URL，例如 https://generativelanguage.googleapis.com 或 https://generativelanguage.googleapis.com/v1beta；代理会自动补全 models/*:generateContent",
+    "apiHintGeminiNative": "💡 上游使用 Gemini generateContent 接口。填写它的 base URL，例如 https://generativelanguage.googleapis.com 或 https://generativelanguage.googleapis.com/v1beta",
     "codexApiHint": "💡 填写兼容 OpenAI Response 格式的服务端点地址",
     "fillSupplierName": "请填写供应商名称",
     "fillConfigContent": "请填写配置内容",
@@ -1134,29 +1090,18 @@
     "anthropicModel": "主模型",
     "anthropicSmallFastModel": "快速模型",
     "apiFormat": "上游格式",
-    "apiFormatHint": "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。Chat、Responses 与 Gemini Native 均需开启路由接管才能转换为 Anthropic Messages。",
-    "customUserAgent": "自定义 User-Agent",
-    "customUserAgentHint": "仅在开启本地路由/代理接管后生效，会替换转发到供应商 API 请求中的 User-Agent。",
-    "customUserAgentInvalid": "User-Agent 不能包含控制字符（如换行符），否则将被忽略。",
-    "customUserAgentPresets": "预设",
-    "localProxyRequestOverrides": "本地代理请求覆盖",
-    "localProxyRequestOverridesHint": "仅在本地路由/代理接管后生效，应用于协议转换后的上游请求。",
-    "localProxyRequestOverridesInvalid": "本地代理请求覆盖格式错误：{{error}}",
-    "localProxyHeaderOverrides": "Header 覆盖",
-    "localProxyHeaderOverridesInvalidDetail": "Header 覆盖格式错误：{{error}}",
-    "localProxyBodyOverrides": "Body 覆盖",
-    "localProxyBodyOverridesInvalidDetail": "Body 覆盖格式错误：{{error}}",
+    "apiFormatHint": "选择供应商原生的 wire API 类型（Anthropic Messages / Chat Completions / Responses / Gemini generateContent）。CC Switch 只用它决定模型目录与字段形态，不做请求/响应格式转换。",
     "fullUrlLabel": "完整 URL",
     "fullUrlEnabled": "完整 URL 模式",
     "fullUrlDisabled": "标记为完整 URL",
-    "fullUrlHint": "💡 请填写完整请求 URL，并且必须开启路由后使用；路由将直接使用此 URL，不拼接路径",
-    "fullUrlHintGeminiNative": "💡 Gemini Native 下，完整 URL 模式同时兼容两类地址：1. 官方/标准 Gemini URL，代理会按模型和流式参数自动归一化；2. 自定义 relay 的完整 URL，代理会尽量原样使用，只补查询参数，不再强行追加 models 路径",
+    "fullUrlHint": "完整请求地址，包含供应商要求的路径（如 https://api.example.com/v1）。它会被写成 ANTHROPIC_BASE_URL 直接使用，不经过任何网关或本地代理。",
+    "fullUrlHintGeminiNative": "💡 Gemini generateContent 接口的完整 URL 模式：按供应商文档填写完整请求地址，包含模型路径与查询参数",
     "apiFormatAnthropic": "Anthropic Messages (原生)",
-    "apiFormatOpenAIChat": "OpenAI Chat Completions (需开启路由)",
-    "apiFormatOpenAIResponses": "OpenAI Responses API (需开启路由)",
-    "apiFormatGeminiNative": "Gemini Native generateContent (需开启路由)",
+    "apiFormatOpenAIChat": "原生 Chat Completions API。仅影响模型目录与字段识别，不做格式转换。",
+    "apiFormatOpenAIResponses": "原生 Responses API。仅影响模型目录与字段识别，不做格式转换。",
+    "apiFormatGeminiNative": "Gemini Native generateContent",
     "codexApiFormatResponses": "OpenAI Responses API (原生)",
-    "codexApiFormatOpenAIChat": "OpenAI Chat Completions (需开启路由)",
+    "codexApiFormatOpenAIChat": "OpenAI Chat Completions",
     "codexApiFormatHint": "选择供应商真实支持的 Codex API 格式；配置仍保持 Responses 以兼容新版 Codex，Chat Completions 会通过本地路由自动转换。",
     "authField": "认证字段",
     "authFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（默认）",
@@ -1245,10 +1190,10 @@
     "modelNameHint": "指定使用的模型，将自动更新到 config.toml 中",
     "modelName": "模型名称",
     "upstreamFormatLabel": "上游格式",
-    "upstreamFormatHint": "供应商原生为 Responses API 就选 Responses（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；供应商只提供原生 Anthropic Messages 协议就选 Anthropic Messages。Chat 与 Anthropic Messages 均需开启路由接管才能转换为 Responses。",
-    "upstreamFormatChat": "Chat Completions（需开启路由）",
+    "upstreamFormatHint": "供应商原生为 Responses API 就选 Responses；使用 Chat Completions 协议就选 Chat；只提供原生 Anthropic Messages 协议就选 Anthropic Messages。该选项仅用于识别模型目录与字段形态，不做任何请求/响应格式转换。",
+    "upstreamFormatChat": "Chat Completions",
     "upstreamFormatResponses": "Responses（原生）",
-    "upstreamFormatAnthropic": "Anthropic Messages（需开启路由）",
+    "upstreamFormatAnthropic": "Anthropic Messages",
     "anthropicAuthFieldLabel": "认证字段",
     "anthropicAuthFieldAuthToken": "ANTHROPIC_AUTH_TOKEN（Authorization）",
     "anthropicAuthFieldApiKey": "ANTHROPIC_API_KEY（x-api-key）",
@@ -1301,57 +1246,8 @@
     "reasoningEffortHint": "上游支持 low/high/max 等思考深度控制时启用。启用后会自动启用思考模式，并把 Codex 的 reasoning.effort 转成上游 Chat 参数。",
     "reasoningGroupTitle": "思考能力",
     "reasoningSectionHint": "预设供应商已自动配置；自定义供应商会按名称/地址自动推断。仅当自动识别不准时才需手动覆盖。",
-    "advancedSectionHint": "包含上游格式、模型映射、思考能力与自定义 User-Agent。使用 Chat Completions 协议的供应商需开启路由接管才能使用。",
+    "advancedSectionHint": "包含上游格式、模型映射、思考能力与自定义 User-Agent。这些设置只决定写给 CLI 的配置形态，不经过任何本地代理或格式转换。",
     "noCommonConfigToApply": "通用配置片段为空或没有可写入的内容"
-  },
-  "opencode": {
-    "npmPackage": "接口格式",
-    "selectPackage": "选择接口格式",
-    "npmPackageHint": "选择 AI 服务的 API 接口格式",
-    "baseUrl": "Base URL",
-    "baseUrlHint": "自定义 API 端点地址",
-    "models": "模型配置",
-    "modelsHint": "配置可用的模型及其显示名称",
-    "addModel": "添加模型",
-    "modelId": "模型 ID",
-    "modelName": "显示名称",
-    "noModels": "暂无模型配置",
-    "modelsRequired": "请至少添加一个模型配置",
-    "toggleModelDetails": "展开或收起模型详情",
-    "providerKey": "供应商标识",
-    "providerKeyPlaceholder": "my-provider",
-    "providerKeyHint": "配置文件中的唯一标识符，只能使用小写字母、数字和连字符",
-    "providerKeyLockedHint": "该供应商已添加到应用配置中，供应商标识不可修改",
-    "providerKeyRequired": "请填写供应商标识",
-    "providerKeyDuplicate": "此标识已被使用，请更换",
-    "providerKeyInvalid": "标识格式无效，只能使用小写字母、数字和连字符",
-    "headers": "请求头",
-    "headersHint": "随供应商请求发送的可选 HTTP 请求头，如 HTTP-Referer 或 X-Title。",
-    "addHeader": "添加请求头",
-    "headerName": "请求头",
-    "headerValue": "值",
-    "headerNamePlaceholder": "X-Title",
-    "headerValuePlaceholder": "CC Switch",
-    "removeHeader": "删除请求头",
-    "noHeaders": "暂无自定义请求头",
-    "extraOptions": "额外选项",
-    "extraOptionsHint": "配置额外的 SDK 选项，如 timeout、setCacheKey 等。值会自动解析类型（数字、布尔值等）。",
-    "addExtraOption": "添加",
-    "extraOptionKey": "键名",
-    "extraOptionValue": "值",
-    "extraOptionKeyPlaceholder": "timeout",
-    "extraOptionValuePlaceholder": "600000",
-    "noExtraOptions": "暂无额外选项",
-    "noModelOptions": "模型选项，点击 + 添加",
-    "modelLimits": "Token 限制",
-    "limitContext": "上下文",
-    "limitOutput": "输出",
-    "modelExtraFields": "模型属性",
-    "noModelExtraFields": "模型属性 (variants, cost 等)，点击 + 添加",
-    "modelExtraFieldKeyPlaceholder": "variants",
-    "sdkOptions": "SDK 选项",
-    "modelOptionKeyPlaceholder": "provider",
-    "modelOptionValuePlaceholder": "{\"order\": [\"baseten\"]}"
   },
   "providerPreset": {
     "label": "预设供应商",
@@ -1376,7 +1272,6 @@
     "quit": "退出"
   },
   "errors": {
-    "usage_query_failed": "用量查询失败",
     "configLoadFailedTitle": "配置加载失败",
     "configLoadFailedMessage": "无法读取配置文件：\n{{path}}\n\n错误详情：\n{{detail}}\n\n请手动检查 JSON 是否有效，或从同目录的备份文件（如 config.json.bak）恢复。\n\n应用将退出以便您进行修复。",
     "frontendCrashTitle": "界面遇到了问题",
@@ -1397,7 +1292,6 @@
     "addMcp": "添加MCP",
     "claudeTitle": "Claude Code MCP 管理",
     "codexTitle": "Codex MCP 管理",
-    "geminiTitle": "Gemini MCP 管理",
     "unifiedPanel": {
       "title": "MCP 服务器管理",
       "addServer": "添加服务器",
@@ -1413,12 +1307,7 @@
       "noSearchResults": "未找到匹配的 MCP 服务器",
       "apps": {
         "claude": "Claude",
-        "codex": "Codex",
-        "gemini": "Gemini",
-        "grokbuild": "Grok Build",
-        "opencode": "OpenCode",
-        "openclaw": "OpenClaw",
-        "hermes": "Hermes"
+        "codex": "Codex"
       }
     },
     "userLevelPath": "用户级 MCP 配置路径",
@@ -1598,7 +1487,6 @@
     "switcherAriaLabel": "项目：{{name}}",
     "switcherTooltip": {
       "claude": "项目：一键切换 Claude Code 的供应商 / MCP / Skills / 记忆文件",
-      "claude-desktop": "项目：一键切换 Claude Desktop 的供应商",
       "codex": "项目：一键切换 Codex 的供应商 / MCP / Skills / 记忆文件"
     },
     "none": "不使用项目",
@@ -1607,7 +1495,6 @@
     "createFromCurrent": "新建项目",
     "createDescription": {
       "claude": "把 Claude Code 当前的供应商、MCP、Skills、记忆文件保存为一个项目，之后可一键切换。",
-      "claude-desktop": "把 Claude Desktop 当前的供应商保存为一个项目，之后可一键切换。",
       "codex": "把 Codex 当前的供应商、MCP、Skills 和记忆文件配置保存为一个项目，之后可一键切换。"
     },
     "manage": "管理项目…",
@@ -1665,6 +1552,15 @@
     "error": {
       "noSelection": "请选择要删除的环境变量"
     }
+  },
+  "envConflict": {
+    "title": "环境变量冲突",
+    "overwriteNotice": "切换将覆盖不属于 cc-switch 管理的环境变量；接管后原值会被覆盖且不保留。",
+    "colName": "变量名",
+    "colHint": "末 4 位",
+    "adopt": "接管并切换",
+    "cancel": "取消",
+    "adoptFailed": "接管失败"
   },
   "skills": {
     "manage": "Skills",
@@ -1820,13 +1716,6 @@
       "success": "技能 {{name}} 已从备份恢复",
       "failed": "从备份恢复失败"
     },
-    "apps": {
-      "claude": "Claude",
-      "codex": "Codex",
-      "gemini": "Gemini",
-      "opencode": "OpenCode",
-      "openclaw": "OpenClaw"
-    },
     "installFromZip": {
       "button": "从 ZIP 安装",
       "installing": "安装中...",
@@ -1868,6 +1757,13 @@
     "summary": "已迁移 {{numProviders}} 个供应商的密钥。已打开的终端需要重开才能读到新环境变量。",
     "backupsTitle": "仍含明文的历史数据库备份（回滚用，可稍后删）：",
     "deleteBackups": "全部删除备份",
-    "gotIt": "知道了"
+    "gotIt": "知道了",
+    "codexLogin": "已丢弃 {{numProviders}} 个供应商的 Codex OAuth 登录态，请改用 `codex login` 重新登录。",
+    "liveFailures": "有 {{count}} 个 live 配置未能重写（通常是文件被运行中的 CLI 占用）：",
+    "retry": "下次启动时重试",
+    "cleanupOrphans": "清理孤儿凭据",
+    "cleanupOrphansHint": "只删除 DB 中已不存在的供应商所对应的凭据条目。",
+    "cleanupOrphansDone": "已清理 {count} 条残留凭据",
+    "warningsTitle": "迁移提示（只列字段，不含值）："
   }
 }

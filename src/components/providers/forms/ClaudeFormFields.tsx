@@ -56,6 +56,8 @@ interface ClaudeFormFieldsProps {
   websiteUrl: string;
   isPartner?: boolean;
   partnerPromotionKey?: string;
+  /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显、给末 4 位提示 */
+  apiKeyConfiguredStatus?: { present: boolean; hint: string | null } | null;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -64,7 +66,7 @@ interface ClaudeFormFieldsProps {
   onTemplateValueChange: (key: string, value: string) => void;
 
   // Base URL
-  shouldShowSpeedTest: boolean;
+  isNonOfficialCategory: boolean;
   baseUrl: string;
   onBaseUrlChange: (url: string) => void;
   showEndpointTools?: boolean;
@@ -105,11 +107,12 @@ export function ClaudeFormFields({
   websiteUrl,
   isPartner,
   partnerPromotionKey,
+  apiKeyConfiguredStatus,
   templateValueEntries,
   templateValues,
   templatePresetName,
   onTemplateValueChange,
-  shouldShowSpeedTest,
+  isNonOfficialCategory,
   baseUrl,
   onBaseUrlChange,
   showEndpointTools = true,
@@ -320,6 +323,7 @@ export function ClaudeFormFields({
           websiteUrl={websiteUrl}
           isPartner={isPartner}
           partnerPromotionKey={partnerPromotionKey}
+          configuredStatus={apiKeyConfiguredStatus}
         />
       )}
 
@@ -359,7 +363,7 @@ export function ClaudeFormFields({
       )}
 
       {/* Base URL 输入框 */}
-      {shouldShowSpeedTest && (
+      {isNonOfficialCategory && (
         <EndpointField
           id="baseUrl"
           label={t("providerForm.apiEndpoint")}
@@ -450,7 +454,7 @@ export function ClaudeFormFields({
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   {t("providerForm.apiFormatHint", {
                     defaultValue:
-                      "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。Chat、Responses 与 Gemini Native 均需开启路由接管才能转换为 Anthropic Messages。",
+                      "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。该选择只决定端点填写提示与模型列表的拉取方式，cc-switch 不再本地转换协议，请确保供应商自身提供 Claude Code 可用的端点。",
                   })}
                 </p>
               </div>

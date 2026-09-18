@@ -153,6 +153,8 @@ export function useProviderActions(activeApp: AppId) {
     updateProvider,
     switchProvider,
     deleteProvider,
+    // 环境变量冲突改由模块级订阅桥承接（lib/api/env.ts + EnvConflictDialogHost），
+    // 不再从这里透传。
     isLoading:
       addProviderMutation.isPending ||
       updateProviderMutation.isPending ||

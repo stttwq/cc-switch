@@ -37,26 +37,14 @@ pub trait EnvSink: Send + Sync {
     /// Remove an environment variable
     fn remove(&self, name: &str) -> Result<(), AppError>;
 
-    /// Get an environment variable value (read-only from HKCU)
-    fn get(&self, name: &str) -> Result<Option<String>, AppError>;
+    /// 读取用户级环境变量（只读 HKCU）。S3：值以 `Zeroizing` 承载，不降级成裸 String。
+    fn get(&self, name: &str) -> Result<Option<Zeroizing<String>>, AppError>;
 
     /// Broadcast WM_SETTINGCHANGE after a batch of operations
     fn broadcast(&self) -> Result<(), AppError>;
 }
 
 /// Validate environment variable name against whitelist
-fn is_env_sink_secret_name(name: &str) -> bool {
-    let lower = name.to_ascii_lowercase();
-    lower.ends_with("_api_key")
-        || lower.ends_with("_auth_token")
-        || lower.ends_with("_access_token")
-        || lower.ends_with("_secret")
-        || lower.ends_with("_password")
-        || lower.ends_with("_bearer_token")
-        || lower.ends_with("_key")
-        || lower.ends_with("_token")
-}
-
 fn validate_env_name(name: &str) -> Result<(), AppError> {
     // Forbidden system variables (case-insensitive)
     const FORBIDDEN: &[&str] = &[
@@ -85,12 +73,22 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
             )));
         }
     }
+    if name_upper.starts_with("PROGRAMFILES") {
+        return Err(AppError::Config(format!(
+            "Forbidden environment variable: {name}"
+        )));
+    }
 
-    // 附录 C：独立白名单，不复用提取规则。
-    if name.starts_with("ANTHROPIC_")
-        || name.starts_with("CC_SWITCH_")
-        || name == "OPENAI_API_KEY"
-        || is_env_sink_secret_name(name)
+    // 附录 C 白名单：`ANTHROPIC_*` / `OPENAI_API_KEY` / `CC_SWITCH_*`，
+    // 外加 Claude extra_env 里**经 `is_sensitive_config_key` 认定**的键。
+    // 不用宽松的后缀匹配：那等于允许往用户环境里写任意 `*_KEY`。
+    if (name_upper.starts_with("ANTHROPIC_")
+        || name_upper.starts_with("CC_SWITCH_")
+        || name_upper == "OPENAI_API_KEY"
+        || crate::secrets::is_sensitive_config_key(name))
+        && name_upper
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
     {
         return Ok(());
     }
@@ -134,8 +132,8 @@ impl EnvSink for InMemoryEnvSink {
         Ok(())
     }
 
-    fn get(&self, name: &str) -> Result<Option<String>, AppError> {
-        Ok(self.vars.lock().unwrap().get(name).map(|v| v.to_string()))
+    fn get(&self, name: &str) -> Result<Option<Zeroizing<String>>, AppError> {
+        Ok(self.vars.lock().unwrap().get(name).cloned())
     }
 
     fn broadcast(&self) -> Result<(), AppError> {
@@ -199,7 +197,7 @@ impl EnvSink for WindowsUserEnvSink {
         Ok(())
     }
 
-    fn get(&self, name: &str) -> Result<Option<String>, AppError> {
+    fn get(&self, name: &str) -> Result<Option<Zeroizing<String>>, AppError> {
         use winreg::enums::*;
         use winreg::RegKey;
 
@@ -209,7 +207,7 @@ impl EnvSink for WindowsUserEnvSink {
             .map_err(|e| AppError::Config(format!("Failed to open HKCU\\Environment: {e}")))?;
 
         match env.get_value::<String, _>(name) {
-            Ok(value) => Ok(Some(value)),
+            Ok(value) => Ok(Some(Zeroizing::new(value))),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(AppError::Config(format!("Failed to read {name}: {e}"))),
         }
@@ -268,7 +266,7 @@ impl EnvSink for UnsupportedEnvSink {
         ))
     }
 
-    fn get(&self, _name: &str) -> Result<Option<String>, AppError> {
+    fn get(&self, _name: &str) -> Result<Option<Zeroizing<String>>, AppError> {
         Err(AppError::Config(
             "Environment variable delivery not supported on this platform".to_string(),
         ))
@@ -319,12 +317,12 @@ mod tests {
             .set("CC_SWITCH_TEST", &Zeroizing::new("value1".to_string()))
             .is_ok());
         assert_eq!(
-            sink.get("CC_SWITCH_TEST").unwrap(),
+            sink.get("CC_SWITCH_TEST").unwrap().map(|v| v.to_string()),
             Some("value1".to_string())
         );
 
         sink.remove("CC_SWITCH_TEST").unwrap();
-        assert_eq!(sink.get("CC_SWITCH_TEST").unwrap(), None);
+        assert!(sink.get("CC_SWITCH_TEST").unwrap().is_none());
     }
 
     #[test]
@@ -336,5 +334,70 @@ mod tests {
         assert!(sink
             .set("RANDOM_VAR", &Zeroizing::new("bad".to_string()))
             .is_err());
+    }
+
+    /// §10 要求的真实注册表往返测试的 RAII 清理：变量在 `Drop` 里删除，
+    /// 断言失败也不会往 `HKCU\Environment` 留残留。
+    #[cfg(target_os = "windows")]
+    struct TestEnvVarGuard {
+        sink: WindowsUserEnvSink,
+        name: &'static str,
+    }
+
+    #[cfg(target_os = "windows")]
+    impl TestEnvVarGuard {
+        fn new(name: &'static str) -> Self {
+            Self {
+                sink: WindowsUserEnvSink::new(),
+                name,
+            }
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    impl Drop for TestEnvVarGuard {
+        fn drop(&mut self) {
+            let _ = self.sink.remove(self.name);
+        }
+    }
+
+    /// 计划 §10 / 附录 C：`env_sink_windows_roundtrip` —— 真实读写 `HKCU\Environment`，
+    /// 只使用 `CC_SWITCH_TEST_*` 变量名，清理放在 `Drop` 中。
+    ///
+    /// 跑法：`cargo test --lib env_sink_windows_roundtrip -- --ignored`
+    ///
+    /// 这里刻意**不走** `default_sink()`：它在 `CC_SWITCH_TEST_HOME` 存在时返回内存实现，
+    /// 那样就测不到真实的注册表分支。
+    #[test]
+    #[ignore = "写入真实 HKCU\\Environment：cargo test --lib env_sink_windows_roundtrip -- --ignored"]
+    #[cfg(target_os = "windows")]
+    fn env_sink_windows_roundtrip() {
+        let name = "CC_SWITCH_TEST_ENV_SINK_ROUNDTRIP";
+        let guard = TestEnvVarGuard::new(name);
+        let value = |v: &str| Zeroizing::new(v.to_string());
+
+        guard.sink.set(name, &value("roundtrip-0001")).unwrap();
+        assert_eq!(
+            guard.sink.get(name).unwrap().as_deref().map(String::as_str),
+            Some("roundtrip-0001")
+        );
+
+        // 覆盖写：REG_SZ 更新后读回应为新值
+        guard.sink.set(name, &value("roundtrip-0002")).unwrap();
+        assert_eq!(
+            guard.sink.get(name).unwrap().as_deref().map(String::as_str),
+            Some("roundtrip-0002")
+        );
+
+        // WM_SETTINGCHANGE 广播（超时只记日志，不返回错误）
+        guard.sink.broadcast().unwrap();
+
+        guard.sink.remove(name).unwrap();
+        assert!(guard.sink.get(name).unwrap().is_none());
+
+        // guard 的 Drop 会再删一次（兜住 panic 路径）；显式 drop 后再读一次注册表，
+        // 证明测试结束时 `HKCU\Environment` 里没有残留。
+        drop(guard);
+        assert_eq!(WindowsUserEnvSink::new().get(name).unwrap(), None);
     }
 }

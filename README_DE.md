@@ -237,6 +237,7 @@ Modernes KI-gestütztes Programmieren stützt sich auf Werkzeuge wie Claude Code
 ### Sichere Aufbewahrung der Zugangsdaten
 
 - API-Schlüssel und Base-URLs leben ausschließlich im **Windows Credential Manager**, nicht in SQLite
+- Schlüssel werden **niemals** exportiert, synchronisiert oder gesichert: Nach dem Wiederherstellen auf einem anderen Rechner zeigt jeder Anbieter „Schlüssel erforderlich“, bis du ihn erneut eingibst (beabsichtigt)
 - Auslieferung über **Benutzer-Umgebungsvariablen** (`HKCU\Environment`); nach einem Wechsel Terminals neu öffnen
 - Live-Konfigurationsdateien enthalten keine Schlüsselwerte (Codex/Pi schreiben wegen der CLI-Vorgaben nur die Base-URL des aktiven Anbieters)
 

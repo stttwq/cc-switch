@@ -25,7 +25,7 @@ pub async fn extract_webdav_password(
 /// Restore WebDAV password from SecretStore
 pub async fn restore_webdav_password(
     store: &Arc<dyn SecretStore>,
-) -> Result<Option<String>, AppError> {
+) -> Result<Option<zeroize::Zeroizing<String>>, AppError> {
     let target = SecretTarget::app("webdav", "password");
     store.retrieve(&target).await
 }
@@ -56,7 +56,13 @@ pub async fn extract_s3_credentials(
 /// Restore S3 credentials from SecretStore
 pub async fn restore_s3_credentials(
     store: &Arc<dyn SecretStore>,
-) -> Result<(Option<String>, Option<String>), AppError> {
+) -> Result<
+    (
+        Option<zeroize::Zeroizing<String>>,
+        Option<zeroize::Zeroizing<String>>,
+    ),
+    AppError,
+> {
     let access_key_id = store
         .retrieve(&SecretTarget::app("s3", "access_key_id"))
         .await?;

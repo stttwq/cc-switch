@@ -4,7 +4,7 @@ import { AlertTriangle, ChevronDown, ChevronUp, X, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import type { EnvConflict } from "@/types/env";
-import { deleteEnvVars } from "@/lib/api/env";
+import { envDeliveryRemove } from "@/lib/api/env";
 import { toast } from "sonner";
 import {
   Dialog,
@@ -72,7 +72,7 @@ export function EnvWarningBanner({
         return;
       }
 
-      const deletedCount = await deleteEnvVars(conflictsToDelete);
+      const deletedCount = await envDeliveryRemove(conflictsToDelete);
 
       toast.success(t("env.delete.success", { count: deletedCount }));
 

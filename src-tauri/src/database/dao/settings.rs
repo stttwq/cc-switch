@@ -152,10 +152,19 @@ impl Database {
     ///
     /// - 传入非空字符串：启用代理
     /// - 传入空字符串或 None：清除代理设置（直连）
+    ///
+    /// D10 / S10：在 DAO 这个唯一写入口拒绝 `user:pass@` 形式，
+    /// 这样导入 SQL、同步还原等旁路也无法把代理凭据写进 DB。
     pub fn set_global_proxy_url(&self, url: Option<&str>) -> Result<(), AppError> {
         match url {
             Some(u) if !u.trim().is_empty() => {
-                self.set_setting(Self::GLOBAL_PROXY_URL_KEY, u.trim())
+                let trimmed = u.trim();
+                if trimmed.contains('@') {
+                    return Err(AppError::Config(
+                        "代理 URL 不允许包含用户名或密码".to_string(),
+                    ));
+                }
+                self.set_setting(Self::GLOBAL_PROXY_URL_KEY, trimmed)
             }
             _ => {
                 // 清除代理设置
