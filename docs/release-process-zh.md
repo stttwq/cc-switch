@@ -65,9 +65,10 @@ git push origin "$TAG"      # 只推标签，不会触发云端发布
 
 ```bash
 MSI="src-tauri/target/release/bundle/msi/CC Switch_$(node -p "require('./package.json').version")_x64_zh-CN.msi"
-cp "$MSI" "src-tauri/target/release/CC-Switch-$TAG-Windows.msi"
+UP="src-tauri/target/release/CC-Switch-$TAG-Windows.msi"
+cp "$MSI" "$UP"
 
-gh release create "$TAG" "src-tauri/target/release/CC-Switch-$TAG-Windows.msi" \
+gh release create "$TAG" "$UP" \
   --title "CC Switch $TAG" \
   --latest \
   --notes "## CC Switch $TAG
@@ -81,12 +82,22 @@ Claude Code 供应商切换工具
 - **Windows (x86_64)**: \`CC-Switch-$TAG-Windows.msi\`"
 ```
 
-预发布版本改加 `--prerelease`，正式版用 `--latest`。
+预发布版本改加 `--prerelease`，正式版用 `--latest`。GitHub 上显示的产物名取的是文件本身的名字（不是上传参数），所以必须先 `cp` 成 `CC-Switch-<标签>-Windows.msi` 再传。
 
 ### 6. 核对
 
 ```bash
 gh release view "$TAG"      # 产物名、大小、是否 latest
+```
+
+### 7. 换包 / 补传（Release 已存在时）
+
+别重复 `gh release create`，用 `--clobber` 覆盖同名产物，然后从公开地址回下载比对哈希，确认线上和本地是同一个文件：
+
+```bash
+gh release upload "$TAG" "$UP" --clobber
+curl -sL "https://github.com/stttwq/cc-switch/releases/download/$TAG/CC-Switch-$TAG-Windows.msi" | sha256sum
+sha256sum "$UP"             # 两行哈希一致即通过
 ```
 
 ## 云端补位（仅在本地发布不可用时）
