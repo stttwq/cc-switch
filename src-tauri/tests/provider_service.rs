@@ -1975,7 +1975,10 @@ fn switch_claude_delivers_env_vars_and_registers_ownership() {
     owned.sort();
     assert_eq!(
         owned,
-        vec!["ANTHROPIC_AUTH_TOKEN".to_string(), "ANTHROPIC_BASE_URL".to_string()],
+        vec![
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            "ANTHROPIC_BASE_URL".to_string()
+        ],
         "投递结果必须登记所有权，删除/切换时才知道该收回哪些变量"
     );
 

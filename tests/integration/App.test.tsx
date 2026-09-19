@@ -237,7 +237,8 @@ describe("App integration with MSW", () => {
 
     expect(toastErrorMock).not.toHaveBeenCalled();
     expect(toastSuccessMock).toHaveBeenCalled();
-  }, 10_000);
+    // 单条用例串了完整应用挂载与多条供应商流程，负载下实测会跑到 10s 以上
+  }, 40_000);
 
   it("shows toast when auto sync fails in background", async () => {
     const { default: App } = await import("@/App");
