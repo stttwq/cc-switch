@@ -13,8 +13,8 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
 use cc_switch_lib::secrets::{
-    load_known_targets, provider_target_prefix, CredentialMigrator, InMemorySecretStore,
-    MigrationReport, SecretStore, SecretTarget,
+    cleanup::cleanup_auto_deletable_plaintext, load_known_targets, provider_target_prefix,
+    CredentialMigrator, InMemorySecretStore, MigrationReport, SecretStore, SecretTarget,
 };
 use cc_switch_lib::{AppType, Database};
 
@@ -30,17 +30,31 @@ const FIXTURE_PLAINTEXT: &[&str] = &[
     "sk-or-fixture-0007",
     "sk-fixture-pi-header-0008",
     "sk-fixture-usage-0005",
+    "sk-fixture-codex-oauth-refresh-0009",
 ];
 
-/// 夹具里的 7 个供应商（app, id）。
+/// 夹具里的 8 个供应商（app, id）。
 const FIXTURE_PROVIDERS: &[(&str, &str)] = &[
     ("claude", "fixture-claude-auth-token"),
     ("claude", "fixture-claude-api-key"),
     ("claude", "fixture-claude-extra-env"),
     ("codex", "fixture-codex-official"),
+    ("codex", "fixture-codex-official-oauth"),
     ("codex", "fixture-codex-3rd"),
     ("pi", "fixture-pi-one"),
     ("pi", "fixture-pi-two"),
+];
+
+/// 只有 OAuth 登录态、没有任何可迁移凭据的官方卡（P0-2 回归用）。
+const KEYLESS_OAUTH_PROVIDER_ID: &str = "fixture-codex-official-oauth";
+
+/// §6.3 自动删除面：夹具里预置的明文残留文件（相对 `.cc-switch` 的路径）。
+const FIXTURE_PLAINTEXT_RESIDUE: &[&str] = &[
+    "config.json",
+    "config.json.bak",
+    "config.json.migrated",
+    "codex_oauth_auth.json",
+    "backups/env-backup-1.json",
 ];
 
 /// 本测试会改环境变量，必须独占运行。
@@ -121,6 +135,36 @@ impl Drop for ColdStartHome {
     }
 }
 
+/// 递归扫描整个测试 home，返回仍含夹具明文字面量的文件。
+///
+/// 这是计划 §9 Phase 4「扫整个测试 home 为 0 命中」的落地：只看 `providers` 行不够，
+/// §6.2/§6.3/§6.4 会往文件系统写派生配置与 live 文件，明文可能从那里漏出来。
+fn files_containing_plaintext(root: &Path) -> Vec<String> {
+    let mut hits = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            let Ok(bytes) = fs::read(&path) else {
+                continue;
+            };
+            let text = String::from_utf8_lossy(&bytes);
+            if FIXTURE_PLAINTEXT.iter().any(|lit| text.contains(lit)) {
+                hits.push(path.display().to_string());
+            }
+        }
+    }
+    hits.sort();
+    hits
+}
+
 /// 把所有供应商行的 settings_config / meta 拼成文本，用于明文断言。
 fn provider_row_text(db: &Database) -> String {
     let mut text = String::new();
@@ -140,7 +184,7 @@ fn provider_row_text(db: &Database) -> String {
 #[test]
 fn v18_cold_start_migrates_credentials_without_interaction() {
     let _guard = home_lock();
-    let _home = ColdStartHome::from_fixture();
+    let home = ColdStartHome::from_fixture();
     let store = Arc::new(InMemorySecretStore::new());
 
     // 1. 冷启动打开 DB：v18→v19 只做纯 SQL，并置上迁移触发器
@@ -179,10 +223,57 @@ fn v18_cold_start_migrates_credentials_without_interaction() {
         assert!(!after.contains(lit), "迁移后 DB 行仍含明文 {lit}");
     }
 
+    // 3b. §6.3 明文残留清理（lib.rs 启动流程在迁移成功后立即调用）
+    let config_dir = home.dir.join(".cc-switch");
+    for rel in FIXTURE_PLAINTEXT_RESIDUE {
+        let path = config_dir.join(rel);
+        assert!(
+            path.exists(),
+            "夹具应预置明文残留 {}（否则本条断言形同虚设）",
+            path.display()
+        );
+    }
+    cleanup_auto_deletable_plaintext();
+    for rel in FIXTURE_PLAINTEXT_RESIDUE {
+        assert!(
+            !config_dir.join(rel).exists(),
+            "§6.3 应自动删除明文残留 {rel}"
+        );
+    }
+    assert!(
+        config_dir.join("settings.json").exists(),
+        "settings.json 不是明文残留，不得删除"
+    );
+
+    // 3c. Phase 4 验收：扫整个测试 home 应 0 命中。
+    //
+    // 两类预期残留（与计划 §9 Phase 4 的措辞一致）：
+    // - `.claude/` / `.codex/` / `.pi/` 下的 live 文件由 §6.4 重写，而 §6.4 走
+    //   `EnvSink` 投递环境变量、会写真实 `HKCU\Environment`；`EnvSink` 不在 `AppState`
+    //   上也没有注入点，测试不能跑它（见审查意见 §6-4）。这里只断言 §6.2/§6.3 的产物。
+    // - `pre-secrets-migration_*.db` 是唯一回滚路径，按设计保留到用户显式删除。
+    let leftovers: Vec<String> = files_containing_plaintext(&home.dir)
+        .into_iter()
+        .filter(|path| {
+            let normalized = path.replace('\\', "/");
+            !normalized.contains("/.claude/")
+                && !normalized.contains("/.codex/")
+                && !normalized.contains("/.pi/")
+                && !normalized.contains("pre-secrets-migration_")
+        })
+        .collect();
+    assert!(
+        leftovers.is_empty(),
+        "迁移+清理后测试 home 仍含明文字面量（DB 文件 / 残留文件必须 0 命中）: {leftovers:?}"
+    );
+
     // 4. store 里有对应 target（附录 B 命名），且值能读回
     let targets = block_on(store.list_targets("cc-switch/v1/")).expect("list_targets");
     assert!(!targets.is_empty(), "迁移应至少写入一批凭据 target");
     for (app, id) in FIXTURE_PROVIDERS {
+        if *id == KEYLESS_OAUTH_PROVIDER_ID {
+            continue; // 没有任何可迁移凭据，下面单独断言
+        }
         let app_type = AppType::from_str(app).expect("app type");
         let prefix = provider_target_prefix(&app_type, id);
         assert!(
@@ -190,6 +281,13 @@ fn v18_cold_start_migrates_credentials_without_interaction() {
             "供应商 {app}/{id} 应有凭据 target，实际: {targets:?}"
         );
     }
+    // P0-2：只有 OAuth 登录态的行不产生任何凭据条目，但 DB 行仍必须被剥离。
+    assert!(
+        !targets
+            .iter()
+            .any(|t| t.contains(KEYLESS_OAUTH_PROVIDER_ID)),
+        "无凭据的官方卡不应产生凭据条目: {targets:?}"
+    );
     // 抽查两个字段映射：Claude 的 ANTHROPIC_AUTH_TOKEN 与 Pi 的 apiKey
     let claude_key = block_on(store.get(&SecretTarget::provider_api_key(
         AppType::from_str("claude").unwrap(),

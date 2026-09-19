@@ -45,7 +45,7 @@ export function EndpointField({
       ? fullUrlHint ||
         t("providerForm.fullUrlHint", {
           defaultValue:
-            "💡 请填写完整请求 URL，并且必须开启代理后使用；代理将直接使用此 URL，不拼接路径",
+            "💡 请填写完整请求 URL（含供应商要求的路径），它会原样写入配置并被直接使用，不拼接路径",
         })
       : hint;
 

@@ -6,7 +6,7 @@
 //! （各在各的项目里），因此各组独立指向自己的当前项目、只拍/只应用组内
 //! 槽位，互不牵连；重命名/删除作用于共享实体本身。
 //! 应用（apply）时复用现有切换原语批量落地：
-//! - 供应商：`ProviderService::switch`（内建代理接管热切换与接管下禁切官方）
+//! - 供应商：`ProviderService::switch`（含环境变量投递与 live 重写）
 //! - MCP：`McpService::toggle_app`（改标志 + 单 server 物化）
 //! - Skills：`SkillService::toggle_app`（改标志 + 单 skill 物化）
 //! - Prompt：`PromptService::enable_prompt`（互斥激活 + 原子写 live）

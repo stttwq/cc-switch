@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
-#[cfg(not(target_os = "windows"))]
 use std::fs;
 
 /// Environment variable conflict information returned to frontend
@@ -12,8 +11,12 @@ pub struct EnvConflict {
     pub var_name: String,
     /// Masked value showing only last 4 characters (e.g., "***xyz")
     pub masked_value: String,
-    pub source_type: String, // "system" | "file"
+    pub source_type: String, // "system" | "file" | "claude_settings_local"
     pub source_path: String, // Registry path or file path
+    /// §5.3.1 注：只读告警（例如 `~/.claude/settings.local.json`）。cc-switch 不代改
+    /// 这类文件，前端只展示、不提供删除。
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 /// Internal struct for processing - contains full value before masking
@@ -34,6 +37,7 @@ impl EnvConflictInternal {
             masked_value,
             source_type: self.source_type,
             source_path: self.source_path,
+            read_only: false,
         }
     }
 }
@@ -65,19 +69,58 @@ pub fn check_env_conflicts(app: &str) -> Result<Vec<EnvConflict>, String> {
     #[cfg(not(target_os = "windows"))]
     conflicts.extend(check_shell_configs(&keywords)?);
 
+    // §5.3.1 注：Claude 自己的 settings.local.json 会覆盖我们投递的进程环境变量。
+    // cc-switch 不代改该文件，只给出只读告警。
+    if app.eq_ignore_ascii_case("claude") {
+        conflicts.extend(check_claude_settings_local(&keywords));
+    }
+
     Ok(conflicts)
+}
+
+/// §5.3.1 注：扫描 `~/.claude/settings.local.json` 的 `env` 块。
+///
+/// 那里的 `env.ANTHROPIC_*` 优先级高于进程环境变量，会盖掉 cc-switch 通过
+/// `HKCU\Environment` 投递的凭据。我们不改用户的这个文件，只如实报告。
+fn check_claude_settings_local(keywords: &[EnvKeyword]) -> Vec<EnvConflict> {
+    let path = crate::config::get_home_dir()
+        .join(".claude")
+        .join("settings.local.json");
+    let Ok(text) = fs::read_to_string(&path) else {
+        return Vec::new();
+    };
+    let Ok(root) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let Some(env) = root.get("env").and_then(|value| value.as_object()) else {
+        return Vec::new();
+    };
+    env.iter()
+        .filter(|(name, _)| matches_env_keyword(name, keywords))
+        .filter_map(|(name, value)| {
+            Some(EnvConflict {
+                var_name: name.clone(),
+                masked_value: mask_secret(value.as_str()?),
+                source_type: "claude_settings_local".to_string(),
+                source_path: path.to_string_lossy().to_string(),
+                read_only: true,
+            })
+        })
+        .collect()
 }
 
 /// Delete the listed conflicting environment variables (no plaintext backup is
 /// written anywhere — see施工計画 §5.3.3; originals are not retained).
-pub fn delete_env_vars(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
+pub fn delete_env_vars(
+    sink: &dyn crate::env_delivery::EnvSink,
+    conflicts: Vec<EnvConflict>,
+) -> Result<usize, String> {
     let mut deleted = 0usize;
     for conflict in &conflicts {
         delete_single_env(conflict)?;
         deleted += 1;
     }
     if deleted > 0 {
-        let sink = crate::env_delivery::default_sink();
         let _ = sink.broadcast();
     }
     Ok(deleted)
@@ -343,5 +386,35 @@ mod tests {
         assert!(matches_env_keyword("anthropic_base_url", &keywords));
         assert!(!matches_env_keyword("MY_ANTHROPIC_API_KEY", &keywords));
         assert!(!matches_env_keyword("NOT_ANTHROPIC", &keywords));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn claude_settings_local_env_is_reported_read_only() {
+        // §5.3.1 注：~/.claude/settings.local.json 的 env.ANTHROPIC_* 会覆盖
+        // 进程环境变量，必须只读上报（值只给末 4 位，且不可删除）。
+        let home = std::env::temp_dir().join("cc-switch-env-checker-settings-local");
+        let _ = fs::remove_dir_all(&home);
+        fs::create_dir_all(home.join(".claude")).expect("create .claude dir");
+        fs::write(
+            home.join(".claude").join("settings.local.json"),
+            r#"{"env":{"ANTHROPIC_AUTH_TOKEN":"sk-local-secret-9999","OTHER":"x"}}"#,
+        )
+        .expect("write settings.local.json");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &home);
+
+        let conflicts = check_claude_settings_local(&get_keywords_for_app("claude"));
+
+        std::env::remove_var("CC_SWITCH_TEST_HOME");
+        let _ = fs::remove_dir_all(&home);
+
+        assert_eq!(conflicts.len(), 1, "只应命中 ANTHROPIC_* 前缀");
+        assert_eq!(conflicts[0].var_name, "ANTHROPIC_AUTH_TOKEN");
+        assert_eq!(conflicts[0].source_type, "claude_settings_local");
+        assert!(conflicts[0].read_only);
+        assert!(
+            !conflicts[0].masked_value.contains("sk-local-secret"),
+            "只读告警也不得回传明文"
+        );
     }
 }

@@ -53,7 +53,6 @@ mcp:
           - "src/lib/api/mcp.ts"
           - "src-tauri/src/mcp/**"
           - "src-tauri/src/claude_mcp.rs"
-          - "src-tauri/src/gemini_mcp.rs"
           - "src-tauri/src/commands/mcp.rs"
 
 skills:
@@ -64,11 +63,3 @@ skills:
           - "src-tauri/src/commands/skill.rs"
           - "src-tauri/src/services/skill.rs"
           - "src-tauri/src/database/dao/skills.rs"
-
-proxy:
-  - changed-files:
-      - any-glob-to-any-file:
-          - "src/components/proxy/**"
-          - "src/lib/api/proxy.ts"
-          - "src-tauri/src/proxy/**"
-          - "src-tauri/src/commands/proxy.rs"

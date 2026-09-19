@@ -34,9 +34,10 @@ pub(crate) fn sync_mutex() -> &'static tokio::sync::Mutex<()> {
 pub async fn check_connection(
     secrets: &Arc<dyn SecretStore>,
     settings: &S3SyncSettings,
+    credentials_override: Option<(&str, &str)>,
 ) -> Result<(), AppError> {
     settings.validate()?;
-    let creds = creds_for(secrets, settings).await?;
+    let creds = creds_for(secrets, settings, credentials_override).await?;
     s3::test_connection(&creds).await
 }
 
@@ -47,7 +48,7 @@ pub async fn upload(
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let creds = creds_for(secrets, settings).await?;
+    let creds = creds_for(secrets, settings, None).await?;
 
     let snapshot = build_local_snapshot(db)?;
 
@@ -92,7 +93,7 @@ pub async fn download(
     settings: &mut S3SyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let creds = creds_for(secrets, settings).await?;
+    let creds = creds_for(secrets, settings, None).await?;
 
     let manifest_key = s3_key(settings, REMOTE_MANIFEST);
     let (manifest_bytes, etag) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES)
@@ -146,7 +147,7 @@ pub async fn fetch_remote_info(
     settings: &S3SyncSettings,
 ) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    let creds = creds_for(secrets, settings).await?;
+    let creds = creds_for(secrets, settings, None).await?;
     let manifest_key = s3_key(settings, REMOTE_MANIFEST);
 
     let Some((bytes, _)) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES).await? else {
@@ -251,13 +252,26 @@ fn s3_dir_display(settings: &S3SyncSettings) -> String {
 async fn creds_for(
     secrets: &Arc<dyn SecretStore>,
     settings: &S3SyncSettings,
+    credentials_override: Option<(&str, &str)>,
 ) -> Result<S3Credentials, AppError> {
-    let (access_key_id, secret_access_key) = restore_s3_credentials(secrets).await?;
+    // 表单里刚输入但尚未保存的密钥优先：否则首次配置点"测试连接"必然失败。
+    let (access_key_id, secret_access_key) = match credentials_override {
+        Some((access_key_id, secret_access_key)) => {
+            (access_key_id.to_string(), secret_access_key.to_string())
+        }
+        None => {
+            let (access_key_id, secret_access_key) = restore_s3_credentials(secrets).await?;
+            (
+                access_key_id.map(|key| key.to_string()).unwrap_or_default(),
+                secret_access_key
+                    .map(|key| key.to_string())
+                    .unwrap_or_default(),
+            )
+        }
+    };
     Ok(S3Credentials {
-        access_key_id: access_key_id.map(|key| key.to_string()).unwrap_or_default(),
-        secret_access_key: secret_access_key
-            .map(|key| key.to_string())
-            .unwrap_or_default(),
+        access_key_id,
+        secret_access_key,
         region: settings.region.clone(),
         bucket: settings.bucket.clone(),
         endpoint: settings.endpoint.clone(),

@@ -56,8 +56,8 @@ interface ClaudeFormFieldsProps {
   websiteUrl: string;
   isPartner?: boolean;
   partnerPromotionKey?: string;
-  /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显、给末 4 位提示 */
-  apiKeyConfiguredStatus?: { present: boolean; hint: string | null } | null;
+  /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显，只提示已配置 */
+  apiKeyConfiguredStatus?: { present: boolean } | null;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -375,14 +375,7 @@ export function ClaudeFormFields({
               ? t("providerForm.apiHintResponses")
               : apiFormat === "openai_chat"
                 ? t("providerForm.apiHintOAI")
-                : apiFormat === "gemini_native"
-                  ? t("providerForm.apiHintGeminiNative")
-                  : t("providerForm.apiHint")
-          }
-          fullUrlHint={
-            apiFormat === "gemini_native"
-              ? t("providerForm.fullUrlHintGeminiNative")
-              : undefined
+                : t("providerForm.apiHint")
           }
           showManageButton={showEndpointTools}
           showFullUrlToggle={showEndpointTools}
@@ -436,17 +429,12 @@ export function ClaudeFormFields({
                     </SelectItem>
                     <SelectItem value="openai_chat">
                       {t("providerForm.apiFormatOpenAIChat", {
-                        defaultValue: "OpenAI Chat Completions (需转换)",
+                        defaultValue: "Chat Completions",
                       })}
                     </SelectItem>
                     <SelectItem value="openai_responses">
                       {t("providerForm.apiFormatOpenAIResponses", {
-                        defaultValue: "OpenAI Responses API (需转换)",
-                      })}
-                    </SelectItem>
-                    <SelectItem value="gemini_native">
-                      {t("providerForm.apiFormatGeminiNative", {
-                        defaultValue: "Gemini Native generateContent (需转换)",
+                        defaultValue: "Responses",
                       })}
                     </SelectItem>
                   </SelectContent>
@@ -454,7 +442,7 @@ export function ClaudeFormFields({
                 <p className="text-xs leading-relaxed text-muted-foreground">
                   {t("providerForm.apiFormatHint", {
                     defaultValue:
-                      "供应商原生为 Anthropic Messages API 就选 Anthropic Messages（直连，不转换格式）；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses；使用 Gemini generateContent 协议就选 Gemini Native。该选择只决定端点填写提示与模型列表的拉取方式，cc-switch 不再本地转换协议，请确保供应商自身提供 Claude Code 可用的端点。",
+                      "供应商原生为 Anthropic Messages API 就选 Anthropic Messages；使用 Chat Completions 协议就选 Chat；使用 Responses API 就选 Responses。该选择只决定端点填写提示与模型列表的拉取方式，cc-switch 不转换协议，请确保供应商自身提供 Claude Code 可用的端点。",
                   })}
                 </p>
               </div>

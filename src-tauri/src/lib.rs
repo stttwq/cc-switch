@@ -38,6 +38,8 @@ pub use commands::open_provider_terminal;
 pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
+// 环境变量投递的所有权登记与内存 sink：集成测试要据此断言 §5.3.3 的投递与撤销结果。
+pub use env_delivery::{InMemoryEnvSink, ManagedEnvVars};
 pub use error::AppError;
 pub use mcp::{
     import_from_claude, import_from_codex, remove_server_from_claude, remove_server_from_codex,
@@ -325,8 +327,6 @@ pub fn run() {
                 .build(),
         )
         .setup(|app| {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-
             // 预先刷新 Store 覆盖配置，确保后续路径读取正确（日志/数据库等）
             app_store::refresh_app_config_dir_override(app.handle());
             panic_hook::init_app_config_dir(crate::config::get_app_config_dir());
@@ -574,76 +574,10 @@ pub fn run() {
             match app_state.db.get_setting("live_reapply_pending") {
                 Ok(Some(flag)) if flag == "1" => {
                     log::info!("检测到 live_reapply_pending=1，开始重写 live 并投递环境变量");
-                    let mut ok = true;
-                    let mut failures: Vec<String> = Vec::new();
-                    for app_type in [
-                        crate::app_config::AppType::Claude,
-                        crate::app_config::AppType::Codex,
-                    ] {
-                        match crate::settings::get_effective_current_provider(
-                            &app_state.db,
-                            &app_type,
-                        ) {
-                            Ok(Some(id)) => {
-                                match crate::services::provider::ProviderService::switch(
-                                    &app_state,
-                                    app_type.clone(),
-                                    &id,
-                                ) {
-                                    Ok(_) => log::info!(
-                                        "✓ live reapply {}",
-                                        app_type.as_str()
-                                    ),
-                                    Err(e) => {
-                                        ok = false;
-                                        failures.push(format!(
-                                            "{}: {e}",
-                                            app_type.as_str()
-                                        ));
-                                        log::warn!(
-                                            "✗ live reapply {} failed: {e}",
-                                            app_type.as_str()
-                                        );
-                                    }
-                                }
-                            }
-                            Ok(None) => {}
-                            Err(e) => {
-                                ok = false;
-                                failures.push(format!("读取当前供应商失败: {e}"));
-                                log::warn!("✗ live reapply 读取当前供应商失败: {e}");
-                            }
-                        }
-                    }
-                    match crate::services::provider::reapply_pi_live(&app_state) {
-                        Ok(n) => log::info!("✓ live reapply pi ({n} providers)"),
-                        Err(e) => {
-                            ok = false;
-                            failures.push(format!("pi: {e}"));
-                            log::warn!("✗ live reapply pi failed: {e}");
-                        }
-                    }
-                    // §6.4：只有 live 全部重写成功才清理已迁移的 Codex auth.json。
-                    if ok {
-                        if let Err(e) =
-                            tokio::runtime::Runtime::new().map(|rt| {
-                                rt.block_on(crate::secrets::migration::prune_migrated_codex_auth_file(
-                                    &app_state.db,
-                                    app_state.secrets.as_ref(),
-                                ))
-                            })
-                        {
-                            log::warn!("Codex auth.json 残留检查跳过: {e}");
-                        }
-                    }
-                    // §6.4 / §6.5：失败项写进报告，前端列出处数并提供重试。
-                    crate::secrets::migration::record_live_reapply_failures(
-                        &app_state.db,
-                        &failures,
-                    );
-                    if ok {
-                        let _ = app_state.db.set_setting("live_reapply_pending", "0");
-                        log::info!("live_reapply_pending 已清零");
+                    if let Err(e) =
+                        crate::services::provider::reapply_live_after_migration(&app_state)
+                    {
+                        log::warn!("live 重写批次异常: {e}");
                     }
                 }
                 Ok(_) => {}
@@ -1282,7 +1216,7 @@ pub fn run() {
                 // 重启路径交还 Tauri 默认流程即可：
                 //   - 窗口状态：插件 Exit 钩子在主线程保存（同线程读取窗口几何，无死锁）
                 //   - 托盘图标：Tauri 内部 cleanup_before_exit 清理，正常走 Drop
-                //   - 代理/Live 配置：无需恢复，重启后新实例立即接管并恢复代理状态
+                //   - Live 配置：切换时已同步写盘，新实例启动按 DB 现状重新投递，无需恢复
                 //   - 100ms 落盘等待：重启前的 DB 写入均为命令驱动、此刻已完成，
                 //     与所有 Tauri 应用默认重启路径的行为一致，无需额外等待
                 ExitRequestAction::DeferToTauriRestart => {

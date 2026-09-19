@@ -28,9 +28,7 @@ interface ProviderCardProps {
   onRemoveFromConfig?: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
   onDuplicate: (provider: Provider) => void;
-  onTest?: (provider: Provider) => void;
   onOpenTerminal?: (provider: Provider) => void;
-  isTesting?: boolean;
   dragHandleProps?: DragHandleProps;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
@@ -83,9 +81,7 @@ export function ProviderCard({
   onRemoveFromConfig,
   onOpenWebsite,
   onDuplicate,
-  onTest,
   onOpenTerminal,
-  isTesting,
   dragHandleProps,
   isRemovalProtected,
   isStateChangeProtected,
@@ -236,18 +232,9 @@ export function ProviderCard({
               appId={appId}
               isCurrent={isCurrent}
               isInConfig={isInConfig}
-              isTesting={isTesting}
               onSwitch={() => onSwitch(provider)}
               onEdit={() => onEdit(provider)}
               onDuplicate={() => onDuplicate(provider)}
-              onTest={
-                // 连通检测对第三方/自定义供应商开放，官方供应商
-                // (category === "official") 一律隐藏：它们 base_url 故意留空、
-                // 走客户端默认/OAuth 端点，cc-switch 没有可靠的探测目标
-                onTest && provider.category !== "official"
-                  ? () => onTest(provider)
-                  : undefined
-              }
               onDelete={() => onDelete(provider)}
               onRemoveFromConfig={
                 onRemoveFromConfig

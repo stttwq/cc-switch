@@ -46,9 +46,10 @@ struct RemoteSnapshot {
 pub async fn check_connection(
     secrets: &Arc<dyn SecretStore>,
     settings: &WebDavSyncSettings,
+    password_override: Option<&str>,
 ) -> Result<(), AppError> {
     settings.validate()?;
-    let auth = auth_for(secrets, settings).await?;
+    let auth = auth_for(secrets, settings, password_override).await?;
     test_connection(&settings.base_url, &auth).await?;
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
@@ -62,7 +63,7 @@ pub async fn upload(
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let auth = auth_for(secrets, settings).await?;
+    let auth = auth_for(secrets, settings, None).await?;
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
 
@@ -109,7 +110,7 @@ pub async fn download(
     settings: &mut WebDavSyncSettings,
 ) -> Result<Value, AppError> {
     settings.validate()?;
-    let auth = auth_for(secrets, settings).await?;
+    let auth = auth_for(secrets, settings, None).await?;
     let snapshot = find_remote_snapshot(settings, &auth)
         .await?
         .ok_or_else(|| {
@@ -163,7 +164,7 @@ pub async fn fetch_remote_info(
     settings: &WebDavSyncSettings,
 ) -> Result<Option<Value>, AppError> {
     settings.validate()?;
-    let auth = auth_for(secrets, settings).await?;
+    let auth = auth_for(secrets, settings, None).await?;
     let Some(snapshot) = find_remote_snapshot(settings, &auth).await? else {
         return Ok(None);
     };
@@ -304,8 +305,13 @@ fn remote_dir_display(settings: &WebDavSyncSettings, layout: RemoteLayout) -> St
 async fn auth_for(
     secrets: &Arc<dyn SecretStore>,
     settings: &WebDavSyncSettings,
+    password_override: Option<&str>,
 ) -> Result<WebDavAuth, AppError> {
-    let password = restore_webdav_password(secrets).await?.unwrap_or_default();
+    // 表单里刚输入但尚未保存的密码优先：否则首次配置点"测试连接"必然失败。
+    let password: zeroize::Zeroizing<String> = match password_override {
+        Some(password) => zeroize::Zeroizing::new(password.to_string()),
+        None => restore_webdav_password(secrets).await?.unwrap_or_default(),
+    };
     Ok(auth_from_credentials(&settings.username, &password))
 }
 

@@ -128,10 +128,9 @@ impl<'a> CredentialMigrator<'a> {
             if row.dropped_oauth_tokens {
                 report.dropped_codex_oauth.push(row.provider.id.clone());
             }
-            if row.secrets.is_empty() {
-                continue;
-            }
             // §6.2 第 3 步：只写凭据；known_secret_targets 与 DB 剥离同笔事务落库。
+            // 空 secrets 也照常调用——persist 对空集合是 no-op，但不能因此跳过第 4 步的
+            // DB 剥离（见下），否则只含 OAuth 登录态的行会把 tokens 永久留在库里。
             super::extractor::persist_secrets_only(
                 self.store,
                 &row.app_type,
@@ -162,6 +161,12 @@ impl<'a> CredentialMigrator<'a> {
                 .map_err(|e| AppError::Config(format!("known_secret_targets 序列化失败: {e}")))?;
 
             let conn = crate::database::lock_conn!(self.db.conn);
+            // 关键：SQLite 默认把被覆盖/删除的单元格内容留在 free page 里，明文会被
+            // 原始字节扫描（secret-scan.ps1 扫 DB 文件）捞出来——计划 §9 Phase 4 要求
+            // 扫描整个测试 home 为 0 命中，不打开 secure_delete 永远不可能达标。
+            // 这里在事务前打开，让本次 UPDATE 覆盖掉的旧值立刻被清零。
+            conn.execute_batch("PRAGMA secure_delete = ON;")
+                .map_err(|e| AppError::Database(format!("开启 secure_delete 失败: {e}")))?;
             let tx = conn
                 .unchecked_transaction()
                 .map_err(|e| AppError::Database(format!("开启凭据迁移事务失败: {e}")))?;
@@ -171,9 +176,6 @@ impl<'a> CredentialMigrator<'a> {
             )
             .map_err(|e| AppError::Database(format!("写入 known_secret_targets 失败: {e}")))?;
             for row in &pending {
-                if row.secrets.is_empty() {
-                    continue;
-                }
                 let stripped_json = serde_json::to_string(&row.stripped)
                     .map_err(|e| AppError::Database(format!("Failed to serialize config: {e}")))?;
                 tx.execute(
@@ -186,6 +188,13 @@ impl<'a> CredentialMigrator<'a> {
                         row.provider.id
                     ))
                 })?;
+                // §6.2 第 4 步要求"全部行"都写回 stripped：没有任何凭据的行（典型是只含
+                // OAuth 登录态的 Codex 官方卡）也必须落库，否则被丢弃的 tokens 仍明文留在
+                // providers.settings_config 里，且 secrets_migration_pending 已被清掉、永不重试。
+                // 这类行不进 migrated_providers（fields_count 恒为 0，对用户无意义）。
+                if row.secrets.is_empty() {
+                    continue;
+                }
                 let mut fields: Vec<String> = Vec::new();
                 if row.secrets.api_key.is_some() {
                     fields.push("api_key".to_string());
@@ -207,6 +216,42 @@ impl<'a> CredentialMigrator<'a> {
             }
             tx.commit()
                 .map_err(|e| AppError::Database(format!("提交凭据迁移事务失败: {e}")))?;
+            // 迁移前就存在的 free page（更早版本写下的明文）不会因本次 UPDATE 被清零，
+            // 需要一次整体 VACUUM 把文件重建、丢掉全部空闲页。VACUUM 会关掉 foreign_keys，
+            // 与 `ensure_incremental_auto_vacuum_on_conn` 一样要显式恢复。
+            conn.execute_batch("VACUUM;")
+                .map_err(|e| AppError::Database(format!("迁移后 VACUUM 失败: {e}")))?;
+            conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")
+                .map_err(|e| AppError::Database(format!("恢复连接 pragma 失败: {e}")))?;
+        }
+
+        // §5.2.4-4 / D10：v19 把含 `user:pass@` 的 global_proxy_url 整键作废了。
+        // 那是"设置凭空消失"，必须出现在一次性迁移提示里让用户重填。
+        if self
+            .db
+            .get_setting("global_proxy_url_invalidated")?
+            .as_deref()
+            == Some("1")
+        {
+            report
+                .warnings
+                .push("global_proxy_url_invalidated".to_string());
+            self.db.set_setting("global_proxy_url_invalidated", "0")?;
+        }
+
+        // §7.1：协议转换随本地路由一起删除，v19 把存量 apiFormat=gemini_native
+        // 归一成 openai_chat —— 端点是否可用要由用户自己核对。
+        if self
+            .db
+            .get_setting("gemini_native_api_format_normalized")?
+            .as_deref()
+            == Some("1")
+        {
+            report
+                .warnings
+                .push("gemini_native_api_format_normalized".to_string());
+            self.db
+                .set_setting("gemini_native_api_format_normalized", "0")?;
         }
 
         log::info!(
@@ -719,6 +764,102 @@ mod tests {
         assert_eq!(result.migrated_providers.len(), 0);
         assert_eq!(result.errors.len(), 0);
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn migrate_strips_rows_without_credentials() -> Result<(), AppError> {
+        // P0-2 回归：只含 OAuth 登录态的 Codex 官方卡没有任何可迁移凭据，但剥离后的
+        // JSON 仍必须落库，否则被丢弃的 tokens 永久明文留在 providers.settings_config。
+        let db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute(
+                r#"INSERT INTO providers (id, name, app_type, settings_config, created_at)
+                   VALUES ('codex-official-1', 'Official', 'codex',
+                           '{"auth":{"tokens":{"refresh_token":"rt-plain-123","access_token":"at-plain-123"}},"config":"model_provider = \"openai\""}',
+                           1234567890)"#,
+                [],
+            )?;
+        }
+
+        let store = Arc::new(MockCredentialStore::new());
+        let migrator = CredentialMigrator::new(&db, store.as_ref());
+        let result = migrator.run_migration().await?;
+
+        // 无凭据可迁 → 不进报告，但也不算失败；丢弃登录态要记进报告。
+        assert_eq!(result.migrated_providers.len(), 0);
+        assert_eq!(result.errors.len(), 0);
+        assert!(result
+            .dropped_codex_oauth
+            .contains(&"codex-official-1".into()));
+
+        let config: String = {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.query_row(
+                "SELECT settings_config FROM providers WHERE id = 'codex-official-1'",
+                [],
+                |row| row.get(0),
+            )?
+        };
+        assert!(
+            !config.contains("rt-plain-123")
+                && !config.contains("at-plain-123")
+                && !config.contains("tokens"),
+            "只含 OAuth 登录态的行也必须写回 stripped，实际: {config}"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn proxy_url_invalidation_is_reported_exactly_once() -> Result<(), AppError> {
+        // §5.2.4-4：v19 把含 user:pass@ 的 global_proxy_url 整键作废，用户必须被明确告知。
+        let db = Database::memory()?;
+        db.set_setting("global_proxy_url_invalidated", "1")?;
+
+        let store = Arc::new(MockCredentialStore::new());
+        let migrator = CredentialMigrator::new(&db, store.as_ref());
+
+        let report = migrator.run_migration().await?;
+        assert!(report
+            .warnings
+            .contains(&"global_proxy_url_invalidated".to_string()));
+
+        // 标记被消费，第二次启动不再重复提示
+        assert_eq!(
+            db.get_setting("global_proxy_url_invalidated")?.as_deref(),
+            Some("0")
+        );
+        let second = migrator.run_migration().await?;
+        assert!(!second
+            .warnings
+            .contains(&"global_proxy_url_invalidated".to_string()));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn gemini_native_normalization_is_reported_exactly_once() -> Result<(), AppError> {
+        // §7.1：v19 把存量 apiFormat=gemini_native 归一为 openai_chat，
+        // 该变更对用户是"上游格式凭空变了"，必须提示且只提示一次。
+        let db = Database::memory()?;
+        db.set_setting("gemini_native_api_format_normalized", "1")?;
+
+        let store = Arc::new(MockCredentialStore::new());
+        let migrator = CredentialMigrator::new(&db, store.as_ref());
+
+        let report = migrator.run_migration().await?;
+        assert!(report
+            .warnings
+            .contains(&"gemini_native_api_format_normalized".to_string()));
+        assert_eq!(
+            db.get_setting("gemini_native_api_format_normalized")?
+                .as_deref(),
+            Some("0")
+        );
+        let second = migrator.run_migration().await?;
+        assert!(!second
+            .warnings
+            .contains(&"gemini_native_api_format_normalized".to_string()));
         Ok(())
     }
 

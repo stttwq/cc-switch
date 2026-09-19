@@ -4,14 +4,14 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 import ApiKeyInput from "@/components/providers/forms/ApiKeyInput";
 
 // setupTests 以空资源初始化 i18n；这里补上生产里真实存在的键（zh），
-// 让「已配置（末四位 abcd）」的插值在断言中可验证。
+// 让「已配置」提示在断言中可验证。
 beforeAll(() => {
   i18n.addResourceBundle(
     "zh",
     "translation",
     {
       providerForm: {
-        apiKeyConfigured: "已配置（末四位 {{hint}}），留空保持不变",
+        apiKeyConfigured: "已配置，留空保持不变",
       },
     },
     true,
@@ -24,13 +24,13 @@ function getInput(): HTMLInputElement {
 }
 
 describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
-  it("present=true 时不回显存量值：input value 为空串，且提示末 4 位", () => {
+  it("present=true 时不回显存量值：input value 为空串，且只提示已配置", () => {
     const stored = "sk-stored-key-abcd";
     render(
       <ApiKeyInput
         value={stored}
         onChange={vi.fn()}
-        configuredStatus={{ present: true, hint: "abcd" }}
+        configuredStatus={{ present: true }}
       />,
     );
 
@@ -38,10 +38,8 @@ describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
     // 核心验收：任何已存密钥值都不得进入 input 的 value
     expect(input.value).toBe("");
     expect(input.type).toBe("password");
-    // 页面文本包含末 4 位提示（真实翻译插值）
-    expect(
-      screen.getByText("已配置（末四位 abcd），留空保持不变"),
-    ).toBeInTheDocument();
+    // 页面文本只说"已配置"，不含任何密钥片段（§5.2.1 批量读取不碰凭据管理器）
+    expect(screen.getByText("已配置，留空保持不变")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain(stored);
   });
 
@@ -51,7 +49,7 @@ describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
       <ApiKeyInput
         value=""
         onChange={onChange}
-        configuredStatus={{ present: true, hint: "abcd" }}
+        configuredStatus={{ present: true }}
       />,
     );
 
@@ -63,7 +61,7 @@ describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
       <ApiKeyInput
         value="sk-new-1234"
         onChange={onChange}
-        configuredStatus={{ present: true, hint: "abcd" }}
+        configuredStatus={{ present: true }}
       />,
     );
     expect(getInput().value).toBe("sk-new-1234");
@@ -74,7 +72,7 @@ describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
       <ApiKeyInput
         value="sk-visible-wxyz"
         onChange={vi.fn()}
-        configuredStatus={{ present: false, hint: null }}
+        configuredStatus={{ present: false }}
       />,
     );
 
@@ -85,20 +83,5 @@ describe("ApiKeyInput（§5.2.2 前端零密钥）", () => {
     rerender(<ApiKeyInput value="sk-visible-wxyz" onChange={vi.fn()} />);
     expect(getInput().value).toBe("sk-visible-wxyz");
     expect(screen.queryByText(/已配置/)).not.toBeInTheDocument();
-  });
-
-  it("present=true 但 hint 为 null（短密钥）时仍提示已配置，占位 ****", () => {
-    render(
-      <ApiKeyInput
-        value=""
-        onChange={vi.fn()}
-        configuredStatus={{ present: true, hint: null }}
-      />,
-    );
-
-    expect(getInput().value).toBe("");
-    expect(
-      screen.getByText("已配置（末四位 ****），留空保持不变"),
-    ).toBeInTheDocument();
   });
 });

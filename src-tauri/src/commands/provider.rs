@@ -19,61 +19,69 @@ pub fn get_providers(
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     let providers =
         ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
+    // 一次读盘、所有行共用：known_secret_targets 既是 extra_env 的唯一真源，
+    // 也用来判断某行到底有没有凭据条目——没有就不必为它去开凭据管理器（§5.2.1）。
+    let known_targets = crate::secrets::load_known_targets(state.db.as_ref()).unwrap_or_default();
     let mut sanitized = IndexMap::new();
     for (id, provider) in providers {
         let mut front = provider.to_frontend();
-        front.secret_status = Some(load_secret_status(state.inner(), &app_type, &id));
+        front.secret_status = Some(load_secret_status(
+            state.inner(),
+            &app_type,
+            &id,
+            &known_targets,
+        ));
         sanitized.insert(id, front);
     }
     Ok(sanitized)
 }
 
-fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -> SecretStatus {
-    // api_key 用 Zeroizing 承载，取完末四位即离开作用域被清零，不生成裸 String。
-    let api = futures::executor::block_on(state.secrets.get(&SecretTarget::provider_api_key(
-        app_type.clone(),
-        provider_id,
-    )))
-    .ok()
-    .flatten();
-    let hint = api.as_deref().and_then(|key| hint_last4(key));
-    // base_url 允许回显（编辑表单与卡片要显示），仍来自凭据管理器按需读取。
-    let base = futures::executor::block_on(state.secrets.retrieve(
-        &SecretTarget::provider_base_url(app_type.clone(), provider_id),
-    ))
-    .ok()
-    .flatten();
+fn load_secret_status(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    known_targets: &[String],
+) -> SecretStatus {
+    let api_key_target = SecretTarget::provider_api_key(app_type.clone(), provider_id);
+    let base_url_target = SecretTarget::provider_base_url(app_type.clone(), provider_id);
+    let is_registered = |target: &SecretTarget| {
+        known_targets
+            .iter()
+            .any(|t| t == &target.to_target_string())
+    };
+
+    // §5.2.1：批量读取完全不碰凭据管理器——api_key 的 present 直接由登记位得出
+    // （未登记的 target 本来也读不到值，二者语义一致）。base_url 允许回显
+    // （§5.2.2，编辑表单与卡片要显示），仍按需读一次凭据管理器。
+    let api_present = is_registered(&api_key_target);
+    let base = is_registered(&base_url_target)
+        .then(|| {
+            futures::executor::block_on(state.secrets.retrieve(&base_url_target))
+                .ok()
+                .flatten()
+        })
+        .flatten();
     SecretStatus {
         api_key: SecretHint {
-            present: api.is_some(),
-            hint,
+            present: api_present,
         },
         // baseUrl 允许回显（§5.2.2）；从 Zeroizing 里短生命周期取出后即刻丢弃。
         base_url: base.map(|url| url.to_string()),
-        extra_env: extra_env_keys(state, app_type, provider_id),
+        extra_env: extra_env_keys(known_targets, app_type, provider_id),
     }
 }
 
-fn extra_env_keys(state: &AppState, app_type: &AppType, provider_id: &str) -> Vec<String> {
+fn extra_env_keys(known_targets: &[String], app_type: &AppType, provider_id: &str) -> Vec<String> {
     let prefix = format!(
         "cc-switch/v1/provider/{}/{}/env/",
         app_type.as_str(),
         provider_id
     );
-    crate::secrets::load_known_targets(state.db.as_ref())
-        .unwrap_or_default()
-        .into_iter()
+    known_targets
+        .iter()
         .filter_map(|t| t.strip_prefix(&prefix).map(str::to_string))
         .filter(|k| !k.is_empty())
         .collect()
-}
-
-fn hint_last4(value: &str) -> Option<String> {
-    if value.chars().count() < 8 {
-        None
-    } else {
-        Some(crate::secrets::last_chars(value, 4).to_string())
-    }
 }
 
 #[tauri::command]

@@ -14,8 +14,8 @@ export interface TemplateValueConfig {
  * 预设供应商的视觉主题配置
  */
 export interface PresetTheme {
-  /** 图标类型：'claude' | 'codex' | 'gemini' | 'generic' */
-  icon?: "claude" | "codex" | "gemini" | "generic";
+  /** 图标类型：'claude' | 'codex' | 'generic' */
+  icon?: "claude" | "codex" | "generic";
   /** 背景色（选中状态），支持 Tailwind 类名或 hex 颜色 */
   backgroundColor?: string;
   /** 文字色（选中状态），支持 Tailwind 类名或 hex 颜色 */
@@ -46,16 +46,9 @@ export interface ProviderPreset {
   icon?: string; // 图标名称
   iconColor?: string; // 图标颜色
 
-  // Claude API 格式（仅 Claude 供应商使用）
-  // - "anthropic" (默认): Anthropic Messages API 格式，直接透传
-  // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-  // - "openai_responses": OpenAI Responses API 格式，需要格式转换
-  // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-  apiFormat?:
-    | "anthropic"
-    | "openai_chat"
-    | "openai_responses"
-    | "gemini_native";
+  // Claude API 格式（仅 Claude 供应商使用）：只决定端点提示与模型列表拉取方式，
+  // cc-switch 不做请求级协议转换。
+  apiFormat?: "anthropic" | "openai_chat" | "openai_responses";
 
   // 是否在 UI 中隐藏该预设（预设仍存在，仅不在列表中显示）
   hidden?: boolean;
@@ -880,27 +873,6 @@ export const providerPresets: ProviderPreset[] = [
     endpointCandidates: ["https://api.atlascloud.ai"],
     category: "aggregator",
     icon: "atlascloud",
-  },
-  {
-    name: "Gemini Native",
-    websiteUrl: "https://ai.google.dev/gemini-api",
-    apiKeyUrl: "https://aistudio.google.com/app/apikey",
-    apiKeyField: "ANTHROPIC_API_KEY",
-    settingsConfig: {
-      env: {
-        ANTHROPIC_BASE_URL: "https://generativelanguage.googleapis.com",
-        ANTHROPIC_API_KEY: "",
-        ANTHROPIC_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_HAIKU_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_SONNET_MODEL: "gemini-3.6-flash",
-        ANTHROPIC_DEFAULT_OPUS_MODEL: "gemini-3.6-flash",
-      },
-    },
-    category: "third_party",
-    apiFormat: "gemini_native",
-    endpointCandidates: ["https://generativelanguage.googleapis.com"],
-    icon: "gemini",
-    iconColor: "#4285F4",
   },
   {
     name: "DeepSeek",

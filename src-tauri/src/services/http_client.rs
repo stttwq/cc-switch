@@ -113,16 +113,6 @@ pub fn get() -> Client {
         })
 }
 
-/// 获取当前代理 URL
-///
-/// 返回当前配置的代理 URL，None 表示直连。
-pub fn get_current_proxy_url() -> Option<String> {
-    CURRENT_PROXY_URL
-        .get()
-        .and_then(|lock| lock.read().ok())
-        .and_then(|url| url.clone())
-}
-
 /// 构建 HTTP 客户端
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
     let mut builder = Client::builder()
@@ -191,6 +181,20 @@ pub fn mask_url(url: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// §7.1 验收：`rustls` 直接依赖与启动期的 `install_default()` 都已删除，
+    /// reqwest 自带的 rustls provider 必须仍能完成一次真实 HTTPS 握手。
+    /// 需要出网，故 `#[ignore]`，由人工或 CI 单独一步跑。
+    #[tokio::test]
+    #[ignore = "requires network access"]
+    async fn https_roundtrip_uses_reqwest_default_crypto_provider() {
+        let resp = get()
+            .get("https://example.com/")
+            .send()
+            .await
+            .expect("HTTPS request failed");
+        assert!(resp.status().is_success(), "status: {}", resp.status());
+    }
 
     #[test]
     fn test_mask_url() {

@@ -57,15 +57,6 @@ pub fn reset_test_fs() {
     let _ = update_settings(AppSettings::default());
 }
 
-#[allow(dead_code)]
-pub fn enable_codex_official_auth_preservation() {
-    update_settings(AppSettings {
-        preserve_codex_official_auth_on_switch: true,
-        ..Default::default()
-    })
-    .expect("enable Codex official auth preservation");
-}
-
 /// 全局互斥锁，避免多测试并发写入相同的 HOME 目录。
 pub fn test_mutex() -> &'static Mutex<()> {
     static MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
@@ -102,4 +93,17 @@ pub fn create_test_state_with_config(
     let state = AppState::new(db, secrets);
     seed_secrets_from_db(&state);
     Ok(state)
+}
+
+/// 换上一个可被测试观察的内存 `EnvSink`，并把同一实例交给断言方。
+///
+/// 为什么要显式换：`default_sink()` 在 `CC_SWITCH_TEST_HOME` 下虽然也返回内存实现，
+/// 但**每次调用都新建一个对象**，同一轮投递里的 `check_conflict` 与 `set` 看到的是
+/// 两个空仓库，§5.3.3 的冲突检测与所有权登记在集成层面等于不存在。现在 sink 挂在
+/// `AppState` 上，整个 state 共用一个实例，测试才拿得到真实投递结果。
+#[allow(dead_code)]
+pub fn attach_test_env_sink(state: &mut AppState) -> cc_switch_lib::InMemoryEnvSink {
+    let sink = cc_switch_lib::InMemoryEnvSink::default();
+    state.env_sink = Arc::new(sink.clone());
+    sink
 }

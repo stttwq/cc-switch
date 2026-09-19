@@ -40,15 +40,12 @@ impl SwitchLockManager {
         lock.lock_owned().await
     }
 
-    /// 该应用当前是否正有切换 / 接管操作在进行中。
+    /// 该应用当前是否正有切换操作在进行中。
     ///
-    /// 用途是判定"接管激活窗口"：`set_takeover_for_app` 全程持有本锁，而它在
-    /// 提交 `proxy_config.enabled`、给 live 打上占位符之前就已经写好了恢复备份。
-    /// 那段窗口里只看标志和占位符会误判成"未接管"，从而覆盖正在接管的 live。
+    /// 切换与"保存当前供应商 / 写 live"都要先拿住这把按应用的锁，所以这个信号
+    /// 可以用来探测"切换窗口"：锁被持有期间 live 配置正被别人改写。
     ///
-    /// 关键在于这个信号是**按应用**的。全局的"代理进程在跑"标志做不到：A 应用
-    /// 开着接管时，B 应用一行残留的备份会被误算成 B 也在接管，于是 B 的保存又
-    /// 只写备份不写文件。
+    /// 关键在于这个信号是**按应用**的：A 应用在切换不代表 B 应用也在切换。
     pub async fn is_locked_for_app(&self, app_type: &str) -> bool {
         let locks = self.locks.read().await;
         match locks.get(app_type) {

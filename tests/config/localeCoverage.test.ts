@@ -52,6 +52,36 @@ const locales = [
 ] as const;
 
 describe("locale coverage", () => {
+  // 计划 3.2-4：四份 locale 的键集合必须完全一致。没有这条门禁时，"删键只删一份"
+  // 或"新增键漏翻"都不会被发现（上一轮的死键能长期存活正是因为缺这个断言）。
+  it.each(locales)("matches the full en key set in %s", (_name, tree) => {
+    const translations = flattenStrings(tree as TranslationTree);
+
+    expect([...reference.keys()].filter((key) => !translations.has(key))).toEqual(
+      [],
+    );
+    expect([...translations.keys()].filter((key) => !reference.has(key))).toEqual(
+      [],
+    );
+  });
+
+  it.each(locales)(
+    "preserves every interpolation variable in %s",
+    (_name, tree) => {
+      const translations = flattenStrings(tree as TranslationTree);
+      const mismatched = [...reference].flatMap(([key, expected]) => {
+        const actual = translations.get(key);
+        return actual !== undefined &&
+          interpolationVariables(actual).join("\0") !==
+            interpolationVariables(expected).join("\0")
+          ? [key]
+          : [];
+      });
+
+      expect(mismatched).toEqual([]);
+    },
+  );
+
   it.each(locales)("covers every Pi translation key in %s", (_name, tree) => {
     const translations = flattenStrings(tree as TranslationTree);
     const missing = [...piReference.keys()].filter(

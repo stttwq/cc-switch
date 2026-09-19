@@ -1498,6 +1498,14 @@ impl Database {
         if proxy_url.is_some_and(|u| u.contains('@')) {
             conn.execute("DELETE FROM settings WHERE key = 'global_proxy_url'", [])
                 .map_err(|e| AppError::Database(format!("作废含认证信息的代理 URL 失败: {e}")))?;
+            // 整键作废对用户是"代理设置凭空消失"，必须让他知道并重填；
+            // 凭据迁移把这条标记翻译成报告里的一条提示。
+            conn.execute(
+                "INSERT OR REPLACE INTO settings (key, value) \
+                 VALUES ('global_proxy_url_invalidated', '1')",
+                [],
+            )
+            .map_err(|e| AppError::Database(format!("记录代理 URL 作废标记失败: {e}")))?;
             log::warn!("v18→v19: global_proxy_url 含用户名/密码，已按 D10 作废");
         }
 
@@ -1511,20 +1519,48 @@ impl Database {
             let mut strip_stmt = conn
                 .prepare("UPDATE providers SET meta = ?1 WHERE rowid = ?2")
                 .map_err(|e| AppError::Database(format!("准备剥离语句失败: {e}")))?;
+            let mut gemini_native_rows = 0usize;
             for (rowid, meta) in rows {
                 let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&meta) else {
                     continue;
                 };
-                if value.get_mut("usage_script").is_none() {
+                let mut changed = false;
+                if value
+                    .as_object_mut()
+                    .is_some_and(|obj| obj.remove("usage_script").is_some())
+                {
+                    changed = true;
+                }
+                // 本地路由与协议转换已随 §7.1 一起删除，`gemini_native` 上游格式
+                // 不再有任何实现：留着它只会让卡片显示一个永不生效的选项。归一到
+                // 最接近的 openai_chat，并在一次性提示里告知用户自行核对端点。
+                if value
+                    .get("apiFormat")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|v| v == "gemini_native")
+                {
+                    value["apiFormat"] = serde_json::Value::String("openai_chat".to_string());
+                    changed = true;
+                    gemini_native_rows += 1;
+                }
+                if !changed {
                     continue;
                 }
-                value.as_object_mut().map(|obj| obj.remove("usage_script"));
                 let Ok(cleaned) = serde_json::to_string(&value) else {
                     continue;
                 };
                 strip_stmt
                     .execute(params![cleaned, rowid])
-                    .map_err(|e| AppError::Database(format!("剥离 meta.usage_script 失败: {e}")))?;
+                    .map_err(|e| AppError::Database(format!("更新 providers.meta 失败: {e}")))?;
+            }
+            if gemini_native_rows > 0 {
+                conn.execute(
+                    "INSERT OR REPLACE INTO settings (key, value) \
+                     VALUES ('gemini_native_api_format_normalized', '1')",
+                    [],
+                )
+                .map_err(|e| AppError::Database(format!("记录 gemini_native 归一标记失败: {e}")))?;
+                log::warn!("v18→v19: {gemini_native_rows} 个供应商的 apiFormat=gemini_native 已归一为 openai_chat");
             }
         }
 
@@ -2807,7 +2843,8 @@ mod tests {
         conn.execute(
             "INSERT INTO providers (id, app_type, name, settings_config, meta) VALUES
              ('g1','gemini','G','{}','{\"usage_script\":{\"api_key\":\"sk-g\"}}'),
-             ('c1','claude','C','{}','{\"usage_script\":{\"api_key\":\"sk-c\"},\"api_key_field\":\"ANTHROPIC_API_KEY\"}')",
+             ('c1','claude','C','{}','{\"usage_script\":{\"api_key\":\"sk-c\"},\"api_key_field\":\"ANTHROPIC_API_KEY\"}'),
+             ('c2','claude','C2','{}','{\"apiFormat\":\"gemini_native\"}')",
             [],
         )?;
         conn.execute(
@@ -2840,6 +2877,23 @@ mod tests {
             "usage_script should be stripped on the Rust side: {claude_meta}"
         );
         assert!(claude_meta.contains("api_key_field"));
+        // §7.1：协议转换已删除，存量 gemini_native 归一为 openai_chat 并留标记
+        let normalized_meta: String =
+            conn.query_row("SELECT meta FROM providers WHERE id='c2'", [], |r| r.get(0))?;
+        assert!(
+            normalized_meta.contains("\"apiFormat\":\"openai_chat\""),
+            "gemini_native should be normalized to openai_chat: {normalized_meta}"
+        );
+        assert!(
+            !normalized_meta.contains("gemini_native"),
+            "gemini_native must not survive in meta: {normalized_meta}"
+        );
+        let marker: String = conn.query_row(
+            "SELECT value FROM settings WHERE key='gemini_native_api_format_normalized'",
+            [],
+            |r| r.get(0),
+        )?;
+        assert_eq!(marker, "1");
         let gemini_left: i64 = conn.query_row(
             "SELECT COUNT(*) FROM providers WHERE app_type='gemini'",
             [],

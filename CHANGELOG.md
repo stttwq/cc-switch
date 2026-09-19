@@ -5,6 +5,45 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+**This is a breaking release.** It removes the local router, six of the nine supported apps, the auto-updater and every form of plaintext credential storage. Existing installations migrate automatically on first launch, but the shape of the product changes: cc-switch no longer proxies requests, no longer stores keys on disk, and no longer builds for macOS or Linux.
+
+### Removed
+
+- **Local proxy and everything built on it**: `src-tauri/src/proxy/**` with request forwarding, failover queues, the usage dashboard, stream checking, model pricing and the routing takeover. No listening port is opened any more and no request is forwarded.
+- **Seven applications**: Gemini, OpenCode (and OMO), OpenClaw (and Workspace), Hermes, GrokBuild (and xAI OAuth), Claude Desktop and Copilot are no longer supported. Only Claude Code, Codex and Pi remain. Providers, MCP servers and skills belonging to the removed apps are dropped from the database by the v19 migration.
+- **Auto-update**: `tauri-plugin-updater` and the release-chain signing and `latest.json` artifacts are gone; the app no longer checks for or installs updates. `latest.json` / `.sig` assets are no longer published.
+- **macOS and Linux builds**: releases ship a single Windows x86_64 MSI plus a portable ZIP. The macOS/Linux build jobs, their packaging steps and the corresponding release notes are removed.
+- **The "Gemini Native" upstream format for Claude providers**: protocol conversion left with the local router, so the option could only ever produce a card that does not work. The preset and the selector are gone; the v19 migration normalizes existing cards to OpenAI Chat Completions and the migration report asks you to verify the endpoint yourself.
+- **The Codex advanced knobs that only fed format conversion**: prompt-cache routing mode, the Chat-Completions reasoning capability map (thinking / effort switches) and the Claude-emulation and `max_output_tokens` overrides are removed, along with their 16 locale strings. Nothing in the app read them any more, so flipping them silently did nothing; the model catalog and model-mapping settings are untouched.
+
+### Changed
+
+- **Credentials now live in Windows Credential Manager.** API keys, base URLs, Pi request headers, and the WebDAV / S3 sync credentials are stored there and nowhere else. `providers.settings_config`, `settings.json` and the live CLI config files no longer contain values.
+- **Environment variables are the only delivery path.** Claude Code, Codex and Pi receive their credentials as user-level environment variables (`HKCU\Environment`); live config files contain only the *names* of those variables. The helper-command delivery modes (`apiKeyHelper`, Pi's `"!command"`) are not implemented by design.
+- **Database schema v19.** Ten tables tied to the removed features are dropped, `providers.in_failover_queue` is dropped as a column, and `meta.usage_script` is stripped on the Rust side.
+- **Existing installations migrate automatically and idempotently on first launch.** Provider credentials are extracted, written to Credential Manager, and the stored configs are rewritten with the secrets removed. No interaction is required; a report lists what was migrated and offers a retry for any live-file rewrite that failed.
+- **Codex official cards no longer carry a ChatGPT login.** OAuth tokens found in stored configs are discarded rather than migrated — run `codex login` in the Codex CLI instead. Codex third-party cards that would silently fall back to `auth.json` are refused at switch time.
+- **Listing providers never reads Credential Manager for keys.** The last-4-character hint is gone: showing it meant one credential read per provider on every list refresh. Cards and forms now say only whether a key is configured, which is derived from the credential registry instead.
+
+### Fixed
+
+- **WebDAV and S3 credentials are actually persisted.** The settings dialog used to place the password inside the settings object while the backend struct no longer had that field, so the value was dropped by serde and the command's `password` argument was always `None`; new sync configurations could never authenticate. Credentials are now sent as a dedicated three-state argument (absent = unchanged, empty = delete, value = store), and "Test connection" can use a password that has not been saved yet.
+- **Keyless Codex official cards no longer leave OAuth tokens in SQLite.** The migration skipped rows with nothing to migrate, so a card holding only `auth.tokens` kept its refresh token in `providers.settings_config` forever — and the pending flag was already cleared, so it was never retried.
+- **The database file no longer retains plaintext in free pages.** Overwritten `settings_config` values stayed readable in SQLite free pages after the migration; the migration now enables `secure_delete` before rewriting and runs `VACUUM` afterwards.
+- **Sync credentials can be cleared.** Emptying the password or S3 key field now deletes the stored entry instead of being ignored.
+- **The legacy official-proxy route is cleaned up.** Older versions pointed Codex at `http://127.0.0.1:<port>`; that dead table and its `model_provider` selector are now stripped on every live write instead of being written back.
+- **`~/.claude/settings.local.json` conflicts are reported.** Its `env.ANTHROPIC_*` entries override the process environment, so the conflict scan lists them as read-only warnings. cc-switch does not modify that file.
+- **Missing required credentials are rejected before saving.** Claude providers need an API key and Pi providers need a base URL (official and Bedrock/cloud-provider cards, which authenticate elsewhere, are exempt).
+
+### Security
+
+- Plaintext residue from older versions is deleted automatically at startup (`config.json`, its `.bak`/`.migrated` siblings, `codex_oauth_auth.json`, `backups/env-backup-*.json`, and legacy `%TEMP%\claude_*.json` launchers). Database backups are never auto-deleted.
+- Exports, backups and sync payloads are scanned for credential patterns and refused if a plaintext secret is found; imported/restored data is scrubbed through the same extraction path.
+- Known secret values are redacted from logs and from every text that leaves the backend; only a last-4 hint crosses IPC.
+- `~/.codex/auth.json` is deleted only when it holds nothing but an API key that has already been migrated to Credential Manager.
+
 ## [3.20.3] - 2026-09-11
 
 Development since v3.20.2 is a short, dense cycle: most of it is contributed correctness fixes on the local proxy and the Codex integration, closing issues that had been open for months, plus a round of preset and pricing maintenance. On the proxy, OpenAI-compatible upstreams that keep an empty `reasoning_content` placeholder in every chunk no longer flood Claude Code with empty Thought blocks (#7227), the Codex Responses-to-Chat converter no longer splits a commentary message from its tool calls into two assistant turns — which ended long agent tasks right after a progress update (#7280) — Claude Desktop's one-token model probe is clamped to the Responses API minimum so mapped models stop reporting "not available" (#7287), and Codex image generation under routing picks up three follow-up fixes for pasted full endpoints, mixed-case suffixes and streamed usage (#7177). Two data-integrity bugs are closed: every normal shutdown copied Claude's retry and timeout settings onto the Codex, Gemini and Grok Build proxy rows (#7210), and syncing a universal provider wiped its children's usage script, common-config opt-out and endpoint auto-select and pushed the card to the bottom of the list (#7212). Codex takeover now honors the proxy address when a card omits `model_provider` (#7263), Codex usage import detects growing rollouts on Windows NTFS through a persisted byte cursor (#7219), the tray shows the bound ChatGPT account's quota for managed Codex cards (#7267), and Claude Fable's weekly limit appears in the provider card and tray. The Claude provider editor gains a "Disable Artifact Tool" quick toggle for gateways that reject Claude Code's Artifact tool schema. On the preset side, Kimi's two Codex presets move to native Responses direct-connect, the aggregator Codex presets are refreshed to current catalogs, DashScope/Bailian is rebranded as 千问AI平台 on Qwen 3.8 (#7183), MiniMax defaults move to M3 (#7255), the bundled DeepSeek Codex catalog mirrors the vision-capable `deepseek-flash` (#7286), and the DeepSeek V4 family is repriced to the V4.1 Flash tier. This release does not change the database schema.

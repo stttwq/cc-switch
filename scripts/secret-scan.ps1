@@ -20,6 +20,7 @@ $Literals = [ordered]@{
     "sk-fixture-pi-0004"              = "PI_KEY_2"
     "sk-fixture-pi-header-0008"       = "PI_HEADER_SECRET"
     "sk-fixture-usage-0005"           = "USAGE_SCRIPT_KEY"
+    "sk-fixture-codex-oauth-refresh-0009" = "CODEX_OAUTH_REFRESH_TOKEN"
     "webdav-fixture-pass-0006"        = "WEBDAV_PASSWORD"
 }
 

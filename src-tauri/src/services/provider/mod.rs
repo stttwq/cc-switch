@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
-use crate::secrets::SecretExtractor;
+use crate::secrets::{SecretExtractor, SecretTarget};
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 use std::str::FromStr;
@@ -33,6 +33,62 @@ pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError
 
 pub fn reapply_pi_live(state: &AppState) -> Result<usize, AppError> {
     pi::reapply_live(state)
+}
+
+/// §6.4：凭据迁移后的 live 重写 + 环境变量投递（Claude / Codex / Pi 全覆盖）。
+///
+/// 返回失败项（`<app>: <错误>`），供 §6.5 展示并提供重试。全部成功时才清
+/// `live_reapply_pending` 并清理已迁移的 Codex `auth.json`——留着登录态文件
+/// 与"已迁移"的 API key 并存才是泄漏形态。
+///
+/// 抽成独立函数是为了可测：冷启动验收需要走完 §6.2 → §6.3 → §6.4 才能断言
+/// "整个 home 0 明文命中"。
+pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, AppError> {
+    let mut failures: Vec<String> = Vec::new();
+
+    for app_type in [AppType::Claude, AppType::Codex] {
+        match crate::settings::get_effective_current_provider(&state.db, &app_type) {
+            Ok(Some(id)) => match ProviderService::switch(state, app_type.clone(), &id) {
+                Ok(_) => log::info!("✓ live reapply {}", app_type.as_str()),
+                Err(e) => {
+                    log::warn!("✗ live reapply {} failed: {e}", app_type.as_str());
+                    failures.push(format!("{}: {e}", app_type.as_str()));
+                }
+            },
+            Ok(None) => {}
+            Err(e) => {
+                log::warn!("✗ live reapply 读取当前供应商失败: {e}");
+                failures.push(format!("读取当前供应商失败: {e}"));
+            }
+        }
+    }
+
+    match reapply_pi_live(state) {
+        Ok(n) => log::info!("✓ live reapply pi ({n} providers)"),
+        Err(e) => {
+            log::warn!("✗ live reapply pi failed: {e}");
+            failures.push(format!("pi: {e}"));
+        }
+    }
+
+    if failures.is_empty() {
+        if let Ok(rt) = tokio::runtime::Runtime::new() {
+            if let Err(e) = rt.block_on(crate::secrets::migration::prune_migrated_codex_auth_file(
+                &state.db,
+                state.secrets.as_ref(),
+            )) {
+                log::warn!("Codex auth.json 残留检查跳过: {e}");
+            }
+        }
+    }
+
+    crate::secrets::migration::record_live_reapply_failures(&state.db, &failures);
+    if failures.is_empty() {
+        let _ = state.db.set_setting("live_reapply_pending", "0");
+        log::info!("live_reapply_pending 已清零");
+    }
+
+    Ok(failures)
 }
 
 pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
@@ -206,7 +262,7 @@ impl ProviderService {
     /// 优先从本地 settings 读取，验证后 fallback 到数据库的 is_current 字段。
     /// 这确保了云同步场景下多设备可以独立选择供应商，且返回的 ID 一定有效。
     ///
-    /// 对于累加模式应用（OpenCode, OpenClaw），不存在"当前供应商"概念，直接返回空字符串。
+    /// 对于累加模式应用（Pi），不存在"当前供应商"概念，直接返回空字符串。
     pub fn current(state: &AppState, app_type: AppType) -> Result<String, AppError> {
         // Additive mode apps have no "current" provider concept
         if app_type.is_additive_mode() {
@@ -230,7 +286,7 @@ impl ProviderService {
         let mut provider = provider;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
-        Self::validate_provider_settings(&app_type, &provider)?;
+        Self::validate_provider_settings(state, &app_type, &provider, None)?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
         if app_type.is_additive_mode() {
             Self::set_provider_live_config_managed(&mut provider, add_to_live);
@@ -276,7 +332,7 @@ impl ProviderService {
             .get_provider_by_id(&original_id, app_type.as_str())?;
         // Normalize Claude model keys
         Self::normalize_provider_if_claude(&app_type, &mut provider);
-        Self::validate_provider_settings(&app_type, &provider)?;
+        Self::validate_provider_settings(state, &app_type, &provider, Some(&original_id))?;
         normalize_provider_common_config_for_storage(state.db.as_ref(), &app_type, &mut provider)?;
         if matches!(app_type, AppType::Codex) && provider.category.as_deref() == Some("official") {
             crate::codex_config::strip_codex_unified_session_bucket_from_settings(
@@ -367,7 +423,7 @@ impl ProviderService {
     /// Delete a provider
     ///
     /// 同时检查本地 settings 和数据库的当前供应商，防止删除任一端正在使用的供应商。
-    /// 对于累加模式应用（OpenCode, OpenClaw），可以随时删除任意供应商，同时从 live 配置中移除。
+    /// 对于累加模式应用（Pi），可以随时删除任意供应商，同时从 live 配置中移除。
     pub fn delete(state: &AppState, app_type: AppType, id: &str) -> Result<(), AppError> {
         if app_type == AppType::Pi {
             return pi::delete(state, id);
@@ -383,8 +439,9 @@ impl ProviderService {
             ));
         }
 
-        delete_provider_secrets(state, &app_type, id);
+        // §5.3.3 第 3 条：先移除托管的用户环境变量，再删凭据条目，最后删 DB 行。
         Self::release_provider_managed_env(state, &app_type, id);
+        delete_provider_secrets(state, &app_type, id);
         state.db.delete_provider(app_type.as_str(), id)
     }
 
@@ -396,7 +453,7 @@ impl ProviderService {
             Ok(mut managed) => {
                 let vars = managed.take_vars_for_provider(app_type.as_str(), id);
                 if !vars.is_empty() {
-                    let sink = crate::env_delivery::default_sink();
+                    let sink = state.env_sink.clone();
                     for name in &vars {
                         if let Err(e) = sink.remove(name) {
                             log::warn!("删除供应商时移除环境变量 {name} 失败: {e}");
@@ -483,7 +540,7 @@ impl ProviderService {
         if let Some(current_id) = current_id {
             if current_id != id {
                 // Additive mode apps - all providers coexist in the same file,
-                // no backfill needed (backfill is for exclusive mode apps like Claude/Codex/Gemini)
+                // no backfill needed (backfill is for exclusive mode apps Claude/Codex)
                 if !app_type.is_additive_mode() {
                     // Only backfill when switching to a different provider
                     if let Ok(live_config) = live::read_live_settings_for_backfill(app_type.clone())
@@ -575,23 +632,6 @@ impl ProviderService {
                 crate::settings::set_current_provider(&app_type, Some(id))?;
                 state.db.set_current_provider(app_type.as_str(), id)?;
             }
-        }
-        // Third-party dual of the block above: with preservation off, the
-        // config-only write is expected to delete auth.json. A deletion
-        // failure (read-only dir, ACL, file lock) must not fail the switch —
-        // config and current are already committed — but the user has to see
-        // that the official login is still on disk, so surface it as a
-        // switch warning instead of only a log line.
-        if matches!(app_type, AppType::Codex)
-            && provider.category.as_deref() != Some("official")
-            && !crate::codex_config::is_codex_official_provider(provider)
-            && !crate::settings::preserve_codex_official_auth_on_switch()
-            && crate::codex_config::get_codex_auth_path().exists()
-        {
-            log::warn!("Codex auth.json still present after a preservation-off third-party switch");
-            result
-                .warnings
-                .push("codex_auth_cleanup_failed".to_string());
         }
         // 切换重写了目标应用的 live，只重投影该应用的 MCP（Codex 的
         // [mcp_servers] 与 live 同文件，整体替换后必须补回；其余应用的
@@ -715,7 +755,7 @@ impl ProviderService {
         pending: &[(String, Zeroizing<String>)],
     ) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
-        let sink = crate::env_delivery::default_sink();
+        let sink = state.env_sink.clone();
         let sink = sink.as_ref();
         let managed = ManagedEnvVars::load(&state.db)?;
         let mut conflicts = Vec::new();
@@ -746,7 +786,7 @@ impl ProviderService {
     ) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
 
-        let sink = crate::env_delivery::default_sink();
+        let sink = state.env_sink.clone();
         let sink = sink.as_ref();
 
         let mut managed = ManagedEnvVars::load(&state.db)?;
@@ -789,7 +829,7 @@ impl ProviderService {
     fn undo_env_delivery(state: &AppState, app_type: &AppType, provider: &Provider) {
         use crate::env_delivery::ManagedEnvVars;
 
-        let sink = crate::env_delivery::default_sink();
+        let sink = state.env_sink.clone();
         let mut managed = match ManagedEnvVars::load(&state.db) {
             Ok(managed) => managed,
             Err(e) => {
@@ -872,6 +912,9 @@ impl ProviderService {
                     None => {
                         // 无密钥供应商（header 认证 / preserved login）合法：
                         // 活性安全由 live 写入门控保证，这里只降级为告警。
+                        // 回归保护：`provider_service_switch_codex_preserved_login_*` 两个
+                        // 用例锁定了"自带 http_headers 认证放行、会回落 auth.json 才拒绝"，
+                        // 这里不能改成一律拒绝。
                         log::warn!(
                             "Codex provider {} has no api_key in SecretStore; \
                              relying on config-carried auth",
@@ -956,7 +999,7 @@ impl ProviderService {
             .db
             .get_provider_by_id(provider_id, app_type.as_str())?
             .ok_or_else(|| AppError::Message(format!("供应商 {provider_id} 不存在")))?;
-        let sink = crate::env_delivery::default_sink();
+        let sink = state.env_sink.clone();
         let sink = sink.as_ref();
         let mut managed = ManagedEnvVars::load(&state.db)?;
 
@@ -1018,7 +1061,7 @@ impl ProviderService {
     /// 顶层 `base_url` / 整张 `model_providers` 表（含端点与统一会话桶）、
     /// `mcp_servers`（SSOT 在 DB 表）、顶层 `experimental_bearer_token`
     /// fallback、`model_catalog_json`、`web_search = "disabled"` 哨兵——密钥与
-    /// 注入产物不会进共享片段。Gemini 暂未纳入，如需支持应单独验证后再加。
+    /// 注入产物不会进共享片段。
     ///
     /// 仅对**显式勾选"写入通用配置"**（`meta.common_config_enabled == Some(true)`）的
     /// 供应商生效；用户**显式清空**过片段（`_cleared`）时跳过，避免把用户主动清掉的
@@ -1334,7 +1377,126 @@ impl ProviderService {
         Ok(true)
     }
 
-    fn validate_provider_settings(app_type: &AppType, provider: &Provider) -> Result<(), AppError> {
+    fn validate_provider_settings(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        original_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        Self::validate_provider_settings_shape(app_type, provider)?;
+        Self::validate_required_secrets(state, app_type, provider, original_id)
+    }
+
+    /// §5.4-②：新增 / 编辑时必须补齐的凭据。
+    ///
+    /// 密钥可能已经躺在凭据管理器里（编辑时前端不回显、也不重发），所以先看本次
+    /// 入参（入参里仍是明文，提取器只用于判定"有没有"），再看凭据管理器里该供应商
+    /// （或改名前的原 id）的条目。
+    fn validate_required_secrets(
+        state: &AppState,
+        app_type: &AppType,
+        provider: &Provider,
+        original_id: Option<&str>,
+    ) -> Result<(), AppError> {
+        // `official` 走 CLI 自己的登录态（Claude Official 预设的 env 就是空的），
+        // `cloud_provider`（Bedrock）用模板变量 / IAM 认证 —— 两者都没有 api_key 字段，
+        // 前端软校验也刻意跳过它们，后端必须保持一致。
+        //
+        // Codex 不纳入强制 api_key 校验：`provider_service_switch_codex_preserved_login_*`
+        // 两个既有用例已锁定"自带 http_headers 认证的无 key 卡合法、只有会回落 auth.json
+        // 的形态才拒绝"，一刀切会推翻它。Codex 的收口点在 live 写入门控（§5.4-③）。
+        let keyless_category = matches!(
+            provider.category.as_deref(),
+            Some("official") | Some("cloud_provider")
+        );
+        let (need_api_key, need_base_url) = match app_type {
+            AppType::Claude => (!keyless_category, false),
+            AppType::Codex => (false, false),
+            AppType::Pi => (false, true),
+        };
+        if !need_api_key && !need_base_url {
+            return Ok(());
+        }
+
+        let extracted = SecretExtractor::extract_with_meta(
+            &provider.id,
+            app_type,
+            &provider.settings_config,
+            provider
+                .meta
+                .as_ref()
+                .and_then(|m| m.api_key_field.as_deref()),
+        )?;
+        let incoming = extracted.secrets;
+
+        let candidate_ids: Vec<&str> = match original_id {
+            Some(original) if original != provider.id => vec![provider.id.as_str(), original],
+            _ => vec![provider.id.as_str()],
+        };
+
+        if need_api_key && incoming.api_key.is_none() {
+            let stored = candidate_ids.iter().any(|id| {
+                futures::executor::block_on(
+                    state
+                        .secrets
+                        .get(&SecretTarget::provider_api_key(app_type.clone(), *id)),
+                )
+                .ok()
+                .flatten()
+                .is_some()
+            });
+            if !stored {
+                return Err(AppError::localized(
+                    "provider.api_key.required",
+                    "请填写 API 密钥后再保存",
+                    "An API key is required before saving.",
+                ));
+            }
+        }
+
+        // Pi 的 schema 允许模型级 baseUrl（§5.2.3：不提取、原样保留），这类配置
+        // 没有供应商级 baseUrl 也能用，不能当成"缺端点"拒绝。
+        let has_model_level_base_url = app_type == &AppType::Pi
+            && extracted
+                .stripped
+                .get("models")
+                .and_then(Value::as_array)
+                .is_some_and(|models| {
+                    models.iter().any(|model| {
+                        model
+                            .get("baseUrl")
+                            .and_then(Value::as_str)
+                            .is_some_and(|url| !url.trim().is_empty())
+                    })
+                });
+
+        if need_base_url && incoming.base_url.is_none() && !has_model_level_base_url {
+            let stored = candidate_ids.iter().any(|id| {
+                futures::executor::block_on(
+                    state
+                        .secrets
+                        .retrieve(&SecretTarget::provider_base_url(app_type.clone(), *id)),
+                )
+                .ok()
+                .flatten()
+                .is_some()
+            });
+            if !stored {
+                return Err(AppError::localized(
+                    "provider.base_url.required",
+                    "请填写 Base URL 后再保存",
+                    "A Base URL is required before saving.",
+                ));
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_provider_settings_shape(
+        app_type: &AppType,
+        provider: &Provider,
+    ) -> Result<(), AppError> {
         match app_type {
             AppType::Claude => {
                 if !provider.settings_config.is_object() {
@@ -1575,4 +1737,116 @@ pub struct ProviderSortUpdate {
     pub id: String,
     #[serde(rename = "sortIndex")]
     pub sort_index: usize,
+}
+
+#[cfg(test)]
+mod required_secret_tests {
+    use super::*;
+    use crate::secrets::{InMemorySecretStore, SecretTarget};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn provider_with(id: &str, category: Option<&str>, settings: Value) -> Provider {
+        let mut p = Provider::from_parts(id.to_string(), id.to_string(), settings, None);
+        p.category = category.map(str::to_string);
+        p
+    }
+
+    fn state() -> AppState {
+        AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            Arc::new(InMemorySecretStore::new()),
+        )
+    }
+
+    fn check(state: &AppState, app: &AppType, provider: &Provider) -> Result<(), AppError> {
+        ProviderService::validate_required_secrets(state, app, provider, None)
+    }
+
+    #[test]
+    fn claude_requires_an_api_key_unless_official_or_cloud_provider() {
+        let state = state();
+        let app = AppType::Claude;
+
+        let bare = provider_with(
+            "bare",
+            Some("third_party"),
+            json!({"env": {"ANTHROPIC_BASE_URL": "https://x.example.com"}}),
+        );
+        assert!(
+            check(&state, &app, &bare).is_err(),
+            "第三方卡缺 key 必须拒绝"
+        );
+
+        // 密钥已在凭据管理器里（编辑时前端不回显、也不重发）→ 放行
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_api_key(app.clone(), "bare"),
+            "sk-ant-x",
+        ))
+        .expect("store key");
+        assert!(check(&state, &app, &bare).is_ok(), "已存凭据必须放行编辑");
+
+        // Claude Official 预设的 env 就是空的
+        let official = provider_with("official", Some("official"), json!({"env": {}}));
+        assert!(check(&state, &app, &official).is_ok());
+
+        // Bedrock IAM 走模板变量 / 环境变量认证
+        let bedrock = provider_with(
+            "bedrock",
+            Some("cloud_provider"),
+            json!({"env": {"CLAUDE_CODE_USE_BEDROCK": "1"}}),
+        );
+        assert!(check(&state, &app, &bedrock).is_ok());
+    }
+
+    #[test]
+    fn codex_keyless_cards_are_left_to_the_live_write_gate() {
+        // Codex 的收口点在 live 写入门控，不在新增/编辑校验：无 key 但自带
+        // http_headers 认证的卡合法（见 provider_service_switch_codex_preserved_login_*）。
+        let state = state();
+        let app = AppType::Codex;
+
+        let keyless = provider_with(
+            "cdx-keyless",
+            Some("third_party"),
+            json!({
+                "auth": {},
+                "config": "model_provider = \"custom\"\n[model_providers.custom]\nname = \"Custom\"\nbase_url = \"https://relay.example/v1\"\nwire_api = \"responses\"\nhttp_headers = { Authorization = \"Bearer t\" }\n"
+            }),
+        );
+        assert!(check(&state, &app, &keyless).is_ok());
+    }
+
+    #[test]
+    fn pi_requires_a_base_url() {
+        let state = state();
+        let app = AppType::Pi;
+
+        let bare = provider_with("pi-bare", None, json!({"apiKey": "k", "model": "m"}));
+        assert!(check(&state, &app, &bare).is_err());
+
+        let with_url = provider_with(
+            "pi-ok",
+            None,
+            json!({"baseUrl": "https://pi.example.com", "apiKey": "k"}),
+        );
+        assert!(check(&state, &app, &with_url).is_ok());
+
+        // 模型级 baseUrl 也算有端点（§5.2.3：不提取但原样保留）
+        let model_level = provider_with(
+            "pi-model-url",
+            None,
+            json!({"models": [{"id": "m", "baseUrl": "https://pi.example.com"}]}),
+        );
+        assert!(check(&state, &app, &model_level).is_ok());
+
+        // 端点已在凭据管理器里
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_base_url(app.clone(), "pi-stored"),
+            "https://pi.example.com",
+        ))
+        .expect("store base url");
+        let stored = provider_with("pi-stored", None, json!({"apiKey": "k"}));
+        assert!(check(&state, &app, &stored).is_ok());
+    }
 }

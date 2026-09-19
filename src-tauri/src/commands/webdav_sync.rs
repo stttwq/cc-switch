@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 use serde_json::{json, Value};
+use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::sync_support::{
@@ -92,10 +93,11 @@ where
 pub async fn webdav_test_connection(
     state: State<'_, AppState>,
     settings: WebDavSyncSettings,
-    #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
+    password: Option<String>,
 ) -> Result<Value, String> {
-    let _preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    webdav_sync_service::check_connection(&state.secrets, &settings)
+    // 三态（§5.2.5）：Some(非空) = 用表单里刚输入、尚未保存的密码试连；否则读凭据管理器。
+    let override_password = password.as_deref().filter(|p| !p.is_empty());
+    webdav_sync_service::check_connection(&state.secrets, &settings, override_password)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({
@@ -157,23 +159,15 @@ pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, S
     Ok(result)
 }
 
-#[tauri::command]
-pub async fn webdav_sync_save_settings(
-    state: State<'_, AppState>,
+/// `webdav_sync_save_settings` 的可测核心（命令本身只做 `State` 解包与错误转字符串）。
+///
+/// 三态（§5.2.5）：`None` = 未触碰，保持现值；`Some("")` = 清空并删除凭据；`Some(v)` = 写入。
+async fn save_webdav_settings(
+    secrets: &Arc<dyn crate::secrets::SecretStore>,
     settings: WebDavSyncSettings,
-    password: Option<String>,
-    #[allow(non_snake_case)] passwordTouched: Option<bool>,
-) -> Result<Value, String> {
-    let password_touched = passwordTouched.unwrap_or(false);
-
-    // Extract password to SecretStore if provided and touched
-    if password_touched {
-        if let Some(pwd) = password {
-            crate::secrets::extract_webdav_password(&state.secrets, &pwd)
-                .await
-                .map_err(|e| e.to_string())?;
-        }
-    }
+    password: Option<&str>,
+) -> Result<(), AppError> {
+    crate::secrets::extract_webdav_password(secrets, password).await?;
 
     let existing = settings::get_webdav_sync_settings();
     let mut sync_settings = settings;
@@ -184,8 +178,19 @@ pub async fn webdav_sync_save_settings(
     }
 
     sync_settings.normalize();
-    sync_settings.validate().map_err(|e| e.to_string())?;
-    settings::set_webdav_sync_settings(Some(sync_settings)).map_err(|e| e.to_string())?;
+    sync_settings.validate()?;
+    settings::set_webdav_sync_settings(Some(sync_settings))
+}
+
+#[tauri::command]
+pub async fn webdav_sync_save_settings(
+    state: State<'_, AppState>,
+    settings: WebDavSyncSettings,
+    password: Option<String>,
+) -> Result<Value, String> {
+    save_webdav_settings(&state.secrets, settings, password.as_deref())
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(json!({ "success": true }))
 }
 
@@ -203,7 +208,8 @@ pub async fn webdav_sync_fetch_remote_info(state: State<'_, AppState>) -> Result
 mod tests {
     use super::{
         map_sync_result, persist_sync_error, require_enabled_webdav_settings,
-        run_download_with_webdav_lock, run_with_webdav_lock, webdav_sync_mutex,
+        run_download_with_webdav_lock, run_with_webdav_lock, save_webdav_settings,
+        webdav_sync_mutex,
     };
     use crate::error::AppError;
     use crate::settings::{AppSettings, WebDavSyncSettings};
@@ -397,7 +403,7 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn webdav_sync_save_settings_extracts_password_to_secret_store() {
+    async fn webdav_sync_save_settings_applies_password_three_state() {
         let test_home = std::env::temp_dir().join("cc-switch-webdav-extract-test");
         let _ = std::fs::remove_dir_all(&test_home);
         std::fs::create_dir_all(&test_home).expect("create test home");
@@ -408,7 +414,7 @@ mod tests {
         let secrets: Arc<dyn crate::secrets::SecretStore> =
             Arc::new(crate::secrets::InMemorySecretStore::new());
 
-        let settings = WebDavSyncSettings {
+        let settings = || WebDavSyncSettings {
             enabled: true,
             base_url: "https://dav.example.com/dav/".to_string(),
             username: "alice".to_string(),
@@ -417,31 +423,67 @@ mod tests {
             ..WebDavSyncSettings::default()
         };
 
-        let password_touched = true;
-        let password = "secret-password".to_string();
-
-        if password_touched {
-            crate::secrets::extract_webdav_password(&secrets, &password)
-                .await
-                .expect("extraction should succeed");
-        }
-
-        let existing = crate::settings::get_webdav_sync_settings();
-        let mut sync_settings = settings;
-
-        if let Some(existing_settings) = existing {
-            sync_settings.status = existing_settings.status;
-        }
-
-        sync_settings.normalize();
-        sync_settings.validate().expect("validation should succeed");
-        crate::settings::set_webdav_sync_settings(Some(sync_settings))
+        // P0-1 回归：走命令真正执行的那段代码（含入参三态），而不是绕过命令签名。
+        // ① Some(v) → 写入
+        save_webdav_settings(&secrets, settings(), Some("secret-password"))
+            .await
             .expect("save should succeed");
+        assert_eq!(
+            crate::secrets::restore_webdav_password(&secrets)
+                .await
+                .expect("restore should succeed")
+                .expect("password should be stored")
+                .as_str(),
+            "secret-password"
+        );
 
-        let restored = crate::secrets::restore_webdav_password(&secrets)
+        // ② None → 保持现值（不能被空值冲掉）
+        save_webdav_settings(&secrets, settings(), None)
+            .await
+            .expect("save should succeed");
+        assert!(crate::secrets::restore_webdav_password(&secrets)
             .await
             .expect("restore should succeed")
-            .expect("password should be stored");
-        assert_eq!(restored.as_str(), "secret-password");
+            .is_some());
+
+        // ③ Some("") → 删除条目（清空密码框必须真的删掉）
+        save_webdav_settings(&secrets, settings(), Some(""))
+            .await
+            .expect("save should succeed");
+        assert!(crate::secrets::restore_webdav_password(&secrets)
+            .await
+            .expect("restore should succeed")
+            .is_none());
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn webdav_sync_save_settings_applies_s3_three_state() {
+        let test_home = std::env::temp_dir().join("cc-switch-s3-extract-test");
+        let _ = std::fs::remove_dir_all(&test_home);
+        std::fs::create_dir_all(&test_home).expect("create test home");
+        std::env::set_var("CC_SWITCH_TEST_HOME", &test_home);
+
+        let secrets: Arc<dyn crate::secrets::SecretStore> =
+            Arc::new(crate::secrets::InMemorySecretStore::new());
+
+        crate::secrets::extract_s3_credentials(&secrets, Some("AKIA-1"), Some("secret-1"))
+            .await
+            .expect("store should succeed");
+        let (id, secret) = crate::secrets::restore_s3_credentials(&secrets)
+            .await
+            .expect("restore should succeed");
+        assert_eq!(id.as_deref().map(|v| v.as_str()), Some("AKIA-1"));
+        assert_eq!(secret.as_deref().map(|v| v.as_str()), Some("secret-1"));
+
+        // None → 两条都保持；Some("") 只删被清空的那条
+        crate::secrets::extract_s3_credentials(&secrets, None, Some(""))
+            .await
+            .expect("delete should succeed");
+        let (id, secret) = crate::secrets::restore_s3_credentials(&secrets)
+            .await
+            .expect("restore should succeed");
+        assert_eq!(id.as_deref().map(|v| v.as_str()), Some("AKIA-1"));
+        assert!(secret.is_none());
     }
 }

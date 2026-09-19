@@ -87,10 +87,19 @@ where
 pub async fn s3_test_connection(
     state: State<'_, AppState>,
     settings: S3SyncSettings,
-    #[allow(non_snake_case)] preserveEmptyPassword: Option<bool>,
+    #[allow(non_snake_case)] accessKeyId: Option<String>,
+    #[allow(non_snake_case)] secretAccessKey: Option<String>,
 ) -> Result<Value, String> {
-    let _preserve_empty = preserveEmptyPassword.unwrap_or(true);
-    s3_sync_service::check_connection(&state.secrets, &settings)
+    // 三态（§5.2.5）：两者都非空时用表单里刚输入、尚未保存的密钥试连；否则读凭据管理器。
+    let override_credentials = match (accessKeyId.as_deref(), secretAccessKey.as_deref()) {
+        (Some(access_key_id), Some(secret_access_key))
+            if !access_key_id.is_empty() && !secret_access_key.is_empty() =>
+        {
+            Some((access_key_id, secret_access_key))
+        }
+        _ => None,
+    };
+    s3_sync_service::check_connection(&state.secrets, &settings, override_credentials)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({
@@ -156,18 +165,15 @@ pub async fn s3_sync_save_settings(
     settings: S3SyncSettings,
     #[allow(non_snake_case)] accessKeyId: Option<String>,
     #[allow(non_snake_case)] secretAccessKey: Option<String>,
-    #[allow(non_snake_case)] passwordTouched: Option<bool>,
 ) -> Result<Value, String> {
-    let password_touched = passwordTouched.unwrap_or(false);
-
-    // Extract credentials to SecretStore if provided and touched
-    if password_touched {
-        let access_key = accessKeyId.unwrap_or_default();
-        let secret_key = secretAccessKey.unwrap_or_default();
-        crate::secrets::extract_s3_credentials(&state.secrets, &access_key, &secret_key)
-            .await
-            .map_err(|e| e.to_string())?;
-    }
+    // 三态（§5.2.5）：None = 未触碰，保持现值；Some("") = 清空并删除该条；Some(v) = 写入。
+    crate::secrets::extract_s3_credentials(
+        &state.secrets,
+        accessKeyId.as_deref(),
+        secretAccessKey.as_deref(),
+    )
+    .await
+    .map_err(|e| e.to_string())?;
 
     let existing = settings::get_s3_sync_settings();
     let mut sync_settings = settings;

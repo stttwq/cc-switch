@@ -121,18 +121,6 @@ const expectedChatPresets = new Map<
 ]);
 
 describe("Codex Chat provider presets", () => {
-  it("drops prompt cache routing once Kimi Coding is direct-connect", () => {
-    // promptCacheRouting 只被 Responses→Chat 转换层消费（forwarder 在转换后
-    // 重注入 prompt_cache_key）。原生直连由 Codex 自己发 prompt_cache_key，
-    // 留着这面旗只会让人误以为该卡仍需路由接管。
-    const preset = codexProviderPresets.find(
-      (item) => item.name === "Kimi For Coding",
-    );
-
-    expect(preset?.apiFormat).toBe("openai_responses");
-    expect(preset?.promptCacheRouting).toBeUndefined();
-  });
-
   it("marks migrated Chat Completions presets for local routing", () => {
     for (const [name, expected] of expectedChatPresets) {
       const preset = codexProviderPresets.find((item) => item.name === name);
@@ -281,8 +269,6 @@ describe("Codex Chat provider presets", () => {
           ]),
         ),
       ).toEqual(expected.contextWindows);
-      // 原生（直连）不走 Chat 转换，因此不需要 codexChatReasoning。
-      expect(preset?.codexChatReasoning).toBeUndefined();
     }
   });
 
@@ -295,7 +281,6 @@ describe("Codex Chat provider presets", () => {
     );
 
     expect(preset, "OpenCode Go preset").toBeDefined();
-    expect(preset?.codexChatReasoning?.effortValueMode).toBe("zen");
     expect(
       Object.fromEntries(
         (preset?.modelCatalog ?? []).map((model) => [

@@ -2,12 +2,7 @@
  * Codex 预设供应商配置模板
  */
 import { ProviderCategory } from "../types";
-import type {
-  CodexApiFormat,
-  CodexCatalogModel,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
-} from "../types";
+import type { CodexApiFormat, CodexCatalogModel } from "../types";
 import type { PresetTheme } from "./claudeProviderPresets";
 
 export interface CodexProviderPreset {
@@ -35,10 +30,6 @@ export interface CodexProviderPreset {
   apiFormat?: CodexApiFormat;
   // Codex Chat 本地路由模式下的模型目录
   modelCatalog?: CodexCatalogModel[];
-  // Codex Responses -> Chat Completions reasoning capability defaults
-  codexChatReasoning?: CodexChatReasoning;
-  // Session-based prompt-cache routing override for Chat Completions upstreams
-  promptCacheRouting?: PromptCacheRoutingMode;
 }
 
 /**
@@ -156,9 +147,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     // Key 探针：Codex 0.153.4 的全量请求形态（include
     // reasoning.encrypted_content + reasoning.summary + text.verbosity）与
     // 流式事件序列均 200；kimi-k2.7-code 亦 200——文档只列 kimi-k3，属未文
-    // 档化能力，厂商若收回从 catalog 删行即可。存量 openai_chat 卡片的
-    // thinking/reasoning_effort 注入来自卡片自身 meta.codexChatReasoning
-    //（预设已不再携带），那条路径的 Kimi 400 仍首查该注入
+    // 档化能力，厂商若收回从 catalog 删行即可
     apiFormat: "openai_responses",
     modelCatalog: modelCatalog([
       // 首行 = 默认模型（catalog[0] 须与 config.toml 的 model 一致）：
@@ -215,8 +204,7 @@ export const codexProviderPresets: CodexProviderPreset[] = [
     // 或协议转换工具」。2026-09-09 真 Key 探针：四个模型在 Codex 全量请求
     // 形态下均 200，reasoning item 带真实 encrypted_content；同
     // prompt_cache_key 的二次请求命中 cached_tokens——直连时
-    // prompt_cache_key 由 Codex 自己发，不再需要转换层的 promptCacheRouting
-    // 重注入
+    // prompt_cache_key 由 Codex 自己发
     apiFormat: "openai_responses",
     modelCatalog: modelCatalog([
       // 照抄同页官方 models.json（2026-09-09 核对）：
@@ -576,13 +564,6 @@ requires_openai_auth = true`,
         inputModalities: ["text"],
       },
     ]),
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: false,
-      thinkingParam: "thinking",
-      effortParam: "none",
-      outputFormat: "reasoning_content",
-    },
     category: "aggregator",
     isPartner: true,
     partnerPromotionKey: "ppio",
@@ -773,15 +754,6 @@ requires_openai_auth = true`,
         defaultReasoningLevel: "high",
       },
     ]),
-    // 显式覆盖平台旧的 supportsEffort:false 推断，使目录中的两档实际下发。
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "enable_thinking",
-      effortParam: "reasoning_effort",
-      effortValueMode: "deepseek",
-      outputFormat: "reasoning_content",
-    },
     category: "aggregator",
     isPartner: true,
     partnerPromotionKey: "siliconflow",
@@ -1135,15 +1107,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["high"],
       },
     ]),
-    // 平台未确认该模型的思考开关/effort 契约；单档仅表示思考模式，
-    // 显式覆盖以免后端按 GLM 模型名注入原厂 thinking 字段。
-    codexChatReasoning: {
-      supportsThinking: false,
-      supportsEffort: false,
-      thinkingParam: "none",
-      effortParam: "none",
-      outputFormat: "reasoning_content",
-    },
     icon: "atlascloud",
   },
   {
@@ -1314,15 +1277,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
       },
     ]),
-    // 千帆 v2 Chat API 官方顶层参数（与智谱同形态）；平台对不支持的参数
-    // "忽略不报错"（官方多处明载），别名解析到非清单模型时只失效不 400
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: false,
-      thinkingParam: "thinking",
-      effortParam: "none",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "baidu",
     iconColor: "#2932E1",
@@ -1396,20 +1350,6 @@ requires_openai_auth = true`,
         contextWindow: 262144,
       },
     ]),
-    // 与 Coding Plan 的差异：这里开 supportsEffort——Coding Plan 因别名不知
-    // 解析到谁而保持 false；Token Plan catalog 全为显式模型，默认模型
-    // deepseek-v4-pro 在 reasoning_effort 官方清单内（清单仅 v4-pro/v4-flash，
-    // 档位仅 high/max）。effortValueMode:"deepseek"（max/xhigh/ultra→max、
-    // 其余→high）与千帆官方向下兼容映射（low/medium→high、xhigh→max）逐字
-    // 吻合；非清单模型收到 reasoning_effort 按平台明文"忽略不报错"，无害
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      effortValueMode: "deepseek",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "baidu",
     iconColor: "#2932E1",
@@ -1747,17 +1687,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
       },
     ]),
-    // 真 Key 实测（2026-08-31）：thinking 参数在 /plan 端点真实生效
-    // （开/关均验证，thinking 文档 1300/80637 覆盖 /plan）；reasoning_effort
-    // 全模型容忍不报错（含默认 high）。effortValueMode 不声明=passthrough，
-    // 档位值域已由各模型 reasoningLevels 限定为实测安全集
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -1822,14 +1751,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
       },
     ]),
-    // thinking/reasoning_effort 实测同国内个人版（全模型容忍、开关生效）
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -1980,15 +1901,6 @@ requires_openai_auth = true`,
         inputModalities: ["text"],
       },
     ]),
-    // reasoning_effort 默认 high 全模型实测容忍；glm-5.3 的 medium/xhigh
-    // 会 400，档位值域已由各模型 reasoningLevels 限定为实测安全集
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -2104,14 +2016,6 @@ requires_openai_auth = true`,
         inputModalities: ["text"],
       },
     ]),
-    // reasoning_effort 默认 high 全模型实测容忍；同国内企业专业版
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -2146,13 +2050,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["high"],
       },
     ]),
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -2187,13 +2084,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["none", "high"],
       },
     ]),
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "thinking",
-      effortParam: "reasoning_effort",
-      outputFormat: "reasoning_content",
-    },
     category: "cn_official",
     icon: "tencent",
     iconColor: "#0052D9",
@@ -2214,8 +2104,7 @@ requires_openai_auth = true`,
       // 档位照抄官方两站模型页与 reasoning 指南（2026-08-15 盘点）：
       // 3.7-flash 三档默认 medium、2603 两档；无后缀 3.5-flash 官方未暴露
       // effort，不填。全系无关思考形态，none 一律不列。effort 下发由后端
-      // 按模型推断（2603=low_high 收敛、3.7=passthrough），预设不加
-      // codexChatReasoning——显式声明是 provider 级会丢 per-model 门控
+      // 按模型推断（2603=low_high 收敛、3.7=passthrough）
       {
         model: "step-3.7-flash",
         displayName: "Step 3.7 Flash",
@@ -2254,8 +2143,7 @@ requires_openai_auth = true`,
       // 档位照抄官方两站模型页与 reasoning 指南（2026-08-15 盘点）：
       // 3.7-flash 三档默认 medium、2603 两档；无后缀 3.5-flash 官方未暴露
       // effort，不填。全系无关思考形态，none 一律不列。effort 下发由后端
-      // 按模型推断（2603=low_high 收敛、3.7=passthrough），预设不加
-      // codexChatReasoning——显式声明是 provider 级会丢 per-model 门控
+      // 按模型推断（2603=low_high 收敛、3.7=passthrough）
       {
         model: "step-3.7-flash",
         displayName: "Step 3.7 Flash",
@@ -2301,17 +2189,6 @@ requires_openai_auth = true`,
         contextWindow: 200000,
       },
     ]),
-    // 平台方言修正（2026-08-15 盘点）：thinking:{type} 是智谱自家端点形态，
-    // ModelScope 平台文档零出现；平台真实开关=顶层 enable_thinking 布尔
-    //（官方模型页 extra_body 范例+百炼 GLM 一手文档双证）。整块必须保留——
-    // 删掉会落到后端 glm 模型名推断、错误方言原地复活
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: false,
-      thinkingParam: "enable_thinking",
-      effortParam: "none",
-      outputFormat: "reasoning_content",
-    },
     category: "aggregator",
     icon: "modelscope",
     iconColor: "#624AFF",
@@ -2550,14 +2427,6 @@ requires_openai_auth = true`,
         reasoningLevels: ["high"],
       },
     ]),
-    // 不沿用旧模型的开关推断；保留显式覆盖，阻止按模型名注入原厂参数。
-    codexChatReasoning: {
-      supportsThinking: false,
-      supportsEffort: false,
-      thinkingParam: "none",
-      effortParam: "none",
-      outputFormat: "reasoning_content",
-    },
     category: "aggregator",
     icon: "novita",
     iconColor: "#000000",
@@ -2615,17 +2484,6 @@ requires_openai_auth = true`,
         defaultReasoningLevel: "high",
       },
     ]),
-    // NIM K3 始终思考，只接受 reasoning_effort: low/high/max，无 thinking：
-    // https://docs.api.nvidia.com/nim/re/reference/moonshotai-kimi-k3-infer
-    // API 未传 effort 时默认 max；此预设显式 high，与 config.toml 保持一致。
-    codexChatReasoning: {
-      supportsThinking: false,
-      supportsEffort: true,
-      thinkingParam: "none",
-      effortParam: "reasoning_effort",
-      effortValueMode: "passthrough",
-      outputFormat: "reasoning_content",
-    },
     category: "aggregator",
     icon: "nvidia",
     iconColor: "#000000",
@@ -2643,18 +2501,6 @@ requires_openai_auth = true`,
     ),
     endpointCandidates: ["https://opencode.ai/zen/go/v1"],
     apiFormat: "openai_chat",
-    // OpenCode Zen 网关：统一接受顶层 reasoning_effort（其自家客户端同款参数），
-    // 但合法档位逐模型（见各条目 reasoningLevels，镜像 models.dev；opencode
-    // 客户端同样严格按模型声明发值）——代理转换层按表钳制，未声明 effort 的
-    // 模型不发该字段。不发厂商原生 thinking 字段。
-    codexChatReasoning: {
-      supportsThinking: true,
-      supportsEffort: true,
-      thinkingParam: "none",
-      effortParam: "reasoning_effort",
-      effortValueMode: "zen",
-      outputFormat: "reasoning_content",
-    },
     modelCatalog: modelCatalog([
       // https://opencode.ai/docs/go/ 确认以下新模型均走 Chat；窗口/模态/档位
       // 同步其官方依赖 https://models.dev/api.json（2026-09-10）。

@@ -431,10 +431,6 @@ pub struct AppSettings {
     /// Whether to show the project profile switcher on the main page header
     #[serde(default = "default_show_profile_switcher")]
     pub show_profile_switcher: bool,
-    /// Keep Codex ChatGPT login material in auth.json when switching to third-party providers.
-    /// Opt-in: defaults to false so third-party switches cleanly overwrite auth.json.
-    #[serde(default)]
-    pub preserve_codex_official_auth_on_switch: bool,
 }
 
 fn default_show_in_tray() -> bool {
@@ -460,7 +456,6 @@ impl Default for AppSettings {
             launch_on_startup: false,
             silent_startup: false,
             show_profile_switcher: true,
-            preserve_codex_official_auth_on_switch: false,
             unify_codex_session_history: false,
             unify_codex_migrate_existing: None,
             first_run_notice_confirmed: None,
@@ -801,16 +796,6 @@ pub fn get_pi_override_dir() -> Option<PathBuf> {
         .pi_config_dir
         .as_ref()
         .map(|path| resolve_override_path(path))
-}
-
-pub fn preserve_codex_official_auth_on_switch() -> bool {
-    settings_store()
-        .read()
-        .unwrap_or_else(|e| {
-            log::warn!("设置锁已毒化，使用恢复值: {e}");
-            e.into_inner()
-        })
-        .preserve_codex_official_auth_on_switch
 }
 
 pub fn unify_codex_session_history() -> bool {

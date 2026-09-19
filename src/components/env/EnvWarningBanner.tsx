@@ -38,6 +38,9 @@ export function EnvWarningBanner({
     return null;
   }
 
+  // §5.3.1 注：只读来源（如 ~/.claude/settings.local.json）只展示，不可删除。
+  const deletableConflicts = conflicts.filter((c) => !c.readOnly);
+
   const toggleSelection = (key: string) => {
     const newSelection = new Set(selectedConflicts);
     if (newSelection.has(key)) {
@@ -49,11 +52,11 @@ export function EnvWarningBanner({
   };
 
   const toggleSelectAll = () => {
-    if (selectedConflicts.size === conflicts.length) {
+    if (selectedConflicts.size === deletableConflicts.length) {
       setSelectedConflicts(new Set());
     } else {
       setSelectedConflicts(
-        new Set(conflicts.map((c) => `${c.varName}:${c.sourcePath}`)),
+        new Set(deletableConflicts.map((c) => `${c.varName}:${c.sourcePath}`)),
       );
     }
   };
@@ -157,7 +160,11 @@ export function EnvWarningBanner({
                   <div className="flex items-center gap-2 pb-2 border-b border-yellow-200 dark:border-yellow-900/50">
                     <Checkbox
                       id="select-all"
-                      checked={selectedConflicts.size === conflicts.length}
+                      checked={
+                        deletableConflicts.length > 0 &&
+                        selectedConflicts.size === deletableConflicts.length
+                      }
+                      disabled={deletableConflicts.length === 0}
                       onCheckedChange={toggleSelectAll}
                     />
                     <label
@@ -179,6 +186,7 @@ export function EnvWarningBanner({
                           <Checkbox
                             id={key}
                             checked={selectedConflicts.has(key)}
+                            disabled={conflict.readOnly}
                             onCheckedChange={() => toggleSelection(key)}
                           />
 
@@ -196,6 +204,11 @@ export function EnvWarningBanner({
                               {t("env.field.source")}:{" "}
                               {getSourceDescription(conflict)}
                             </p>
+                            {conflict.readOnly && (
+                              <p className="text-xs text-yellow-800 dark:text-yellow-200 mt-1">
+                                {t("env.field.readOnly")}
+                              </p>
+                            )}
                           </div>
                         </div>
                       );

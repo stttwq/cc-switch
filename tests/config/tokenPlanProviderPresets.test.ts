@@ -236,15 +236,6 @@ describe("Tencent Token Plan provider presets", () => {
       expect(preset?.modelCatalog?.map((entry) => entry.model)).toEqual(
         product.catalogModels,
       );
-      // thinking 参数与 reasoning_effort 在 /plan 端点真 Key 实测生效/容忍
-      // （2026-08-31）；档位值域由各模型 reasoningLevels 限定为实测安全集
-      expect(preset?.codexChatReasoning).toEqual({
-        supportsThinking: true,
-        supportsEffort: true,
-        thinkingParam: "thinking",
-        effortParam: "reasoning_effort",
-        outputFormat: "reasoning_content",
-      });
     });
 
     it(`uses the OpenAI-compatible endpoint for ${product.name} in Pi`, () => {

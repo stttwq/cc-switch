@@ -10,8 +10,7 @@ use cc_switch_lib::{
 #[path = "support.rs"]
 mod support;
 use support::{
-    create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, test_mutex,
+    create_test_state, create_test_state_with_config, ensure_test_home, reset_test_fs, test_mutex,
 };
 
 #[test]
@@ -93,7 +92,6 @@ fn sync_claude_provider_writes_live_settings() {
 fn sync_codex_provider_writes_config_without_touching_auth() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    enable_codex_official_auth_preservation();
 
     let mut config = MultiAppConfig::default();
 

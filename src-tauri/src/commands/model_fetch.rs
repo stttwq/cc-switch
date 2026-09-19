@@ -15,24 +15,14 @@ pub async fn fetch_models_for_config(
     api_key: String,
     is_full_url: Option<bool>,
     models_url: Option<String>,
-    custom_user_agent: Option<String>,
     api_format: Option<String>,
     request_headers: Option<BTreeMap<String, String>>,
 ) -> Result<Vec<FetchedModel>, String> {
-    // Parse custom user agent - invalid UA is silently ignored (doesn't block model fetch)
-    let user_agent = custom_user_agent.as_deref().and_then(|ua| {
-        if ua.trim().is_empty() {
-            None
-        } else {
-            reqwest::header::HeaderValue::from_str(ua).ok()
-        }
-    });
     model_fetch::fetch_models(
         &base_url,
         &api_key,
         is_full_url.unwrap_or(false),
         models_url.as_deref(),
-        user_agent,
         api_format.as_deref(),
         request_headers.as_ref(),
     )

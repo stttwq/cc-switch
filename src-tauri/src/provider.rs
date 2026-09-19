@@ -74,7 +74,6 @@ pub struct ProviderForFrontend {
 #[serde(rename_all = "camelCase")]
 pub struct SecretHint {
     pub present: bool,
-    pub hint: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -171,7 +170,4 @@ pub struct ProviderMeta {
     /// Claude: ANTHROPIC_AUTH_TOKEN or ANTHROPIC_API_KEY
     #[serde(rename = "apiKeyField", skip_serializing_if = "Option::is_none")]
     pub api_key_field: Option<String>,
-    /// 仅用于 v18 夹具序列化；v19 迁移会剥离。
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub usage_script: Option<Value>,
 }

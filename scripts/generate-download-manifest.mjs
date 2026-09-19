@@ -4,6 +4,9 @@
 // schema is mirrored in cc-switch-website/src/lib/downloads.ts — keep both in
 // sync when changing fields or classification rules.
 //
+// 注意：本脚本不在本仓库 CI 里调用（由网站侧手动/单独跑），因此不要因为
+// "仓库内 0 引用" 就删掉它。
+//
 // Usage: node scripts/generate-download-manifest.mjs <assets-dir> <tag> <base-url> [output] [pub-date]
 
 import { createHash } from 'node:crypto';
@@ -24,29 +27,19 @@ if (Number.isNaN(pubDate.getTime())) {
   process.exit(1);
 }
 
-// Longer suffixes must come before their shorter counterparts
-// (e.g. -Windows-arm64.msi before -Windows.msi).
+// 发布面已按 D1 收敛为 Windows x86_64 单一产物（自动更新移除后也不再产出 .sig /
+// latest.json）。这里只保留 release.yml 实际会打出来的两种资产；等发布面恢复多平台时
+// 再按"-Windows-arm64.msi 在 -Windows.msi 之前"的顺序补回来。
 const RULES = [
-  { suffix: '-macOS.dmg', platform: 'macos', kind: 'dmg', arch: 'universal' },
-  { suffix: '-macOS.zip', platform: 'macos', kind: 'zip', arch: 'universal' },
-  { suffix: '-Windows-arm64-Portable.zip', platform: 'windows', kind: 'portable', arch: 'arm64' },
   { suffix: '-Windows-Portable.zip', platform: 'windows', kind: 'portable', arch: 'x64' },
-  { suffix: '-Windows-arm64.msi', platform: 'windows', kind: 'msi', arch: 'arm64' },
   { suffix: '-Windows.msi', platform: 'windows', kind: 'msi', arch: 'x64' },
-  { suffix: '-Linux-arm64.AppImage', platform: 'linux', kind: 'appimage', arch: 'arm64' },
-  { suffix: '-Linux-x86_64.AppImage', platform: 'linux', kind: 'appimage', arch: 'x64' },
-  { suffix: '-Linux-arm64.deb', platform: 'linux', kind: 'deb', arch: 'arm64' },
-  { suffix: '-Linux-x86_64.deb', platform: 'linux', kind: 'deb', arch: 'x64' },
-  { suffix: '-Linux-arm64.rpm', platform: 'linux', kind: 'rpm', arch: 'arm64' },
-  { suffix: '-Linux-x86_64.rpm', platform: 'linux', kind: 'rpm', arch: 'x64' },
 ];
 
 const normalizedBase = baseUrl.replace(/\/+$/, '');
 const files = [];
 
 for (const name of readdirSync(assetsDir).sort()) {
-  // Unmatched files (.sig, .tar.gz updater artifacts, latest.json) are
-  // deliberately skipped — they are not user-facing downloads.
+  // Unmatched files are deliberately skipped — they are not user-facing downloads.
   const rule = RULES.find((entry) => name.endsWith(entry.suffix));
   if (!rule) continue;
   const path = join(assetsDir, name);

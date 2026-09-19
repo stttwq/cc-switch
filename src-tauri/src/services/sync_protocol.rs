@@ -59,21 +59,18 @@ where
 /// Tables whose changes make the remote configuration snapshot stale.
 ///
 /// Keep this transport-agnostic so WebDAV and S3 cannot silently drift apart.
-/// `model_pricing` is intentionally excluded while its local JSON sidecar is
-/// the user-owned SSOT.
+/// Only tables that survive schema v19 belong here.
 pub(crate) fn should_trigger_auto_sync_for_table(table: &str) -> bool {
     let normalized = table.trim().to_ascii_lowercase();
     matches!(
         normalized.as_str(),
         "providers"
-            | "provider_endpoints"
             | "mcp_servers"
             | "prompts"
             | "skills"
             | "skill_repos"
             | "profiles"
             | "settings"
-            | "proxy_config"
     )
 }
 
@@ -496,14 +493,12 @@ mod tests {
     fn auto_sync_table_filter_covers_shared_configuration() {
         for table in [
             "providers",
-            "provider_endpoints",
             "mcp_servers",
             "prompts",
             "skills",
             "skill_repos",
             "profiles",
             "settings",
-            "proxy_config",
         ] {
             assert!(
                 should_trigger_auto_sync_for_table(table),
@@ -517,6 +512,9 @@ mod tests {
             "provider_health",
             "session_log_sync",
             "model_pricing",
+            // schema v19 已 DROP（§7.1 / D9），出现在清单里只会误导后来人
+            "provider_endpoints",
+            "proxy_config",
         ] {
             assert!(
                 !should_trigger_auto_sync_for_table(table),

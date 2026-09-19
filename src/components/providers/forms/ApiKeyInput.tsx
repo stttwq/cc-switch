@@ -12,10 +12,9 @@ interface ApiKeyInputProps {
   id?: string;
   /**
    * 后端凭据状态（Provider.secretStatus.apiKey，§5.2.2 前端零密钥）。
-   * present=true 时输入框一律留空、不回显任何已存值，
-   * 只在下方展示「已配置（末 4 位）」提示。
+   * present=true 时输入框一律留空、不回显任何已存值，只提示「已配置」。
    */
-  configuredStatus?: { present: boolean; hint: string | null } | null;
+  configuredStatus?: { present: boolean } | null;
 }
 
 const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
@@ -79,9 +78,7 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
       </div>
       {configured && (
         <p className="text-xs text-muted-foreground">
-          {t("providerForm.apiKeyConfigured", {
-            hint: configuredStatus?.hint ?? "****",
-          })}
+          {t("providerForm.apiKeyConfigured")}
         </p>
       )}
     </div>

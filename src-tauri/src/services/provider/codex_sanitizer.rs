@@ -7,6 +7,36 @@
 
 use crate::error::AppError;
 
+/// cc-switch 旧版本做"官方 Codex 路由接管"时写进 `config.toml` 的保留 provider id。
+/// 本地代理已删除，这张表只剩 `base_url = http://127.0.0.1:<port>` 这种死端点。
+const CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID: &str = "cc-switch-official";
+
+/// 清掉本地代理时代的官方路由残留（§6.4）。
+///
+/// 该 id 是 cc-switch 自己的保留 id（用户不可能主动使用），因此整表删除；
+/// `model_provider` 指向它时一并清空，让 Codex 回落到内置 `openai` provider。
+/// 不清理的话，老用户的 `config.toml` 每次切换都会被原样写回一个不存在的本地端点。
+fn strip_codex_official_proxy_route(doc: &mut toml_edit::DocumentMut) {
+    let has_stale_table = doc
+        .get("model_providers")
+        .and_then(|item| item.as_table_like())
+        .and_then(|table| table.get(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID))
+        .is_some();
+    if has_stale_table {
+        if let Some(model_providers) = doc
+            .get_mut("model_providers")
+            .and_then(|item| item.as_table_like_mut())
+        {
+            model_providers.remove(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID);
+        }
+    }
+    if doc.get("model_provider").and_then(|item| item.as_str())
+        == Some(CC_SWITCH_CODEX_OFFICIAL_PROXY_PROVIDER_ID)
+    {
+        doc.remove("model_provider");
+    }
+}
+
 /// Inject env_key reference into Codex config.toml
 ///
 /// According to plan section 5.4 line 324:
@@ -47,6 +77,9 @@ fn sanitize_codex_config_for_live_write_with_has_key(
 
     // Remove experimental_bearer_token if present (forbidden per plan 5.3.1)
     doc.remove("experimental_bearer_token");
+
+    // §6.4：本地代理删除前，官方卡的路由表指向 http://127.0.0.1:<port>，必须清掉。
+    strip_codex_official_proxy_route(&mut doc);
 
     // §5.2.3 / S5：非激活表的 bearer token 同样禁止落 live，逐表清掉。
     let all_provider_ids: Vec<String> = doc
@@ -191,6 +224,47 @@ base_url = "https://api.anthropic.com"
 
         // Should inject env_key even when no token was present
         assert!(result.contains(r#"env_key = "CC_SWITCH_CODEX_API_KEY""#));
+    }
+
+    #[test]
+    fn test_strips_legacy_official_proxy_route() {
+        // §6.4 / P1-2：本地代理时代的官方路由表与 model_provider 都必须清掉，
+        // 否则每次切换都会把 http://127.0.0.1:<port> 这个死端点写回盘。
+        let toml = r#"
+model_provider = "cc-switch-official"
+
+[model_providers.cc-switch-official]
+name = "OpenAI"
+requires_openai_auth = true
+supports_websockets = false
+wire_api = "responses"
+base_url = "http://127.0.0.1:57321"
+"#;
+
+        let result = sanitize_codex_config_for_live_write(toml).unwrap();
+
+        assert!(!result.contains("cc-switch-official"));
+        assert!(!result.contains("127.0.0.1"));
+        assert!(!result.contains("model_provider"));
+    }
+
+    #[test]
+    fn test_keeps_third_party_route_untouched() {
+        // 只清 cc-switch 自己的保留 id，第三方路由不受影响。
+        let toml = r#"
+model_provider = "my-vendor"
+
+[model_providers.my-vendor]
+name = "My Vendor"
+base_url = "https://api.my-vendor.example.com/v1"
+wire_api = "responses"
+"#;
+
+        let result = sanitize_codex_config_for_live_write(toml).unwrap();
+
+        assert!(result.contains(r#"model_provider = "my-vendor""#));
+        assert!(result.contains("[model_providers.my-vendor]"));
+        assert!(result.contains("https://api.my-vendor.example.com/v1"));
     }
 
     #[test]

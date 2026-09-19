@@ -220,8 +220,11 @@ impl Database {
     }
 
     /// Replace a provider row under a new ID without exposing an intermediate
-    /// duplicate or missing row. Existing endpoint and health references move
-    /// with the provider, while its current-state bit is preserved.
+    /// duplicate or missing row; its current-state bit is preserved.
+    ///
+    /// 当前无调用方（原有死代码，按项目规则不删除）。原先这里还会
+    /// `UPDATE provider_health`，而该表与 `provider_endpoints` 已在 schema v19 被 DROP、
+    /// 新库也不再创建 —— 一旦被复用，整笔事务必回滚。那条语句已删掉。
     pub fn replace_provider_id(
         &self,
         app_type: &str,
@@ -296,11 +299,6 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
-        tx.execute(
-            "UPDATE provider_health SET provider_id = ?1 WHERE provider_id = ?2 AND app_type = ?3",
-            params![provider.id, original_id, app_type],
-        )
-        .map_err(|e| AppError::Database(e.to_string()))?;
         tx.execute(
             "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
             params![original_id, app_type],
@@ -448,7 +446,7 @@ impl Database {
         Ok(max.map(|v| (v + 1) as usize).unwrap_or(0))
     }
 
-    /// 启动时调用：补齐缺失的官方预设供应商（Claude / Codex / Gemini）。
+    /// 启动时调用：补齐缺失的官方预设供应商（Claude / Codex）。
     ///
     /// 使用 settings flag `official_providers_seeded` 保证每个数据库只执行一次：
     /// - 全新用户：seed 三条官方预设

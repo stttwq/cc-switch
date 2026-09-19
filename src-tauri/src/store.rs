@@ -1,4 +1,5 @@
 use crate::database::Database;
+use crate::env_delivery::EnvSink;
 use crate::error::AppError;
 use crate::secrets::SecretStore;
 use crate::services::switch_lock::SwitchLockManager;
@@ -11,6 +12,9 @@ pub struct AppState {
     pub db: Arc<Database>,
     pub switch_locks: SwitchLockManager,
     pub secrets: Arc<dyn SecretStore>,
+    /// §5.3.2：整个进程共用一个 sink 实例。每次调用现取会让同一轮投递里的
+    /// `check_conflict` 与 `set` 看到不同对象，冲突检测/所有权等于不存在。
+    pub env_sink: Arc<dyn EnvSink>,
 }
 
 impl AppState {
@@ -20,6 +24,7 @@ impl AppState {
             db,
             switch_locks: SwitchLockManager::new(),
             secrets,
+            env_sink: crate::env_delivery::default_sink(),
         }
     }
 

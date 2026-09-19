@@ -25,7 +25,7 @@ export interface Provider {
   icon?: string; // 图标名称（如 "openai", "anthropic"）
   iconColor?: string; // 图标颜色（Hex 格式，如 "#00A67E"）
   secretStatus?: {
-    apiKey: { present: boolean; hint: string | null };
+    apiKey: { present: boolean };
     baseUrl: string | null;
     extraEnv: string[];
   };
@@ -43,47 +43,6 @@ export interface CustomEndpoint {
   lastUsed?: number;
 }
 
-export type CodexChatThinkingParam =
-  | "none"
-  | "thinking"
-  | "enable_thinking"
-  | "reasoning_split";
-
-export type CodexChatEffortParam =
-  | "none"
-  | "reasoning_effort"
-  // OpenRouter 原生归一化对象 reasoning:{effort}（区别于顶层 OpenAI 别名 reasoning_effort）
-  | "reasoning.effort";
-
-export type CodexChatEffortValueMode =
-  | "passthrough"
-  | "low_high"
-  | "deepseek"
-  // OpenRouter effort 枚举 xhigh|high|medium|low|minimal（无 max，max 钳到 xhigh）
-  | "openrouter"
-  // OpenCode Zen 网关：合法档位逐模型，见 modelCatalog 各条目 reasoningLevels
-  // （镜像 models.dev）；代理转换层按请求模型查表钳制，无表不发 effort 字段
-  | "zen";
-
-export type CodexChatReasoningOutputFormat =
-  | "auto"
-  | "reasoning_content"
-  | "reasoning"
-  | "reasoning_details"
-  | "think_tags";
-
-export interface CodexChatReasoning {
-  supportsThinking?: boolean;
-  supportsEffort?: boolean;
-  thinkingParam?: CodexChatThinkingParam;
-  effortParam?: CodexChatEffortParam;
-  effortValueMode?: CodexChatEffortValueMode;
-  // 声明性字段：标注上游 reasoning 回传位置。当前提取靠穷举字段，未读取此值（think_tags 尚未接线）。
-  outputFormat?: CodexChatReasoningOutputFormat;
-}
-
-export type PromptCacheRoutingMode = "auto" | "enabled" | "disabled";
-
 // 供应商元数据（字段名与后端一致，保持 snake_case）
 export interface ProviderMeta {
   // 自定义端点：以 URL 为键，值为端点信息（旧数据兼容，后端已不再消费）
@@ -94,35 +53,15 @@ export interface ProviderMeta {
   isPartner?: boolean;
   // 合作伙伴促销 key（用于后端识别 PackyCode 等）
   partnerPromotionKey?: string;
-  // API 格式（Claude / Codex 供应商使用）
-  // - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-  // - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-  // - "openai_responses": OpenAI Responses API 格式，需要格式转换
-  // - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-  apiFormat?:
-    | "anthropic"
-    | "openai_chat"
-    | "openai_responses"
-    | "gemini_native";
+  // API 格式（Claude / Codex 供应商使用）：只决定模型目录与字段形态判定，
+  // cc-switch 不做请求级协议转换。
+  apiFormat?: "anthropic" | "openai_chat" | "openai_responses";
   // Claude 认证字段名
   apiKeyField?: ClaudeApiKeyField;
-  // 是否将 base_url 视为完整 API 端点（代理直接使用此 URL，不拼接路径）
+  // 是否将 base_url 视为完整 API 端点（原样写入配置直接使用，不拼接路径）
   isFullUrl?: boolean;
   // Prompt cache key for OpenAI Responses-compatible endpoints (improves cache hit rate)
   promptCacheKey?: string;
-  // Session-based prompt-cache routing for Codex Responses -> Chat conversions.
-  // auto enables only for known-compatible upstreams; enabled/disabled are user overrides.
-  promptCacheRouting?: PromptCacheRoutingMode;
-  // Codex Responses -> Chat Completions reasoning capability metadata
-  codexChatReasoning?: CodexChatReasoning;
-  // Codex → Anthropic path: emulate the Claude Code client (disabled by default; only an explicit true enables it)
-  impersonateClaudeCode?: boolean;
-  // Codex → Anthropic path: override the Anthropic max_tokens (output ceiling).
-  // Codex does not forward model_max_output_tokens in the request body; without
-  // this the path falls back to a conservative 8192 default, which can truncate
-  // long/thinking-heavy responses. When set (>0) it takes precedence over the
-  // request value and the default.
-  maxOutputTokens?: number;
   // Whether this provider is currently projected into an additive app's live config.
   liveConfigManaged?: boolean;
 }
@@ -133,21 +72,10 @@ export type SkillSyncMethod = "auto" | "symlink" | "copy";
 // Skill 存储位置
 export type SkillStorageLocation = "cc_switch" | "unified";
 
-// Claude API 格式类型
-// - "anthropic": 原生 Anthropic Messages API 格式，直接透传
-// - "openai_chat": OpenAI Chat Completions 格式，需要格式转换
-// - "openai_responses": OpenAI Responses API 格式，需要格式转换
-// - "gemini_native": Gemini Native generateContent API 格式，需要格式转换
-export type ClaudeApiFormat =
-  | "anthropic"
-  | "openai_chat"
-  | "openai_responses"
-  | "gemini_native";
+// Claude API 格式类型：只决定端点填写提示与模型列表拉取方式，无协议转换
+export type ClaudeApiFormat = "anthropic" | "openai_chat" | "openai_responses";
 
-// Codex API 格式类型
-// - "openai_responses": OpenAI Responses API 格式，直接透传
-// - "openai_chat": OpenAI Chat Completions 格式，需要本地路由转换
-// - "anthropic": native Anthropic Messages format, needs local routing to convert to Responses
+// Codex API 格式类型：只驱动模型目录与字段形态判定，无协议转换
 export type CodexApiFormat = "openai_responses" | "openai_chat" | "anthropic";
 
 export interface CodexCatalogModel {
@@ -194,25 +122,25 @@ export interface WebDavSyncStatus {
 }
 
 // WebDAV 同步配置
+// 注意：password 只存在于 Windows 凭据管理器（SecretTarget::app("webdav","password")），
+// 绝不回显、绝不随本结构提交；写入走 webdav_sync_save_settings 的独立参数。
 export interface WebDavSyncSettings {
   enabled?: boolean;
   autoSync?: boolean;
   baseUrl?: string;
   username?: string;
-  password?: string;
   remoteRoot?: string;
   profile?: string;
   status?: WebDavSyncStatus;
 }
 
 // S3 同步配置
+// 注意：accessKeyId / secretAccessKey 同样只在凭据管理器里，不回显、不随本结构提交。
 export interface S3SyncSettings {
   enabled?: boolean;
   autoSync?: boolean;
   region?: string;
   bucket?: string;
-  accessKeyId?: string;
-  secretAccessKey?: string;
   endpoint?: string;
   remoteRoot?: string;
   profile?: string;
@@ -255,8 +183,6 @@ export interface Settings {
   silentStartup?: boolean;
   // Whether to show the project profile switcher on the main page header
   showProfileSwitcher?: boolean;
-  // Preserve Codex ChatGPT login in auth.json when switching third-party providers
-  preserveCodexOfficialAuthOnSwitch?: boolean;
   // Run official Codex under the shared "custom" provider id so future
   // sessions share one resume-history bucket with third-party providers
   unifyCodexSessionHistory?: boolean;

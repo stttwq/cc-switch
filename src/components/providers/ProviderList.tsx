@@ -229,7 +229,6 @@ export function ProviderList({
                 onDuplicate={onDuplicate}
                 onOpenWebsite={onOpenWebsite}
                 onOpenTerminal={onOpenTerminal}
-                isTesting={false}
                 isRemovalProtected={false}
                 isStateChangeProtected={
                   appId === "pi" && !isPiAuthoritativeStateReady
@@ -334,7 +333,6 @@ interface SortableProviderCardProps {
   onDuplicate: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
   onOpenTerminal?: (provider: Provider) => void;
-  isTesting: boolean;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
 }
@@ -351,7 +349,6 @@ function SortableProviderCard({
   onDuplicate,
   onOpenWebsite,
   onOpenTerminal,
-  isTesting,
   isRemovalProtected,
   isStateChangeProtected,
 }: SortableProviderCardProps) {
@@ -383,7 +380,6 @@ function SortableProviderCard({
         onDuplicate={onDuplicate}
         onOpenWebsite={onOpenWebsite}
         onOpenTerminal={onOpenTerminal}
-        isTesting={isTesting}
         dragHandleProps={{
           attributes,
           listeners,

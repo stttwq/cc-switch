@@ -39,7 +39,7 @@
 | 文件 | 内容 |
 |------|------|
 | [1.1-introduction.md](./1-getting-started/1.1-introduction.md) | 软件介绍、核心功能、支持平台 |
-| [1.2-installation.md](./1-getting-started/1.2-installation.md) | Windows/macOS/Linux 安装指南 |
+| [1.2-installation.md](./1-getting-started/1.2-installation.md) | Windows 安装指南 |
 | [1.3-interface.md](./1-getting-started/1.3-interface.md) | 界面布局、导航栏、供应商卡片说明 |
 | [1.4-quickstart.md](./1-getting-started/1.4-quickstart.md) | 5 分钟快速上手教程 |
 | [1.5-settings.md](./1-getting-started/1.5-settings.md) | 语言、主题、目录、云同步配置 |
@@ -64,7 +64,7 @@
 
 ### 4. 凭据与投递
 
-密钥保存在 Windows 凭据管理器，通过用户环境变量投递给 CLI。本地 HTTP 代理与用量看板已移除。
+密钥只保存在 Windows 凭据管理器，切换供应商时通过用户级环境变量投递给 CLI；SQLite、`settings.json`、live 配置文件、导出与同步载荷中都没有密钥值。本地 HTTP 代理与用量看板已移除；应用内也不再有更新提示，升级到新版本请下载新的 Windows 安装包覆盖安装（GitHub Releases）。
 
 ### 5. 常见问题
 
@@ -90,14 +90,11 @@
 
 ### v3.16.0 亮点
 
-- **Codex Chat Completions 路由**：百度千帆、StepFun、SiliconFlow 等仅支持 Chat 协议的供应商可通过 Codex 使用 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **托管 CLI 工具生命周期**：在设置 / 关于页安装、升级、全部升级并诊断 Claude / Codex / Gemini / OpenCode / OpenClaw / Hermes — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
+- **Codex Chat Completions 供应商**：百度千帆、StepFun、SiliconFlow 等仅支持 Chat 协议的供应商可通过 Codex 使用 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
+- **托管 CLI 工具生命周期**：在设置 / 关于页安装、升级、全部升级并诊断 Claude / Codex / Pi — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
 - **供应商与模型矩阵刷新**：新增合作方预设，刷新默认模型与计费矩阵，Claude Opus 默认升级到 4.8，适用场景下 GPT 默认升级到 5.5
-- **路由支持徽章**：Claude Code / Codex 供应商卡片会标明是否支持 Local Routing，便于选择可代理的供应商
-- **Codex OAuth 实时模型发现**：ChatGPT Codex 类供应商按需从 ChatGPT 后端拉取最新模型列表
 - **轻量模式**：退出到托盘时销毁主窗口，空闲占用接近零 — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
-- **Codex OAuth 反向代理**：用 ChatGPT 账号在 Claude Code 中复用 Codex 服务 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **托盘按应用分级菜单**：Claude / Codex / Gemini 独立子菜单，标题展示当前供应商与可用用量摘要 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md)
+- **托盘按应用分级菜单**：Claude / Codex / Pi 独立子菜单，标题展示当前供应商 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md)
 - **Skills 发现与批量更新**：SHA-256 更新检测、批量更新、skills.sh 公共注册表搜索 — 详见 [3.3 Skills 技能管理](./3-extensions/3.3-skills.md)
 - **完整 URL 端点模式**：高级选项支持将 base_url 视作完整上游端点 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
 

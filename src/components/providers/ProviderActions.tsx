@@ -1,9 +1,7 @@
 import {
-  Activity,
   Check,
   Copy,
   Edit,
-  Loader2,
   Minus,
   Play,
   Plus,
@@ -20,11 +18,9 @@ interface ProviderActionsProps {
   appId?: AppId;
   isCurrent: boolean;
   isInConfig?: boolean;
-  isTesting?: boolean;
   onSwitch: () => void;
   onEdit: () => void;
   onDuplicate?: () => void;
-  onTest?: () => void;
   onDelete: () => void;
   onRemoveFromConfig?: () => void;
   onOpenTerminal?: () => void;
@@ -48,11 +44,9 @@ export function ProviderActions({
   appId,
   isCurrent,
   isInConfig = false,
-  isTesting,
   onSwitch,
   onEdit,
   onDuplicate,
-  onTest,
   onDelete,
   onRemoveFromConfig,
   onOpenTerminal,
@@ -201,24 +195,6 @@ export function ProviderActions({
             <Copy className="h-4 w-4" />
           </Button>
         )}
-
-        <Button
-          size="icon"
-          variant="ghost"
-          onClick={onTest || undefined}
-          disabled={isTesting}
-          title={t("provider.connectivityCheck", "检测连通")}
-          className={cn(
-            iconButtonClass,
-            !onTest && "opacity-40 cursor-not-allowed text-muted-foreground",
-          )}
-        >
-          {isTesting ? (
-            <Loader2 className="h-4 w-4 animate-spin" />
-          ) : (
-            <Activity className="h-4 w-4" />
-          )}
-        </Button>
 
         {onOpenTerminal && (
           <Button

@@ -15,8 +15,11 @@ pub fn env_delivery_scan(app: String) -> Result<Vec<EnvConflict>, String> {
 
 /// 移除用户选中的外来变量（原值不备份、不保留；系统级一律拒绝）。
 #[tauri::command]
-pub fn env_delivery_remove(conflicts: Vec<EnvConflict>) -> Result<usize, String> {
-    remove_vars(conflicts)
+pub fn env_delivery_remove(
+    state: State<'_, AppState>,
+    conflicts: Vec<EnvConflict>,
+) -> Result<usize, String> {
+    remove_vars(state.env_sink.as_ref(), conflicts)
 }
 
 #[tauri::command]

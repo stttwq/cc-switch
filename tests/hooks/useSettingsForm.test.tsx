@@ -58,6 +58,25 @@ describe("useSettingsForm Hook", () => {
     expect(changeLanguageSpy).toHaveBeenCalledWith("en");
   });
 
+  it("原样往返 unifyCodexSessionHistory（漏掉会被后端 serde(default) 静默置 false）", async () => {
+    useSettingsQueryMock.mockReturnValue({
+      data: { unifyCodexSessionHistory: true, language: "zh" },
+      isLoading: false,
+    });
+    const { result } = renderHook(() => useSettingsForm());
+    await waitFor(() => expect(result.current.settings).not.toBeNull());
+    expect(result.current.settings?.unifyCodexSessionHistory).toBe(true);
+
+    // 服务端没给这个键时才落到 false，而不是变成 undefined 后从保存载荷里消失
+    useSettingsQueryMock.mockReturnValue({
+      data: { language: "zh" },
+      isLoading: false,
+    });
+    const { result: second } = renderHook(() => useSettingsForm());
+    await waitFor(() => expect(second.current.settings).not.toBeNull());
+    expect(second.current.settings?.unifyCodexSessionHistory).toBe(false);
+  });
+
   it("should support japanese language preference from server data", async () => {
     useSettingsQueryMock.mockReturnValue({
       data: {

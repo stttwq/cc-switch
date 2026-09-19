@@ -17,8 +17,8 @@ interface ApiKeySectionProps {
   disabled?: boolean;
   isPartner?: boolean;
   partnerPromotionKey?: string;
-  /** 后端凭据状态（secretStatus.apiKey）：present=true 时不回显、显示末 4 位提示 */
-  configuredStatus?: { present: boolean; hint: string | null } | null;
+  /** 后端凭据状态（secretStatus.apiKey）：present=true 时不回显，只提示已配置 */
+  configuredStatus?: { present: boolean } | null;
 }
 
 export function ApiKeySection({

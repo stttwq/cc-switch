@@ -13,8 +13,6 @@ import type {
   ClaudeApiFormat,
   CodexApiFormat,
   CodexCatalogModel,
-  CodexChatReasoning,
-  PromptCacheRoutingMode,
   ClaudeApiKeyField,
 } from "@/types";
 import {
@@ -122,41 +120,6 @@ export const normalizeCodexCatalogModelsForSave = (
   return normalized;
 };
 
-const normalizeCodexChatReasoningForSave = (
-  value?: CodexChatReasoning,
-): CodexChatReasoning | undefined => {
-  const supportsEffort = value?.supportsEffort === true;
-  const supportsThinking = value?.supportsThinking === true || supportsEffort;
-  const hasExplicitConfig = value && Object.keys(value).length > 0;
-
-  if (!supportsThinking && !supportsEffort) {
-    return hasExplicitConfig
-      ? {
-          supportsThinking: false,
-          supportsEffort: false,
-          thinkingParam: "none",
-          effortParam: "none",
-          outputFormat: value?.outputFormat ?? "auto",
-        }
-      : undefined;
-  }
-
-  return {
-    supportsThinking,
-    supportsEffort,
-    thinkingParam: supportsThinking
-      ? (value?.thinkingParam ?? "thinking")
-      : "none",
-    effortParam: supportsEffort
-      ? (value?.effortParam ?? "reasoning_effort")
-      : "none",
-    effortValueMode: supportsEffort
-      ? (value?.effortValueMode ?? "passthrough")
-      : undefined,
-    outputFormat: value?.outputFormat ?? "auto",
-  };
-};
-
 export interface ProviderFormProps {
   appId: AppId;
   providerId?: string;
@@ -175,7 +138,7 @@ export interface ProviderFormProps {
     icon?: string;
     iconColor?: string;
     secretStatus?: {
-      apiKey: { present: boolean; hint: string | null };
+      apiKey: { present: boolean };
       baseUrl: string | null;
       extraEnv: string[];
     };
@@ -263,8 +226,6 @@ function ProviderFormFull({
     setLocalIsFullUrl(
       supportsFullUrl ? (initialData?.meta?.isFullUrl ?? false) : false,
     );
-    setCodexChatReasoning(initialData?.meta?.codexChatReasoning ?? {});
-    setPromptCacheRouting(initialData?.meta?.promptCacheRouting ?? "auto");
   }, [appId, initialData, supportsFullUrl]);
 
   const defaultValues: ProviderFormData = useMemo(
@@ -392,15 +353,6 @@ function ProviderFormFull({
     [localApiKeyField, form, handleSettingsConfigChange],
   );
 
-  const [codexChatReasoning, setCodexChatReasoning] =
-    useState<CodexChatReasoning>(
-      () => initialData?.meta?.codexChatReasoning ?? {},
-    );
-  const [promptCacheRouting, setPromptCacheRouting] =
-    useState<PromptCacheRoutingMode>(
-      () => initialData?.meta?.promptCacheRouting ?? "auto",
-    );
-
   const {
     codexAuth,
     codexConfig,
@@ -445,20 +397,6 @@ function ProviderFormFull({
   const [localCodexAnthropicAuthField, setLocalCodexAnthropicAuthField] =
     useState<ClaudeApiKeyField>(initialCodexAnthropicAuthField);
 
-  // Emulate the Claude Code client: off by default, enabled only when the user explicitly turns it on (true)
-  const [localCodexImpersonateClaudeCode, setLocalCodexImpersonateClaudeCode] =
-    useState<boolean>(initialData?.meta?.impersonateClaudeCode === true);
-
-  // Codex → Anthropic output ceiling override (empty string = use the 8192 default).
-  // Kept as a string so the numeric input can be cleared; parsed on save.
-  const [localCodexMaxOutputTokens, setLocalCodexMaxOutputTokens] =
-    useState<string>(
-      typeof initialData?.meta?.maxOutputTokens === "number" &&
-        initialData.meta.maxOutputTokens > 0
-        ? String(initialData.meta.maxOutputTokens)
-        : "",
-    );
-
   const { configError: codexConfigError, debouncedValidate } =
     useCodexTomlValidation();
 
@@ -487,8 +425,6 @@ function ProviderFormFull({
     if (appId === "codex" && !initialData && selectedPresetId === "custom") {
       const template = getCodexCustomTemplate();
       resetCodexConfig(template.auth, template.config);
-      setCodexChatReasoning({});
-      setPromptCacheRouting("auto");
     }
   }, [appId, initialData, selectedPresetId, resetCodexConfig]);
 
@@ -738,19 +674,6 @@ function ProviderFormFull({
           : appId === "codex"
             ? useCodexCommonConfigFlag
             : undefined,
-      codexChatReasoning:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat"
-          ? normalizeCodexChatReasoningForSave(codexChatReasoning)
-          : undefined,
-      promptCacheRouting:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "openai_chat" &&
-        promptCacheRouting !== "auto"
-          ? promptCacheRouting
-          : undefined,
       apiFormat:
         appId === "claude" && category !== "official"
           ? localApiFormat
@@ -768,23 +691,6 @@ function ProviderFormFull({
               localCodexAnthropicAuthField !== "ANTHROPIC_AUTH_TOKEN"
             ? localCodexAnthropicAuthField
             : undefined,
-      // Off by default; persist true only for codex+anthropic when the user explicitly enables it
-      impersonateClaudeCode:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
-        localCodexImpersonateClaudeCode
-          ? true
-          : undefined,
-      // Persist only for codex+anthropic when a positive value was entered
-      maxOutputTokens:
-        appId === "codex" &&
-        category !== "official" &&
-        localCodexApiFormat === "anthropic" &&
-        localCodexMaxOutputTokens.trim() !== "" &&
-        Number(localCodexMaxOutputTokens) > 0
-          ? Number(localCodexMaxOutputTokens)
-          : undefined,
       isFullUrl:
         supportsFullUrl && category !== "official" && localIsFullUrl
           ? true
@@ -834,8 +740,6 @@ function ProviderFormFull({
       if (appId === "codex") {
         const template = getCodexCustomTemplate();
         resetCodexConfig(template.auth, template.config);
-        setCodexChatReasoning({});
-        setPromptCacheRouting("auto");
         setLocalCodexApiFormat(
           codexApiFormatFromWireApi(extractCodexWireApi(template.config)) ??
             "openai_responses",
@@ -862,8 +766,6 @@ function ProviderFormFull({
       const config = preset.config ?? "";
 
       resetCodexConfig(auth, config, preset.modelCatalog ?? []);
-      setCodexChatReasoning(preset.codexChatReasoning ?? {});
-      setPromptCacheRouting(preset.promptCacheRouting ?? "auto");
       setLocalCodexApiFormat(
         preset.apiFormat ??
           codexApiFormatFromWireApi(extractCodexWireApi(config)) ??
@@ -1001,14 +903,6 @@ function ProviderFormFull({
               onApiFormatChange={handleCodexApiFormatChange}
               anthropicAuthField={localCodexAnthropicAuthField}
               onAnthropicAuthFieldChange={setLocalCodexAnthropicAuthField}
-              impersonateClaudeCode={localCodexImpersonateClaudeCode}
-              onImpersonateClaudeCodeChange={setLocalCodexImpersonateClaudeCode}
-              maxOutputTokens={localCodexMaxOutputTokens}
-              onMaxOutputTokensChange={setLocalCodexMaxOutputTokens}
-              codexChatReasoning={codexChatReasoning}
-              onCodexChatReasoningChange={setCodexChatReasoning}
-              promptCacheRouting={promptCacheRouting}
-              onPromptCacheRoutingChange={setPromptCacheRouting}
               catalogModels={codexCatalogModels}
               onCatalogModelsChange={setCodexCatalogModels}
             />

@@ -39,7 +39,7 @@ CC Switch User Manual
 | File | Description |
 |------|-------------|
 | [1.1-introduction.md](./1-getting-started/1.1-introduction.md) | Introduction, core features, supported platforms |
-| [1.2-installation.md](./1-getting-started/1.2-installation.md) | Windows/macOS/Linux installation guide |
+| [1.2-installation.md](./1-getting-started/1.2-installation.md) | Windows installation guide |
 | [1.3-interface.md](./1-getting-started/1.3-interface.md) | Interface layout, navigation bar, provider cards |
 | [1.4-quickstart.md](./1-getting-started/1.4-quickstart.md) | 5-minute quick start tutorial |
 | [1.5-settings.md](./1-getting-started/1.5-settings.md) | Language, theme, directories, cloud sync settings |
@@ -62,9 +62,9 @@ CC Switch User Manual
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | Discover skills, install/uninstall, repository management |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | Session Manager: browse, search, resume, delete sessions |
 
-### 4. Credentials
+### 4. Credentials & Delivery
 
-Secrets live in Windows Credential Manager and are delivered via user environment variables. The local HTTP proxy and usage dashboard are removed.
+Secrets are stored only in Windows Credential Manager and delivered to the CLI through user environment variables when you switch a provider; SQLite, `settings.json`, the live configuration files, exports and sync payloads hold no secret values. The local HTTP proxy and the usage dashboard have been removed; the app no longer shows update prompts either — to move to a newer version, download the new Windows installer from GitHub Releases and install over it.
 
 ### 5. FAQ
 
@@ -79,7 +79,7 @@ Secrets live in Windows Credential Manager and are delivered via user environmen
 - **New users**: Start with [1.1 Introduction](./1-getting-started/1.1-introduction.md)
 - **Installation issues**: See [1.2 Installation Guide](./1-getting-started/1.2-installation.md)
 - **Configure providers**: See [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Credentials**: See “Credentials” above
+- **Keys and environment variables**: See “Credentials & Delivery” above
 - **Having trouble**: See [5.2 FAQ](./5-faq/5.2-questions.md)
 
 ## Version Information
@@ -90,14 +90,11 @@ Secrets live in Windows Credential Manager and are delivered via user environmen
 
 ### v3.16.0 Highlights
 
-- **Codex Chat Completions routing**: route Chat-only providers such as Baidu Qianfan, StepFun, and SiliconFlow through Codex. See [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Managed CLI tool lifecycle**: install, update, update all, and diagnose Claude / Codex / Gemini / OpenCode / OpenClaw / Hermes from Settings / About. See [1.5 Personalization](./1-getting-started/1.5-settings.md)
+- **Codex Chat Completions providers**: providers that only speak the Chat protocol, such as Baidu Qianfan, StepFun and SiliconFlow, can now be used through Codex. See [2.1 Add Provider](./2-providers/2.1-add.md)
+- **Managed CLI tool lifecycle**: install, update, update all, and diagnose Claude / Codex / Pi from Settings / About. See [1.5 Personalization](./1-getting-started/1.5-settings.md)
 - **Provider and model refresh**: new partner presets, refreshed default models and pricing, Claude Opus 4.8 defaults, and GPT 5.5 defaults where applicable
-- **Routing support badges**: Claude Code / Codex provider cards indicate whether a provider can be served through Local Routing
-- **Codex OAuth live model discovery**: ChatGPT Codex providers fetch available models from the ChatGPT backend on demand
 - **Lightweight Mode**: Destroys the main window when minimizing to tray — near-zero idle footprint. See [1.5 Personalization](./1-getting-started/1.5-settings.md)
-- **Codex OAuth Reverse Proxy**: Reuse your ChatGPT account's Codex service inside Claude Code — see [2.1 Add Provider](./2-providers/2.1-add.md)
-- **Per-App Tray Submenus**: Claude / Codex / Gemini submenus show the current provider and available usage summaries — see [2.2 Switch Provider](./2-providers/2.2-switch.md)
+- **Per-App Tray Submenus**: separate Claude / Codex / Pi submenus showing the current provider in the title — see [2.2 Switch Provider](./2-providers/2.2-switch.md)
 - **Skills Discovery & Batch Updates**: SHA-256 update detection, batch updates, skills.sh public registry search — see [3.3 Skills Management](./3-extensions/3.3-skills.md)
 - **Full URL Endpoint Mode**: Advanced option to treat `base_url` as the full upstream endpoint — see [2.1 Add Provider](./2-providers/2.1-add.md)
 

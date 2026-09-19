@@ -1,7 +1,7 @@
 //! Skills 命令层
 //!
 //! v3.10.0+ 统一管理架构：
-//! - 支持三应用开关（Claude/Codex/Gemini）
+//! - 支持三应用开关（Claude/Codex/Pi）
 //! - SSOT 存储在 ~/.cc-switch/skills/
 
 use crate::app_config::{AppType, InstalledSkill, UnmanagedSkill};

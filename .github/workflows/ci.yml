@@ -152,17 +152,40 @@ jobs:
       - name: Run tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
+      - name: Windows credential-manager and registry roundtrip
+        # 计划 §9 Phase 2：真实凭据管理器 / HKCU\Environment 往返。这两个用例本体都在，
+        # 但被 #[ignore] 挡在常规 cargo test 之外，此前从未在 CI 跑过。
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored --exact secrets::store::tests::secrets_windows_roundtrip
+          cargo test --manifest-path src-tauri/Cargo.toml --lib -- --ignored --exact env_delivery::sink::tests::env_sink_windows_roundtrip
+
       - name: Secret scan (test home)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           $testHome = Join-Path $env:TEMP "cc-switch-test-home"
           if (-not (Test-Path $testHome)) {
-            New-Item -ItemType Directory -Path $testHome | Out-Null
+            # 之前这里先 New-Item 建空目录，于是"集成测试一个都没跑"也会静默通过。
+            Write-Error "Test home $testHome does not exist; integration tests did not run"
+            exit 1
           }
           & scripts/secret-scan.ps1 -Path $testHome
           if ($LASTEXITCODE -ne 0) {
             Write-Error "secret-scan detected plaintext fixtures in the test home"
+            exit 1
+          }
+
+      - name: Secret scan (fixture literals outside the fixture home)
+        # 夹具本身按设计含明文，故豁免 fixtures/v18-home；其余任何位置出现夹具字面量
+        # 都说明密钥被复制进了源码或产物。
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          & scripts/secret-scan.ps1 -Path . -Allow "src-tauri\tests\fixtures\v18-home", "scripts\secret-scan.ps1", ".git"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "secret-scan found fixture literals outside the fixture home"
             exit 1
           }
 

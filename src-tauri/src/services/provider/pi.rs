@@ -51,7 +51,7 @@ pub(super) fn add(
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
     strip_unsupported_pi_metadata(&mut provider);
-    ProviderService::validate_provider_settings(&app_type, &provider)?;
+    ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
     align_native_display_name(&mut provider);
 
     if state
@@ -115,7 +115,7 @@ pub(super) fn update(
         .get_provider_by_id(&original_id, app_type.as_str())?
         .ok_or_else(|| AppError::InvalidInput(format!("Pi provider '{original_id}' not found")))?;
     strip_unsupported_pi_metadata(&mut provider);
-    ProviderService::validate_provider_settings(&app_type, &provider)?;
+    ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
 
     let live_config = provider.settings_config.clone();
     strip_and_store_pi_secrets(state, &mut provider)?;
@@ -147,6 +147,8 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
     // deleting the provider itself, supported field edits do not change that
     // intent; the latest native value is retained only for rollback.
     let removed = crate::pi_config::remove_pi_provider(id)?;
+    // §5.3.3 第 3 条 + §5.4「删除供应商」：live 节点 → 托管环境变量 → 凭据 → DB 行。
+    super::ProviderService::release_provider_managed_env(state, &app_type, id);
     super::delete_provider_secrets(state, &app_type, id);
 
     if let Err(error) = state.db.delete_provider(app_type.as_str(), id) {
@@ -159,7 +161,6 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
         }
         return Err(error);
     }
-    ProviderService::release_provider_managed_env(state, &app_type, id);
     Ok(())
 }
 
@@ -215,14 +216,22 @@ pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppErro
         return Ok(result);
     }
 
-    ProviderService::validate_provider_settings(&app_type, &provider)?;
+    ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
     ProviderService::preflight_env_delivery(state, &app_type, &provider)?;
     // §5.3.1：Pi 的 baseUrl 没有环境变量间接引用，live 节点必须写凭据管理器里的
     // 那一份；DB 行已剥离 baseUrl，直接写会让模型不可用。
     let live_config = hydrate_pi_base_url_for_live(state, &provider)?;
-    crate::pi_config::insert_pi_provider(id, &live_config)?;
+
+    // 次序按 §5.3.1 的 ②投变量 → ③写节点 → ④broadcast：反过来的话，写节点成功、
+    // 投递失败会留下指向不存在变量的 `apiKey: "$CC_SWITCH_PI_…"`，而且没有撤销路径
+    // （注册表权限、白名单拒绝、变量名超限都会让 sink.set 失败）。现在写节点失败
+    // 可以整体撤销刚投递的变量。
     let mut result = SwitchResult::default();
     ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut result)?;
+    if let Err(error) = crate::pi_config::insert_pi_provider(id, &live_config) {
+        ProviderService::undo_env_delivery(state, &app_type, &provider);
+        return Err(error);
+    }
     Ok(result)
 }
 

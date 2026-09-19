@@ -266,7 +266,8 @@ export function WebdavSyncSection({
   const [form, setForm] = useState(() => ({
     baseUrl: config?.baseUrl ?? "",
     username: config?.username ?? "",
-    password: config?.password ?? "",
+    // 密码只在凭据管理器里，后端从不回显；表单初始恒为空。
+    password: "",
     remoteRoot: config?.remoteRoot ?? "cc-switch-sync",
     profile: config?.profile ?? "default",
     autoSync: config?.autoSync ?? false,
@@ -276,12 +277,9 @@ export function WebdavSyncSection({
   const [s3Preset, setS3Preset] = useState("aws-s3");
   const [s3Region, setS3Region] = useState(s3Config?.region ?? "");
   const [s3Bucket, setS3Bucket] = useState(s3Config?.bucket ?? "");
-  const [s3AccessKeyId, setS3AccessKeyId] = useState(
-    s3Config?.accessKeyId ?? "",
-  );
-  const [s3SecretAccessKey, setS3SecretAccessKey] = useState(
-    s3Config?.secretAccessKey ?? "",
-  );
+  // 两个密钥同样只在凭据管理器里，后端从不回显。
+  const [s3AccessKeyId, setS3AccessKeyId] = useState("");
+  const [s3SecretAccessKey, setS3SecretAccessKey] = useState("");
   const [s3Endpoint, setS3Endpoint] = useState(s3Config?.endpoint ?? "");
   const [s3RemoteRoot, setS3RemoteRoot] = useState(
     s3Config?.remoteRoot ?? "cc-switch-sync",
@@ -348,16 +346,18 @@ export function WebdavSyncSection({
         remoteRoot: nextRemoteRoot,
         profile: nextProfile,
       });
+      const preserved = pendingPasswordPreservationRef.current;
+      // 保存后设置查询会重新取回 config（后端从不回显密码），表单要留住用户刚输入的密码；
+      // 一旦配置身份（地址/用户名/远端根/档案）变化就丢弃，避免张冠李戴。
       const shouldPreserveRedactedPassword =
-        !config.password &&
-        pendingPasswordPreservationRef.current?.key === nextKey &&
-        !!pendingPasswordPreservationRef.current.password;
+        preserved?.key === nextKey && !!preserved.password;
+      if (!shouldPreserveRedactedPassword) {
+        pendingPasswordPreservationRef.current = null;
+      }
 
       const nextPassword = shouldPreserveRedactedPassword
-        ? pendingPasswordPreservationRef.current!.password
-        : (config.password ?? "");
-
-      pendingPasswordPreservationRef.current = null;
+        ? preserved!.password
+        : "";
 
       return {
         baseUrl: nextBaseUrl,
@@ -377,8 +377,7 @@ export function WebdavSyncSection({
     if (!s3Config || s3Dirty) return;
     setS3Region(s3Config.region ?? "");
     setS3Bucket(s3Config.bucket ?? "");
-    setS3AccessKeyId(s3Config.accessKeyId ?? "");
-    setS3SecretAccessKey(s3Config.secretAccessKey ?? "");
+    // 两个密钥不回显，保持表单里用户已输入的值
     setS3Endpoint(s3Config.endpoint ?? "");
     setS3RemoteRoot(s3Config.remoteRoot ?? "cc-switch-sync");
     setS3Profile(s3Config.profile ?? "default");
@@ -459,13 +458,17 @@ export function WebdavSyncSection({
       enabled: true,
       baseUrl,
       username: form.username.trim(),
-      // 未重新触碰密码时，提交空值让后端沿用已保存密码，表单里的值仅用于 UI 显示
-      password: passwordTouched ? form.password : "",
       remoteRoot: form.remoteRoot.trim() || "cc-switch-sync",
       profile: form.profile.trim() || "default",
       autoSync: form.autoSync,
     };
-  }, [form, passwordTouched]);
+  }, [form]);
+
+  /** 密码三态：未触碰 = undefined（保持现值）；触碰过 = 表单值（空串表示删除）。 */
+  const passwordPayload = useCallback(
+    (): string | undefined => (passwordTouched ? form.password : undefined),
+    [form.password, passwordTouched],
+  );
 
   // ─── Handlers ───────────────────────────────────────────
 
@@ -477,7 +480,7 @@ export function WebdavSyncSection({
     }
     setActionState("testing");
     try {
-      await settingsApi.webdavTestConnection(settings, !passwordTouched);
+      await settingsApi.webdavTestConnection(settings, passwordPayload());
       toast.success(t("settings.webdavSync.testSuccess"));
     } catch (error) {
       toast.error(
@@ -488,7 +491,7 @@ export function WebdavSyncSection({
     } finally {
       setActionState("idle");
     }
-  }, [buildSettings, passwordTouched, t]);
+  }, [buildSettings, passwordPayload, t]);
 
   const handleSave = useCallback(async () => {
     const settings = buildSettings();
@@ -504,7 +507,7 @@ export function WebdavSyncSection({
         }
       : null;
     try {
-      await settingsApi.webdavSyncSaveSettings(settings, passwordTouched);
+      await settingsApi.webdavSyncSaveSettings(settings, passwordPayload());
       setDirty(false);
       setPasswordTouched(false);
       // Show "saved" indicator for 2 seconds
@@ -529,7 +532,7 @@ export function WebdavSyncSection({
     // Auto-test connection after save
     setActionState("testing");
     try {
-      await settingsApi.webdavTestConnection(settings, true);
+      await settingsApi.webdavTestConnection(settings);
       toast.success(t("settings.webdavSync.saveAndTestSuccess"));
     } catch (error) {
       toast.warning(
@@ -540,7 +543,7 @@ export function WebdavSyncSection({
     } finally {
       setActionState("idle");
     }
-  }, [buildSettings, form.password, passwordTouched, queryClient, t]);
+  }, [buildSettings, form.password, passwordPayload, queryClient, t]);
 
   /** Fetch remote info, then open upload confirmation dialog. */
   const handleUploadClick = useCallback(async () => {
@@ -674,8 +677,6 @@ export function WebdavSyncSection({
       autoSync: s3AutoSync,
       region: s3Region.trim(),
       bucket: s3Bucket.trim(),
-      accessKeyId: s3AccessKeyId.trim(),
-      secretAccessKey: s3SecretAccessKey,
       endpoint: s3Endpoint.trim() || undefined,
       remoteRoot: s3RemoteRoot.trim() || "cc-switch-sync",
       profile: s3Profile.trim() || "default",
@@ -685,12 +686,16 @@ export function WebdavSyncSection({
     s3AutoSync,
     s3Region,
     s3Bucket,
-    s3AccessKeyId,
-    s3SecretAccessKey,
     s3Endpoint,
     s3RemoteRoot,
     s3Profile,
   ]);
+
+  /** S3 密钥三态：未触碰 = undefined（保持现值）；触碰过 = 表单值（空串表示删除）。 */
+  const s3CredentialsPayload = useCallback((): [string?, string?] => {
+    if (!s3SecretTouched) return [undefined, undefined];
+    return [s3AccessKeyId.trim(), s3SecretAccessKey];
+  }, [s3AccessKeyId, s3SecretAccessKey, s3SecretTouched]);
 
   // ─── S3 Handlers ──────────────────────────────────────────
 
@@ -702,7 +707,12 @@ export function WebdavSyncSection({
     }
     setS3ActionState("testing");
     try {
-      await settingsApi.s3TestConnection(s3Settings, !s3SecretTouched);
+      const [accessKeyId, secretAccessKey] = s3CredentialsPayload();
+      await settingsApi.s3TestConnection(
+        s3Settings,
+        accessKeyId,
+        secretAccessKey,
+      );
       toast.success(t("settings.s3Sync.testSuccess"));
     } catch (error) {
       toast.error(
@@ -713,7 +723,7 @@ export function WebdavSyncSection({
     } finally {
       setS3ActionState("idle");
     }
-  }, [buildS3Settings, s3SecretTouched, t]);
+  }, [buildS3Settings, s3CredentialsPayload, t]);
 
   const handleS3Save = useCallback(async () => {
     const s3Settings = buildS3Settings();
@@ -723,7 +733,12 @@ export function WebdavSyncSection({
     }
     setS3ActionState("saving");
     try {
-      await settingsApi.s3SyncSaveSettings(s3Settings, s3SecretTouched);
+      const [accessKeyId, secretAccessKey] = s3CredentialsPayload();
+      await settingsApi.s3SyncSaveSettings(
+        s3Settings,
+        accessKeyId,
+        secretAccessKey,
+      );
       setS3Dirty(false);
       setS3SecretTouched(false);
       setS3JustSaved(true);
@@ -747,7 +762,7 @@ export function WebdavSyncSection({
     // Auto-test connection after save
     setS3ActionState("testing");
     try {
-      await settingsApi.s3TestConnection(s3Settings, true);
+      await settingsApi.s3TestConnection(s3Settings);
       toast.success(t("settings.s3Sync.saveAndTestSuccess"));
     } catch (error) {
       toast.warning(
@@ -758,7 +773,7 @@ export function WebdavSyncSection({
     } finally {
       setS3ActionState("idle");
     }
-  }, [buildS3Settings, s3SecretTouched, queryClient, t]);
+  }, [buildS3Settings, s3CredentialsPayload, queryClient, t]);
 
   const handleS3UploadClick = useCallback(async () => {
     if (s3Dirty) {
@@ -894,7 +909,7 @@ export function WebdavSyncSection({
           enabled: false,
           autoSync: false,
         };
-        await settingsApi.webdavSyncSaveSettings(disabledWebdav, false);
+        await settingsApi.webdavSyncSaveSettings(disabledWebdav);
       } else {
         // Disable S3
         const disabledS3: S3SyncSettings = {
@@ -902,7 +917,7 @@ export function WebdavSyncSection({
           enabled: false,
           autoSync: false,
         };
-        await settingsApi.s3SyncSaveSettings(disabledS3, false);
+        await settingsApi.s3SyncSaveSettings(disabledS3);
         setS3Enabled(false);
         setS3AutoSync(false);
       }
@@ -930,9 +945,8 @@ export function WebdavSyncSection({
   const hasSavedConfig = Boolean(
     config?.baseUrl?.trim() && config?.username?.trim(),
   );
-  const hasS3SavedConfig = Boolean(
-    s3Config?.bucket?.trim() && s3Config?.accessKeyId?.trim(),
-  );
+  // 密钥不回显，无法据此判断"已保存"；bucket 非空即说明后端存过一份配置。
+  const hasS3SavedConfig = Boolean(s3Config?.bucket?.trim());
 
   const lastSyncAt = config?.status?.lastSyncAt;
   const lastSyncDisplay = lastSyncAt
@@ -1304,6 +1318,7 @@ export function WebdavSyncSection({
                 value={s3AccessKeyId}
                 onChange={(e) => {
                   setS3AccessKeyId(e.target.value);
+                  setS3SecretTouched(true);
                   markS3Dirty();
                 }}
                 placeholder={t("settings.s3Sync.accessKeyIdPlaceholder")}

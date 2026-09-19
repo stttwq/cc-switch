@@ -60,7 +60,7 @@ describe("PPIO provider presets", () => {
     });
   });
 
-  it("configures Codex for OpenAI Chat translation and reasoning", () => {
+  it("configures Codex for OpenAI Chat translation", () => {
     const codex = getPpioPreset(codexProviderPresets)!;
     expect(codex).toMatchObject({
       ...ppioBrandFields,
@@ -75,13 +75,6 @@ describe("PPIO provider presets", () => {
           inputModalities: ["text"],
         },
       ],
-      codexChatReasoning: {
-        supportsThinking: true,
-        supportsEffort: false,
-        thinkingParam: "thinking",
-        effortParam: "none",
-        outputFormat: "reasoning_content",
-      },
     });
     expect(codex.config).toContain(`model = "${ppioModelId}"`);
     expect(codex.config).toContain(`base_url = "${ppioOpenAiEndpoint}"`);

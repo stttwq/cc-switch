@@ -48,4 +48,3 @@ export async function setGlobalProxyUrl(url: string): Promise<void> {
 export async function testProxyUrl(url: string): Promise<ProxyTestResult> {
   return invoke<ProxyTestResult>("test_proxy_url", { url });
 }
-

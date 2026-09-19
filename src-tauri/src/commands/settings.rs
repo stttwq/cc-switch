@@ -152,10 +152,9 @@ pub async fn restart_app(app: AppHandle) -> Result<bool, String> {
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
         // app.restart() 走 RESTART_EXIT_CODE 路径，ExitRequested 处理器会直接
-        // 放行给 Tauri 默认 re-exec，不执行代理/Live 清理。但本命令用于
-        // app_config_dir 变更后的重启：新实例会切到新数据库，拿不到旧库里的
-        // Live 备份，无法恢复被接管的 Live 配置。因此必须趁旧实例的事件循环
-        // 仍存活，在这里同步完成恢复（保留代理状态，新实例启动时自动重新接管）。
+        // 放行给 Tauri 默认 re-exec，不做额外清理。本命令用于 app_config_dir
+        // 变更后的重启：窗口状态已在上面同步保存，live 配置由新实例按新 DB
+        // 现状重新投递，因此这里只需要触发重启。
         app.restart();
     });
     Ok(true)

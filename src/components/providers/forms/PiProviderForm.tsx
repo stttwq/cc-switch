@@ -42,10 +42,7 @@ import { ProviderPresetSelector } from "./ProviderPresetSelector";
 import { RequestHeadersEditor } from "./RequestHeadersEditor";
 import { StructuredOptionsEditor } from "./StructuredOptionsEditor";
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
-import {
-  findRequestHeaderValue,
-  normalizeRequestHeaders,
-} from "./helpers/requestHeaders";
+import { normalizeRequestHeaders } from "./helpers/requestHeaders";
 import {
   piProviderPresets,
   type PiApiFormat,
@@ -953,25 +950,13 @@ export function PiProviderForm({
       return;
     }
 
-    const customUserAgent = findRequestHeaderValue(
-      requestHeaders,
-      "user-agent",
-    );
-
     const requestGeneration = ++modelFetchGenerationRef.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(
-      endpoint,
-      apiKey,
-      undefined,
-      undefined,
-      customUserAgent,
-      {
-        apiFormat: api,
-        requestHeaders,
-      },
-    )
+    fetchModelsForConfig(endpoint, apiKey, undefined, undefined, {
+      apiFormat: api,
+      requestHeaders,
+    })
       .then((result) => {
         if (modelFetchGenerationRef.current !== requestGeneration) return;
         setFetchedModels(result);
@@ -1446,10 +1431,7 @@ export function PiProviderForm({
               placeholder={{
                 official: t("providerForm.officialNoApiKey"),
                 thirdParty: existingKeyHint?.present
-                  ? t("providerForm.apiKeyConfigured", {
-                      defaultValue: "已配置（末四位 {{hint}}），留空保持不变",
-                      hint: existingKeyHint.hint ?? "****",
-                    })
+                  ? t("providerForm.apiKeyConfigured")
                   : t("providerForm.apiKeyAutoFill"),
               }}
             />

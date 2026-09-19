@@ -14,20 +14,18 @@ use std::fs;
 use std::process::{Command, Stdio};
 use toml_edit::DocumentMut;
 
+/// `[model_providers.custom]` 表 id：统一会话路由把官方供应商落到这张表。
 pub const CC_SWITCH_CODEX_MODEL_PROVIDER_ID: &str = "custom";
-/// Temporary model-provider id used while the built-in `codex-official`
-/// provider is routed through CC Switch.  A dedicated id is an ownership
-/// marker: unlike a generic localhost `base_url`, it can be detected and
-/// cleaned up without mistaking a user's own local provider for takeover.
+/// File name of the model catalog cc-switch generates next to `config.toml`.
 pub const CC_SWITCH_CODEX_MODEL_CATALOG_FILENAME: &str = "cc-switch-model-catalog.json";
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
 // Generating a ProxyChat catalog only needs one stable Codex model template per
-// process. Without this cache every provider switch/takeover can start the
-// Codex CLI again, which is especially expensive for npm-installed `codex.cmd`
-// on Windows. Tests deliberately bypass the global cache because they isolate
-// CODEX_HOME and seed different model templates.
+// process. Without this cache every provider switch starts the Codex CLI again,
+// which is especially expensive for npm-installed `codex.cmd` on Windows. Tests
+// deliberately bypass the global cache because they isolate CODEX_HOME and seed
+// different model templates.
 #[cfg(not(test))]
 static CODEX_MODEL_CATALOG_TEMPLATE_CACHE: OnceCell<Value> = OnceCell::new();
 
@@ -173,10 +171,10 @@ pub enum CodexCatalogToolProfile {
 impl CodexCatalogToolProfile {
     /// Pick the catalog tool profile from a provider's `apiFormat` meta value.
     ///
-    /// Prefer [`crate::proxy::providers::codex::resolve_codex_catalog_tool_profile`],
-    /// which also honors settings-level `apiFormat` and the TOML `wire_api` (matching
-    /// the proxy router). This string-only mapping is the fallback for non-Anthropic
-    /// cases.
+    /// When a full [`Provider`] is at hand, prefer
+    /// [`resolve_codex_catalog_tool_profile`], which also honors settings-level
+    /// `apiFormat` and the TOML `wire_api`. This string-only mapping is the
+    /// fallback for non-Anthropic cases.
     pub fn from_api_format(api_format: Option<&str>) -> Self {
         match api_format {
             Some("anthropic") => CodexCatalogToolProfile::Anthropic,
@@ -2035,30 +2033,27 @@ fn build_simplified_catalog_from_texts(config_text: &str, catalog_text: &str) ->
     Some(json!({ "models": entries }))
 }
 
-/// Decide the `config.toml` text to write during a takeover-off restore,
-/// projecting the model catalog **only when `settings` carries an inline
-/// `modelCatalog`**.
+/// Write a Codex provider live, projecting the model catalog **only when
+/// `settings` carries an inline `modelCatalog`**.
 ///
-/// Restore feeds back a stored backup, and Codex backups come in two shapes that
-/// need opposite handling:
+/// Two shapes reach this entry and need opposite handling:
 ///
-/// - **Snapshot backup** (`read_codex_live_settings`): `{ auth, config }` with no
+/// - **Live snapshot** (`read_codex_live_settings`): `{ auth, config }` with no
 ///   inline `modelCatalog`. Its `config.toml` text already carries whatever
-///   `model_catalog_json` pointer existed at backup time, and the generated
+///   `model_catalog_json` pointer existed at snapshot time, and the generated
 ///   catalog file on disk is untouched. Here we must keep the config **raw** —
 ///   running catalog projection would see "no specs" and strip the live pointer.
-/// - **Provider-rebuilt backup** (`update_live_backup_from_provider`): the DB
-///   provider's settings, i.e. `{ auth, config (no pointer), modelCatalog
+/// - **DB provider settings**: `{ auth, config (no pointer), modelCatalog
 ///   (inline DB SSOT) }`. Here the pointer/catalog file must be (re)generated
-///   from the inline `modelCatalog`, or the mapping is lost on restore.
+///   from the inline `modelCatalog`, or the mapping is lost.
 ///
 /// Gating on the presence of the inline `modelCatalog` key routes each shape
 /// correctly; an empty inline catalog still projects (and so correctly drops a
 /// now-stale pointer), while an absent key leaves the text untouched. This is
-/// **orthogonal to auth** — a provider-rebuilt backup can pair an inline
-/// `modelCatalog` with empty `auth.json` (the API key living in the config's
-/// `experimental_bearer_token`), so the caller must decide config projection
-/// independently of whether it writes or deletes `auth.json`.
+/// **orthogonal to auth** — DB-backed settings can pair an inline `modelCatalog`
+/// with empty `auth` (the key lives in the credential store now), so the caller
+/// must decide config projection independently of whether it writes or deletes
+/// `auth.json`.
 pub fn write_codex_provider_live_with_catalog(
     settings: &Value,
     category: Option<&str>,
@@ -2292,7 +2287,7 @@ const CODEX_STALE_RESERVED_TABLE_IDS: &[&str] = &["openai", "ollama", "lmstudio"
 /// `.ollama`, `.lmstudio`). Codex rejects the WHOLE config at load when one
 /// of these reserved built-in ids is overridden, so any surviving table
 /// means "switch reports success, Codex refuses to start" — older cc-switch
-/// takeover projections created exactly these shapes.
+/// releases projected exactly these shapes.
 ///
 /// The reserved-id match is EXACT, mirroring upstream: `OpenAI` and other
 /// case variants are legitimate custom ids and must not be touched. Each
@@ -2670,16 +2665,10 @@ fn normalize_codex_legacy_openai_reroute(config_text: &str) -> Result<Option<Str
 /// refuse — and keyless header-auth or local-server tables must keep their
 /// user-authored shape (0.149 keeps them unauthenticated either way).
 ///
-/// `preserve_official_login` is the post-write login state of `auth.json`.
-/// The direct-switch plan derives it from the preservation setting (which
-/// decides whether the file survives the switch); the takeover writer
-/// derives it from the live file itself — takeover never touches
-/// `auth.json`, but it no longer owns the file's presence (a
-/// preservation-off direct switch deletes it before takeover is enabled),
-/// so the stored card's flag cannot be trusted there either.
+/// 写入后的 `auth.json` 恒定保留（切换不再删除它，见 D3），因此这里恒定把
+/// `requires_openai_auth` 盖成 `true`，让 Codex 的登录 UX 与文件状态一致。
 pub(crate) fn align_codex_requires_openai_auth_with_login_preservation(
     config_text: &str,
-    preserve_official_login: bool,
 ) -> Result<String, AppError> {
     if !config_text.contains("model_providers") {
         return Ok(config_text.to_string());
@@ -2709,14 +2698,11 @@ pub(crate) fn align_codex_requires_openai_auth_with_login_preservation(
     if provider_table
         .get("requires_openai_auth")
         .and_then(|item| item.as_bool())
-        == Some(preserve_official_login)
+        == Some(true)
     {
         return Ok(config_text.to_string());
     }
-    provider_table.insert(
-        "requires_openai_auth",
-        toml_edit::value(preserve_official_login),
-    );
+    provider_table.insert("requires_openai_auth", toml_edit::value(true));
     Ok(doc.to_string())
 }
 
@@ -2874,15 +2860,7 @@ fn codex_unified_official_provider_table() -> toml_edit::Table {
     codex_official_provider_table(None, true)
 }
 
-/// Project a Codex official account card through the local proxy while keeping
-/// authentication owned by Codex itself.
-///
-/// The resulting custom provider explicitly opts into OpenAI authentication,
-/// so Codex forwards its existing ChatGPT login to the local `/responses`
-/// endpoint.  No API key or bearer placeholder is written to `auth.json`.
 /// Whether a live Codex config is the official route projected by CC Switch.
-/// Remove only the official takeover route owned by CC Switch. This is a
-/// last-resort crash cleanup when no live backup or provider SSOT is usable.
 fn table_matches_codex_unified_official_provider(table: &toml_edit::Table) -> bool {
     table.len() == 4
         && table.get("name").and_then(|item| item.as_str()) == Some("OpenAI")
@@ -2987,12 +2965,6 @@ pub fn strip_codex_unified_session_bucket(config_text: &str) -> Result<String, A
     Ok(doc.to_string())
 }
 
-/// 统一会话开关开启时，把官方供应商 `{ auth, config }` 设置对象中的
-/// config 文本注入共享 custom 路由；开关关闭或非官方供应商时不做改动。
-///
-/// 普通 live 写入（`write_codex_live_for_provider`）与代理接管备份
-/// （`update_live_backup_from_provider`）两条落盘路径共用：接管期间
-/// live 归代理所有，注入必须进备份，接管释放恢复的 live 才带统一路由。
 /// Backfill helper: strip the unified-session injection from a live
 /// `{ auth, config }` settings object before it is stored back to the DB.
 pub fn strip_codex_unified_session_bucket_from_settings(
@@ -3070,14 +3042,12 @@ pub fn strip_codex_mcp_servers_from_settings(settings: &mut Value) -> Result<(),
 struct CodexLiveWritePlan {
     write_full_auth: bool,
     config_text: Option<String>,
-    remove_auth_file: bool,
 }
 
 fn plan_codex_live_write(
     category: Option<&str>,
     auth: &Value,
     config_text: Option<&str>,
-    preserve_official_login: bool,
 ) -> Result<CodexLiveWritePlan, AppError> {
     // Semantic preflight over EVERY provider table (official and
     // third-party alike, idle tables included): field combinations 0.149
@@ -3121,7 +3091,6 @@ fn plan_codex_live_write(
         return Ok(CodexLiveWritePlan {
             write_full_auth: codex_auth_has_login_material(auth),
             config_text: config_text.map(str::to_string),
-            remove_auth_file: false,
         });
     }
 
@@ -3164,14 +3133,10 @@ fn plan_codex_live_write(
     };
     let config_text = normalized.as_deref().or(config_text);
 
-    // The preservation setting decides whether the official login in
-    // auth.json survives a third-party switch. Off means the file is
-    // deleted — a lingering login next to a third-party route is the leak
-    // shape the gates exist to prevent, and `{}` is not logout, the file
-    // must go (see clear_stale_codex_live_auth_after_official_switch). The
-    // active table's `requires_openai_auth` is stamped to match below, so
-    // Codex's login UX agrees with the file state either way.
-    let remove_auth_file = !preserve_official_login;
+    // auth.json 归 Codex 自己管（D3）：切换第三方时**从不删除**用户自己的
+    // ChatGPT 登录文件。防泄漏不靠删文件——`codex_config_falls_back_to_official_auth_for_third_party`
+    // 已经拒绝任何会回落到 auth.json 的第三方配置。活跃表的 `requires_openai_auth`
+    // 在下面按"登录态存在"盖章，让 Codex 的登录 UX 与文件状态一致。
 
     let live_config = match config_text {
         Some(text) if !text.trim().is_empty() => {
@@ -3200,18 +3165,12 @@ fn plan_codex_live_write(
         // without a key the empty config is passed through as-is.
         other => prepare_codex_provider_live_config(auth, other.unwrap_or(""))?,
     };
-    // After injection, so the stamp sees the final credential shape. Only
-    // this direct-switch plan stamps: the takeover subsystem preserves the
-    // login unconditionally and keeps its existing config shapes.
-    let live_config = align_codex_requires_openai_auth_with_login_preservation(
-        &live_config,
-        preserve_official_login,
-    )?;
+    // After injection, so the stamp sees the final credential shape.
+    let live_config = align_codex_requires_openai_auth_with_login_preservation(&live_config)?;
 
     Ok(CodexLiveWritePlan {
         write_full_auth: false,
         config_text: Some(live_config),
-        remove_auth_file,
     })
 }
 
@@ -3224,13 +3183,7 @@ pub fn preflight_codex_live_write(
     auth: &Value,
     config_text: Option<&str>,
 ) -> Result<(), AppError> {
-    plan_codex_live_write(
-        category,
-        auth,
-        config_text,
-        crate::settings::preserve_codex_official_auth_on_switch(),
-    )
-    .map(|_| ())
+    plan_codex_live_write(category, auth, config_text).map(|_| ())
 }
 
 pub fn write_codex_live_for_provider(
@@ -3238,12 +3191,7 @@ pub fn write_codex_live_for_provider(
     auth: &Value,
     config_text: Option<&str>,
 ) -> Result<(), AppError> {
-    let plan = plan_codex_live_write(
-        category,
-        auth,
-        config_text,
-        crate::settings::preserve_codex_official_auth_on_switch(),
-    )?;
+    let plan = plan_codex_live_write(category, auth, config_text)?;
 
     let sanitized_config = if let Some(ref config) = plan.config_text {
         if config.contains("env_key") {
@@ -3263,22 +3211,7 @@ pub fn write_codex_live_for_provider(
         return write_codex_live_atomic(auth, sanitized_config.as_deref());
     }
     write_codex_live_config_atomic(sanitized_config.as_deref())?;
-    // Config is already committed at this point, so a cleanup failure
-    // degrades to a warning instead of reporting an unswitched state.
-    if plan.remove_auth_file {
-        remove_codex_live_auth_after_third_party_switch();
-    }
     Ok(())
-}
-
-fn remove_codex_live_auth_after_third_party_switch() {
-    let auth_path = get_codex_auth_path();
-    if !auth_path.exists() {
-        return;
-    }
-    if let Err(e) = delete_file(&auth_path) {
-        log::warn!("Failed to remove auth.json after a third-party Codex switch: {e}");
-    }
 }
 
 /// Build the live Codex config for provider switching.
@@ -3289,9 +3222,8 @@ fn remove_codex_live_auth_after_third_party_switch() {
 /// long-lived ChatGPT login cache.
 ///
 /// This is the single normalize→inject entry point: every caller — provider
-/// switches, takeover backup rebuilds (`preserve_codex_auth_in_backup`), and
-/// restore (`preserve_codex_oauth_login_on_restore`) — gets the legacy
-/// reroute migration, so a pre-0.149 `openai_base_url` shape can never leave
+/// switches and live re-applies — gets the legacy reroute migration, so a
+/// pre-0.149 `openai_base_url` shape can never leave
 /// its key in a top-level field Codex ignores while auth.json credentials
 /// stay live. Idempotent on already-normalized text.
 pub fn prepare_codex_provider_live_config(

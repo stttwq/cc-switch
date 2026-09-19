@@ -9,15 +9,26 @@ use crate::error::AppError;
 use crate::secrets::store::SecretStore;
 use crate::secrets::target::SecretTarget;
 
-/// Extract and store WebDAV password, returning whether a password was stored
+/// 三态语义（§5.2.5）：`None` = 前端未触碰该字段，保持现值；`Some("")` = 用户清空了
+/// 输入框，删除已存凭据；`Some(v)` = 写入 v。返回是否真的写入了值。
+///
+/// 空串必须删条目：否则"清空密码框再保存"永远删不掉凭据管理器里的旧密码。
+/// `literal:` 前缀是历史"已迁移"占位，不覆盖真实凭据。
 pub async fn extract_webdav_password(
     store: &Arc<dyn SecretStore>,
-    password: &str,
+    password: Option<&str>,
 ) -> Result<bool, AppError> {
-    if password.is_empty() || password.starts_with("literal:") {
+    let Some(password) = password else {
+        return Ok(false);
+    };
+    if password.starts_with("literal:") {
         return Ok(false);
     }
     let target = SecretTarget::app("webdav", "password");
+    if password.is_empty() {
+        store.delete(&target).await?;
+        return Ok(false);
+    }
     store.store(&target, password).await?;
     Ok(true)
 }
@@ -30,24 +41,32 @@ pub async fn restore_webdav_password(
     store.retrieve(&target).await
 }
 
-/// Extract and store S3 credentials, returning whether any credentials were stored
+/// 三态语义同 `extract_webdav_password`，两个字段各自独立：`None` = 不动，`Some("")` =
+/// 删除该条，`Some(v)` = 写入。返回是否至少写入了一个值。
 pub async fn extract_s3_credentials(
     store: &Arc<dyn SecretStore>,
-    access_key_id: &str,
-    secret_access_key: &str,
+    access_key_id: Option<&str>,
+    secret_access_key: Option<&str>,
 ) -> Result<bool, AppError> {
     let mut stored = false;
 
-    if !access_key_id.is_empty() && !access_key_id.starts_with("literal:") {
-        let target = SecretTarget::app("s3", "access_key_id");
-        store.store(&target, access_key_id).await?;
-        stored = true;
-    }
-
-    if !secret_access_key.is_empty() && !secret_access_key.starts_with("literal:") {
-        let target = SecretTarget::app("s3", "secret_access_key");
-        store.store(&target, secret_access_key).await?;
-        stored = true;
+    for (field, value) in [
+        ("access_key_id", access_key_id),
+        ("secret_access_key", secret_access_key),
+    ] {
+        let Some(value) = value else {
+            continue;
+        };
+        if value.starts_with("literal:") {
+            continue;
+        }
+        let target = SecretTarget::app("s3", field);
+        if value.is_empty() {
+            store.delete(&target).await?;
+        } else {
+            store.store(&target, value).await?;
+            stored = true;
+        }
     }
 
     Ok(stored)

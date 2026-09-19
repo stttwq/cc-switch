@@ -1,15 +1,15 @@
 use serde_json::json;
 
 use cc_switch_lib::{
-    get_claude_settings_path, read_json_file, write_codex_live_atomic, AppError, AppType, McpApps,
-    McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
+    get_claude_settings_path, read_json_file, write_codex_live_atomic, AppError, AppType,
+    ManagedEnvVars, McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
 };
 
 #[path = "support.rs"]
 mod support;
 use support::{
-    create_test_state, create_test_state_with_config, enable_codex_official_auth_preservation,
-    ensure_test_home, reset_test_fs, test_mutex,
+    attach_test_env_sink, create_test_state, create_test_state_with_config, ensure_test_home,
+    reset_test_fs, test_mutex,
 };
 
 fn sanitize_provider_name(name: &str) -> String {
@@ -99,7 +99,6 @@ fn migrate_legacy_common_config_usage_marks_historical_provider_enabled() {
 fn provider_service_switch_codex_updates_live_and_config() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    enable_codex_official_auth_preservation();
     let _home = ensure_test_home();
 
     let legacy_auth = json!({ "OPENAI_API_KEY": "legacy-key" });
@@ -361,15 +360,13 @@ requires_openai_auth = true
 }
 
 #[test]
-fn provider_service_switch_codex_default_removes_auth_json_when_preservation_off() {
+fn provider_service_switch_codex_never_deletes_the_official_auth_json() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
-    // Intentionally do NOT enable preservation: this locks the default opt-out
-    // behavior where a third-party switch deletes auth.json outright — the
-    // official OAuth login is not preserved, and the third-party key never
-    // lands there either (it travels as the provider-scoped bearer token in
-    // config.toml). It is the dual of
-    // `provider_service_switch_codex_preserves_oauth_and_backfills_api_key_from_live_token`.
+    // D3：切换第三方时 auth.json 恒定保留。这条用例锁定"永不删"——即使用户
+    // 的 auth.json 里带着 ChatGPT 登录态，切到第三方也只改 config.toml，
+    // 官方登录文件原样不动；第三方密钥走 provider 作用域的 env_key，从不落进
+    // auth.json。
     let _home = ensure_test_home();
 
     let live_auth = json!({
@@ -437,10 +434,18 @@ requires_openai_auth = true
     ProviderService::switch(&state, AppType::Codex, "third-party")
         .expect("switch to third-party provider should succeed");
 
+    // D3：auth.json 归 Codex 自己管，切换第三方时从不删除它。防泄漏不靠删文件——
+    // `codex_config_falls_back_to_official_auth_for_third_party` 已经拒绝任何会
+    // 回落到 auth.json 的第三方配置，所以这份 ChatGPT 登录态留着是安全的。
+    let auth_path = cc_switch_lib::get_codex_auth_path();
     assert!(
-        !cc_switch_lib::get_codex_auth_path().exists(),
-        "default (preservation off) must delete auth.json on a third-party switch — \
-         the official login goes away and the key rides in config.toml instead"
+        auth_path.exists(),
+        "a third-party switch must never delete the user's ChatGPT login"
+    );
+    let survived = std::fs::read_to_string(&auth_path).expect("read auth.json");
+    assert!(
+        survived.contains("official-oauth-token"),
+        "the official login must survive a third-party switch untouched; got://n{survived}"
     );
     let live_config =
         std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
@@ -521,7 +526,6 @@ fn provider_service_switch_codex_preserved_login_rejects_empty_third_party_confi
     // empty config has no third-party route — so there is no leak vector and
     // the switch is allowed. auth.json is not written.
     let _home = ensure_test_home();
-    enable_codex_official_auth_preservation();
 
     let mut initial_config = MultiAppConfig::default();
     {
@@ -564,7 +568,6 @@ fn provider_service_switch_codex_preserved_login_normalizes_legacy_reroute_confi
     // normalize the config into a cc-switch-owned custom table with the key
     // injected, leaving the official login untouched.
     let _home = ensure_test_home();
-    enable_codex_official_auth_preservation();
 
     let live_auth = json!({
         "auth_mode": "chatgpt",
@@ -639,7 +642,6 @@ fn provider_service_switch_codex_preserved_login_normalizes_config_carried_token
     // config-carried tokens too, not only auth.OPENAI_API_KEY, and the
     // injected token must land inside the rewritten provider table.
     let _home = ensure_test_home();
-    enable_codex_official_auth_preservation();
 
     let raw_edited_config = r#"model_provider = "openai"
 model = "gpt-5.4"
@@ -758,7 +760,6 @@ fn provider_service_switch_codex_preserved_login_rejects_keyless_official_auth_f
     // ChatGPT access token + account id go to the third-party endpoint.
     // The switch must be refused (fail closed).
     let _home = ensure_test_home();
-    enable_codex_official_auth_preservation();
 
     let header_auth_with_fallback = r#"model_provider = "custom"
 model = "gpt-5.4"
@@ -842,7 +843,6 @@ fn provider_service_switch_codex_preserved_login_allows_keyless_header_auth_prov
     // and the third-party key in http_headers.Authorization does the auth.
     // This legitimate shape must keep switching under preservation.
     let _home = ensure_test_home();
-    enable_codex_official_auth_preservation();
 
     let header_auth_config = r#"model_provider = "custom"
 model = "gpt-5.4"
@@ -1916,4 +1916,80 @@ fn provider_service_delete_current_provider_returns_error() {
         ),
         other => panic!("expected Config/Message error, got {other:?}"),
     }
+}
+
+/// Phase 3 验收缺口（§5.3.1 / §5.3.3）：切换 Claude 后凭据是以**用户环境变量**投出去的，
+/// 并且投递结果登记进 `managed_env_vars`；切走时该供应商的变量被收回，不给
+/// `HKCU\Environment` 留孤儿变量。
+#[test]
+fn switch_claude_delivers_env_vars_and_registers_ownership() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "a".to_string();
+        manager.providers.insert(
+            "a".to_string(),
+            Provider::from_parts(
+                "a".to_string(),
+                "A".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a", "ANTHROPIC_BASE_URL": "https://a.example.com" } }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "b".to_string(),
+            Provider::from_parts(
+                "b".to_string(),
+                "B".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-b", "ANTHROPIC_BASE_URL": "https://b.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+
+    ProviderService::switch(&state, AppType::Claude, "b").expect("switch to b");
+
+    let delivered = sink.snapshot();
+    assert_eq!(
+        delivered.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        Some("key-b"),
+        "B 的密钥必须经环境变量投出去，实际快照: {delivered:?}"
+    );
+    assert_eq!(
+        delivered.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("https://b.example.com"),
+        "Base URL 同样经环境变量投递（§5.3.1）"
+    );
+
+    let managed = ManagedEnvVars::load(&state.db).expect("read managed_env_vars");
+    let mut owned = managed.vars_for_provider("claude", "b");
+    owned.sort();
+    assert_eq!(
+        owned,
+        vec!["ANTHROPIC_AUTH_TOKEN".to_string(), "ANTHROPIC_BASE_URL".to_string()],
+        "投递结果必须登记所有权，删除/切换时才知道该收回哪些变量"
+    );
+
+    // 切回 A：B 的变量被收回，登记同步清空。
+    ProviderService::switch(&state, AppType::Claude, "a").expect("switch back to a");
+    let after = sink.snapshot();
+    assert_eq!(
+        after.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        Some("key-a"),
+        "同名变量被下一个供应商接管"
+    );
+    let managed_after = ManagedEnvVars::load(&state.db).expect("read managed_env_vars");
+    assert!(
+        managed_after.vars_for_provider("claude", "b").is_empty(),
+        "切走后 B 不再拥有任何用户环境变量"
+    );
 }

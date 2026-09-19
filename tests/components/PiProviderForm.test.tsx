@@ -980,7 +980,6 @@ describe("PiProviderForm", () => {
       expect(requestBody).toEqual({
         baseUrl: "https://models.example/v1",
         apiKey: "literal-key",
-        customUserAgent: "pi-test-agent/1.0",
         apiFormat: "openai-completions",
         requestHeaders: {
           "user-agent": "pi-test-agent/1.0",

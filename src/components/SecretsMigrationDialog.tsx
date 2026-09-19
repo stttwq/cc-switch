@@ -32,8 +32,23 @@ interface BackupInfo {
   kind: string;
 }
 
+/**
+ * 后端只回告警码（不回值），这里翻成本地化文案。
+ * 未知码原样展示，避免新码在旧前端上静默消失。
+ */
+const WARNING_MESSAGE_KEYS: Record<string, string> = {
+  global_proxy_url_invalidated:
+    "secretsMigration.warnGlobalProxyUrlInvalidated",
+  gemini_native_api_format_normalized:
+    "secretsMigration.warnGeminiNativeApiFormat",
+};
+
 export function SecretsMigrationDialog() {
   const { t } = useTranslation();
+  const translateWarning = (code: string) => {
+    const key = WARNING_MESSAGE_KEYS[code];
+    return key ? t(key) : code;
+  };
   const [report, setReport] = useState<MigrationReport | null>(null);
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [busy, setBusy] = useState(false);
@@ -127,7 +142,7 @@ export function SecretsMigrationDialog() {
               </p>
               <ul className="max-h-24 overflow-auto text-xs list-disc pl-5 text-muted-foreground">
                 {report.warnings.map((w) => (
-                  <li key={w}>{w}</li>
+                  <li key={w}>{translateWarning(w)}</li>
                 ))}
               </ul>
             </div>

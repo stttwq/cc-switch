@@ -13,6 +13,7 @@
 //!   sk-fixture-codex-3rd-0002
 //!   sk-fixture-pi-0003 / sk-fixture-pi-0004
 //!   sk-fixture-usage-0005
+//!   sk-fixture-codex-oauth-refresh-0009
 //!   webdav-fixture-pass-0006
 
 use std::fs;
@@ -41,6 +42,9 @@ const PI_KEY_1: &str = "sk-fixture-pi-0003";
 const PI_KEY_2: &str = "sk-fixture-pi-0004";
 const USAGE_SCRIPT_KEY: &str = "sk-fixture-usage-0005";
 const WEBDAV_PASSWORD: &str = "webdav-fixture-pass-0006";
+/// 无 api_key 的官方卡里那串 OAuth 登录态：P0-2 回归用——它没有任何"可迁移凭据"，
+/// 但迁移后仍必须从 `providers.settings_config` 里消失。
+const CODEX_OAUTH_REFRESH_TOKEN: &str = "sk-fixture-codex-oauth-refresh-0009";
 
 pub fn fixture_secret_literals() -> Vec<&'static str> {
     vec![
@@ -53,6 +57,7 @@ pub fn fixture_secret_literals() -> Vec<&'static str> {
         PI_KEY_2,
         USAGE_SCRIPT_KEY,
         WEBDAV_PASSWORD,
+        CODEX_OAUTH_REFRESH_TOKEN,
     ]
 }
 
@@ -74,6 +79,31 @@ fn provider(id: &str, name: &str, settings_config: Value, meta: Option<ProviderM
 fn generate_v18_plaintext_fixture() {
     let _guard = fixture_lock();
     let home = fixture_root();
+
+    // 版本耦合护栏：本生成器只能在代码仍把新库建为 v18 时使用。SCHEMA_VERSION 一旦
+    // 升上去，重跑就会把已固化的夹具覆盖成"名字叫 v18、实为新版本"的库。先往临时
+    // 目录建一个全新库探一次版本；不是 18 就直接退出，一个字都不写。
+    let prev_test_home = std::env::var_os("CC_SWITCH_TEST_HOME");
+    let probe = tempfile::tempdir().expect("probe dir for schema version guard");
+    std::env::set_var("CC_SWITCH_TEST_HOME", probe.path());
+    let probed_version = {
+        let db = Database::init().expect("probe Database::init");
+        let path = probe.path().join(".cc-switch").join("cc-switch.db");
+        drop(db);
+        let conn = rusqlite::Connection::open(&path).expect("open probe db");
+        conn.query_row("PRAGMA user_version", [], |row| row.get::<_, i32>(0))
+            .expect("read user_version")
+    };
+    match prev_test_home {
+        Some(value) => std::env::set_var("CC_SWITCH_TEST_HOME", value),
+        None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+    }
+    assert_eq!(
+        probed_version, 18,
+        "当前代码新建库为 v{probed_version}，本生成器无法再产出 v18 夹具；\
+         tests/fixtures/v18-home 与 v18-plaintext.db 已固化为手工维护，请勿重跑生成器"
+    );
+
     if home.exists() {
         fs::remove_dir_all(&home).unwrap();
     }
@@ -144,19 +174,7 @@ fn generate_v18_plaintext_fixture() {
     )
     .unwrap();
 
-    let meta_extra_env = ProviderMeta {
-        usage_script: Some(
-            serde_json::from_value(json!({
-                "enabled": true,
-                "language": "javascript",
-                "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
-                "apiKey": USAGE_SCRIPT_KEY,
-                "baseUrl": "https://fixture-usage.example.com"
-            }))
-            .unwrap(),
-        ),
-        ..Default::default()
-    };
+    let meta_extra_env = ProviderMeta::default();
     db.save_provider(
         "claude",
         &provider(
@@ -174,7 +192,7 @@ fn generate_v18_plaintext_fixture() {
     )
     .unwrap();
 
-    // --- Codex x2 (1 official + 1 third-party) ---
+    // --- Codex x3 (1 official with api key + 1 keyless official + 1 third-party) ---
     db.save_provider(
         "codex",
         &provider(
@@ -182,6 +200,27 @@ fn generate_v18_plaintext_fixture() {
             "Fixture Codex Official",
             json!({
                 "auth": { "OPENAI_API_KEY": CODEX_OFFICIAL_KEY },
+                "config": ""
+            }),
+            None,
+        ),
+    )
+    .unwrap();
+
+    // P0-2 夹具：没有任何"可迁移凭据"，只有 Codex 的 OAuth 登录态。迁移必须照样把
+    // 剥离后的 JSON 写回 DB，否则这份 refresh token 会永久明文留在 providers 表里。
+    db.save_provider(
+        "codex",
+        &provider(
+            "fixture-codex-official-oauth",
+            "Fixture Codex Official (OAuth only)",
+            json!({
+                "auth": {
+                    "tokens": {
+                        "refresh_token": CODEX_OAUTH_REFRESH_TOKEN,
+                        "access_token": CODEX_OAUTH_REFRESH_TOKEN
+                    }
+                },
                 "config": ""
             }),
             None,
@@ -247,6 +286,35 @@ fn generate_v18_plaintext_fixture() {
         .unwrap();
     db.set_current_provider("pi", "fixture-pi-one").unwrap();
 
+    // `meta.usage_script` 已按 §5.2.1 从 ProviderMeta 删掉（入侧再也写不进来），但
+    // v18 老库里它是第二个明文密钥存储点，v19 的剥离路径需要夹具兜底 → 裸 SQL 原样
+    // 注入这一份历史形态。
+    drop(db);
+    {
+        let path = home.join(".cc-switch").join("cc-switch.db");
+        let conn = rusqlite::Connection::open(&path).expect("open fixture db for meta patch");
+        let raw: String = conn
+            .query_row(
+                "SELECT meta FROM providers WHERE id = 'fixture-claude-extra-env'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read fixture provider meta");
+        let mut meta: Value = serde_json::from_str(&raw).expect("fixture meta is JSON");
+        meta["usage_script"] = json!({
+            "enabled": true,
+            "language": "javascript",
+            "code": "async function fetchUsage(context) { return { success: true, data: [] }; }",
+            "apiKey": USAGE_SCRIPT_KEY,
+            "baseUrl": "https://fixture-usage.example.com"
+        });
+        conn.execute(
+            "UPDATE providers SET meta = ?1 WHERE id = 'fixture-claude-extra-env'",
+            [meta.to_string()],
+        )
+        .expect("patch fixture meta");
+    }
+
     // --- ~/.cc-switch/settings.json (WebDAV password) ---
     fs::write(
         home.join(".cc-switch").join("settings.json"),
@@ -254,6 +322,37 @@ fn generate_v18_plaintext_fixture() {
             "webdavSync": { "password": WEBDAV_PASSWORD, "enabled": false }
         })
         .to_string(),
+    )
+    .unwrap();
+
+    // --- §6.3 自动删除面：旧版明文残留文件 ---
+    // 冷启动测试必须能验证这些文件真的被删掉，否则 §6.3 没有任何回归保护。
+    let config_dir = home.join(".cc-switch");
+    fs::write(
+        config_dir.join("config.json"),
+        json!({ "providers": { "claude": { "apiKey": CLAUDE_KEY } } }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        config_dir.join("config.json.bak"),
+        json!({ "providers": { "claude": { "apiKey": CLAUDE_KEY_ALT_FIELD } } }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        config_dir.join("config.json.migrated"),
+        json!({ "providers": {} }).to_string(),
+    )
+    .unwrap();
+    fs::write(
+        config_dir.join("codex_oauth_auth.json"),
+        json!({ "refresh_token": CODEX_OAUTH_REFRESH_TOKEN }).to_string(),
+    )
+    .unwrap();
+    let backups_dir = config_dir.join("backups");
+    fs::create_dir_all(&backups_dir).unwrap();
+    fs::write(
+        backups_dir.join("env-backup-1.json"),
+        json!({ "ANTHROPIC_AUTH_TOKEN": CLAUDE_KEY }).to_string(),
     )
     .unwrap();
 
@@ -348,7 +447,7 @@ fn load_v18_fixture_smoke() {
     let codex = db.get_all_providers("codex").unwrap();
     let pi = db.get_all_providers("pi").unwrap();
     assert_eq!(claude.len(), 3, "3 claude providers expected");
-    assert_eq!(codex.len(), 2, "2 codex providers expected");
+    assert_eq!(codex.len(), 3, "3 codex providers expected");
     assert_eq!(pi.len(), 2, "2 pi providers expected");
     assert_eq!(
         db.get_current_provider("claude").unwrap().as_deref(),

@@ -23,7 +23,6 @@ export async function fetchModelsForConfig(
   apiKey: string,
   isFullUrl?: boolean,
   modelsUrl?: string,
-  customUserAgent?: string,
   options?: ModelFetchOptions,
 ): Promise<FetchedModel[]> {
   return invoke("fetch_models_for_config", {
@@ -31,7 +30,6 @@ export async function fetchModelsForConfig(
     apiKey,
     isFullUrl,
     modelsUrl,
-    customUserAgent,
     apiFormat: options?.apiFormat,
     requestHeaders: options?.requestHeaders,
   });

@@ -110,9 +110,20 @@ pub struct InMemoryEnvSink {
 }
 
 impl InMemoryEnvSink {
-    #[allow(dead_code)]
+    // 生产代码一律走 `default_sink()`（用 `Default`），`new()` 只服务单元测试。
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// 当前变量快照（集成测试据此断言 §5.3.3 的投递与撤销结果）。
+    pub fn snapshot(&self) -> HashMap<String, String> {
+        self.vars
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|(k, v)| (k.clone(), v.to_string()))
+            .collect()
     }
 }
 

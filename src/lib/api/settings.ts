@@ -128,11 +128,12 @@ export const settingsApi = {
 
   async webdavTestConnection(
     settings: WebDavSyncSettings,
-    preserveEmptyPassword = true,
+    password?: string,
   ): Promise<WebDavTestResult> {
     return await invoke("webdav_test_connection", {
       settings,
-      preserveEmptyPassword,
+      // 未触碰时整个键不发，后端 Option<String> 收到 None（= 从凭据管理器读）。
+      ...(password === undefined ? {} : { password }),
     });
   },
 
@@ -146,11 +147,11 @@ export const settingsApi = {
 
   async webdavSyncSaveSettings(
     settings: WebDavSyncSettings,
-    passwordTouched = false,
+    password?: string,
   ): Promise<{ success: boolean }> {
     return await invoke("webdav_sync_save_settings", {
       settings,
-      passwordTouched,
+      ...(password === undefined ? {} : { password }),
     });
   },
 
@@ -164,11 +165,13 @@ export const settingsApi = {
 
   async s3TestConnection(
     settings: S3SyncSettings,
-    preserveEmptyPassword = true,
+    accessKeyId?: string,
+    secretAccessKey?: string,
   ): Promise<WebDavTestResult> {
     return await invoke("s3_test_connection", {
       settings,
-      preserveEmptyPassword,
+      ...(accessKeyId === undefined ? {} : { accessKeyId }),
+      ...(secretAccessKey === undefined ? {} : { secretAccessKey }),
     });
   },
 
@@ -182,11 +185,13 @@ export const settingsApi = {
 
   async s3SyncSaveSettings(
     settings: S3SyncSettings,
-    passwordTouched: boolean,
+    accessKeyId?: string,
+    secretAccessKey?: string,
   ): Promise<{ success: boolean }> {
     return await invoke("s3_sync_save_settings", {
       settings,
-      passwordTouched,
+      ...(accessKeyId === undefined ? {} : { accessKeyId }),
+      ...(secretAccessKey === undefined ? {} : { secretAccessKey }),
     });
   },
 
