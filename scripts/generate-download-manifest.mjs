@@ -27,11 +27,10 @@ if (Number.isNaN(pubDate.getTime())) {
   process.exit(1);
 }
 
-// 发布面已按 D1 收敛为 Windows x86_64 单一产物（自动更新移除后也不再产出 .sig /
-// latest.json）。这里只保留 release.yml 实际会打出来的两种资产；等发布面恢复多平台时
-// 再按"-Windows-arm64.msi 在 -Windows.msi 之前"的顺序补回来。
+// 发布面已按 D1 收敛为 Windows x86_64 单一产物，且本项目只出 MSI 安装包
+// （不生成绿色版 zip；自动更新移除后也不再产出 .sig / latest.json）。
+// 等发布面恢复多平台时再按"-Windows-arm64.msi 在 -Windows.msi 之前"的顺序补回来。
 const RULES = [
-  { suffix: '-Windows-Portable.zip', platform: 'windows', kind: 'portable', arch: 'x64' },
   { suffix: '-Windows.msi', platform: 'windows', kind: 'msi', arch: 'x64' },
 ];
 

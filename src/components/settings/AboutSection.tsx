@@ -4,7 +4,6 @@ import {
   ExternalLink,
   Github,
   Globe,
-  Info,
   Loader2,
   RefreshCw,
   Terminal,
@@ -40,10 +39,6 @@ import { isWindows } from "@/lib/platform";
 import { isUpdateAvailable } from "@/lib/version";
 import { ToolUpgradeConfirmDialog } from "./ToolUpgradeConfirmDialog";
 import { ToolInstallRow } from "./ToolInstallRow";
-
-interface AboutSectionProps {
-  isPortable: boolean;
-}
 
 interface ToolVersion {
   name: string;
@@ -162,7 +157,7 @@ function mergeToolVersions(
   return merged;
 }
 
-export function AboutSection({ isPortable }: AboutSectionProps) {
+export function AboutSection() {
   // ... (use hooks as before) ...
   const { t } = useTranslation();
   // 惰性初始化自模块缓存：重挂时首帧即渲染上次的值，避免 loading 闪烁；首次挂载缓存
@@ -778,12 +773,6 @@ export function AboutSection({ isPortable }: AboutSectionProps) {
                     <span className="font-medium">{`v${displayVersion}`}</span>
                   )}
                 </Badge>
-                {isPortable && (
-                  <Badge variant="secondary" className="gap-1.5">
-                    <Info className="h-3 w-3" />
-                    {t("settings.portableMode")}
-                  </Badge>
-                )}
               </div>
             </div>
           </div>

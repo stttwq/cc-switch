@@ -341,7 +341,7 @@ CC Switch 使用“通用配置片段”功能，在不同的供应商之间传�
 
 ### 安装
 
-从 [Releases](https://github.com/farion1231/cc-switch/releases) 页面下载最新版本的 `CC-Switch-v{版本号}-Windows.msi` 安装包或 `CC-Switch-v{版本号}-Windows-Portable.zip` 绿色版。
+从 [Releases](https://github.com/farion1231/cc-switch/releases) 页面下载最新版本的 `CC-Switch-v{版本号}-Windows.msi` 安装包。
 
 <details>
 <summary><strong>架构总览</strong></summary>

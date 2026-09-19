@@ -619,7 +619,6 @@
     "browseDirectory": "Browse Directory",
     "resetDefault": "Reset to default directory (takes effect after saving)",
     "aboutHint": "View version information and update status.",
-    "portableMode": "Portable mode: updates require manual download.",
     "openReleaseNotesFailed": "Failed to open release notes",
     "releaseNotes": "Release Notes",
     "viewReleaseNotes": "View release notes for this version",

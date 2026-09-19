@@ -19,6 +19,9 @@ pub enum SecretTarget {
     AppSecret { app: String, field: String },
     /// cc-switch/v1/probe (startup self-check)
     Probe,
+    /// 历史形态：早期开发版把条目存成 `<user>.<规范名>`（keyring 的限定名写法），
+    /// 当前版本按附录 B 原样存。仅用于把旧条目找回并搬迁，绝不写进名册。
+    Legacy(Box<SecretTarget>),
 }
 
 impl SecretTarget {
@@ -66,6 +69,11 @@ impl SecretTarget {
         Self::Probe
     }
 
+    /// 把规范目标包成历史形态（`<user>.<规范名>`）。
+    pub fn legacy(inner: SecretTarget) -> Self {
+        Self::Legacy(Box::new(inner))
+    }
+
     /// Convert to credential manager target string
     pub fn to_target_string(&self) -> String {
         match self {
@@ -99,6 +107,9 @@ impl SecretTarget {
                 format!("cc-switch/v1/app/{}/{}", app, field)
             }
             Self::Probe => "cc-switch/v1/probe".to_string(),
+            Self::Legacy(inner) => {
+                format!("{}.{}", inner.to_user_metadata(), inner.to_target_string())
+            }
         }
     }
 
@@ -114,6 +125,7 @@ impl SecretTarget {
             }
             Self::AppSecret { app, .. } => app.clone(),
             Self::Probe => "probe".to_string(),
+            Self::Legacy(inner) => inner.to_user_metadata(),
         }
     }
 

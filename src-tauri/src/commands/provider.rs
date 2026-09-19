@@ -20,8 +20,10 @@ pub fn get_providers(
     let providers =
         ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
     // 一次读盘、所有行共用：known_secret_targets 既是 extra_env 的唯一真源，
-    // 也用来判断某行到底有没有凭据条目——没有就不必为它去开凭据管理器（§5.2.1）。
-    let known_targets = crate::secrets::load_known_targets(state.db.as_ref()).unwrap_or_default();
+    // 也用来跳过确实没有凭据的行（§5.2.1）。
+    let mut known_targets =
+        crate::secrets::load_known_targets(state.db.as_ref()).unwrap_or_default();
+    let mut repaired = false;
     let mut sanitized = IndexMap::new();
     for (id, provider) in providers {
         let mut front = provider.to_frontend();
@@ -29,32 +31,59 @@ pub fn get_providers(
             state.inner(),
             &app_type,
             &id,
-            &known_targets,
+            &mut known_targets,
+            &mut repaired,
         ));
         sanitized.insert(id, front);
     }
+    if repaired {
+        if let Err(e) = crate::secrets::save_known_targets(state.db.as_ref(), &known_targets) {
+            log::warn!("补登记凭据条目失败: {e}");
+        }
+    }
     Ok(sanitized)
+}
+
+/// 该 target 是否真的有凭据。名册已登记就直接信名册；没登记则探测一次，
+/// 确实存在就补进名册。
+///
+/// 补登记是给历史洞自愈：登记机制之前完成的迁移只把密钥写进了凭据管理器、
+/// 没往 `known_secret_targets` 里记，于是卡片会误报「需要密钥」并拒绝切换，
+/// 而凭据其实好端端在库里。
+fn ensure_registered(
+    state: &AppState,
+    known_targets: &mut Vec<String>,
+    repaired: &mut bool,
+    target: &SecretTarget,
+) -> bool {
+    let name = target.to_target_string();
+    if known_targets.iter().any(|t| t == &name) {
+        return true;
+    }
+    let exists = matches!(
+        futures::executor::block_on(state.secrets.get(target)),
+        Ok(Some(_))
+    );
+    if exists {
+        known_targets.push(name);
+        *repaired = true;
+    }
+    exists
 }
 
 fn load_secret_status(
     state: &AppState,
     app_type: &AppType,
     provider_id: &str,
-    known_targets: &[String],
+    known_targets: &mut Vec<String>,
+    repaired: &mut bool,
 ) -> SecretStatus {
     let api_key_target = SecretTarget::provider_api_key(app_type.clone(), provider_id);
     let base_url_target = SecretTarget::provider_base_url(app_type.clone(), provider_id);
-    let is_registered = |target: &SecretTarget| {
-        known_targets
-            .iter()
-            .any(|t| t == &target.to_target_string())
-    };
 
-    // §5.2.1：批量读取完全不碰凭据管理器——api_key 的 present 直接由登记位得出
-    // （未登记的 target 本来也读不到值，二者语义一致）。base_url 允许回显
-    // （§5.2.2，编辑表单与卡片要显示），仍按需读一次凭据管理器。
-    let api_present = is_registered(&api_key_target);
-    let base = is_registered(&base_url_target)
+    let api_present = ensure_registered(state, known_targets, repaired, &api_key_target);
+    // base_url 允许回显（§5.2.2，编辑表单与卡片要显示），确认存在后读一次值。
+    let base = ensure_registered(state, known_targets, repaired, &base_url_target)
         .then(|| {
             futures::executor::block_on(state.secrets.retrieve(&base_url_target))
                 .ok()
@@ -251,4 +280,75 @@ pub fn update_providers_sort_order(
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     ProviderService::update_sort_order(state.inner(), app_type, updates).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::database::Database;
+    use std::sync::Arc;
+    use zeroize::Zeroizing;
+
+    fn state_with_store() -> AppState {
+        AppState::new(
+            Arc::new(Database::memory().expect("内存库")),
+            Arc::new(crate::secrets::InMemorySecretStore::new()),
+        )
+    }
+
+    /// 名册漏记但凭据确实在库里的行（登记机制之前完成的迁移）必须被探测出来并补登记，
+    /// 否则界面会一直误报「需要密钥」。
+    #[test]
+    fn unregistered_credential_is_probed_and_repaired_into_the_registry() {
+        let state = state_with_store();
+        let target = SecretTarget::provider_api_key(AppType::Claude, "p1".to_string());
+        futures::executor::block_on(
+            state
+                .secrets
+                .set(&target, Zeroizing::new("sk-x".to_string())),
+        )
+        .expect("写入凭据");
+
+        let mut known: Vec<String> = Vec::new();
+        let mut repaired = false;
+        let status = load_secret_status(&state, &AppType::Claude, "p1", &mut known, &mut repaired);
+        assert!(status.api_key.present, "凭据存在就必须判为已配置");
+        assert!(repaired, "首次探测到未登记凭据应标记为需要补登记");
+        assert!(
+            known.iter().any(|t| t == &target.to_target_string()),
+            "实际名册: {known:?}"
+        );
+
+        // 补登记之后不再改动名册
+        let mut repaired_again = false;
+        let second = load_secret_status(
+            &state,
+            &AppType::Claude,
+            "p1",
+            &mut known,
+            &mut repaired_again,
+        );
+        assert!(second.api_key.present);
+        assert!(!repaired_again, "已登记的行不该再触发补登记");
+    }
+
+    #[test]
+    fn row_without_any_credential_stays_unconfigured() {
+        let state = state_with_store();
+        let mut known: Vec<String> = Vec::new();
+        let mut repaired = false;
+        let status = load_secret_status(
+            &state,
+            &AppType::Claude,
+            "missing",
+            &mut known,
+            &mut repaired,
+        );
+        assert!(!status.api_key.present);
+        assert!(!repaired);
+        assert!(
+            known.is_empty(),
+            "没有凭据的行不该往名册里写东西: {known:?}"
+        );
+    }
 }

@@ -1,5 +1,6 @@
 pub mod cleanup;
 mod extractor;
+pub mod legacy;
 pub mod migration;
 mod rules;
 pub mod scan;

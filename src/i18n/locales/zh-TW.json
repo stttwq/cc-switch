@@ -619,7 +619,6 @@
     "browseDirectory": "瀏覽目錄",
     "resetDefault": "還原預設目錄（需儲存後生效）",
     "aboutHint": "檢視版本資訊與更新狀態。",
-    "portableMode": "目前為可攜版，更新需手動下載。",
     "openReleaseNotesFailed": "開啟更新日誌失敗",
     "releaseNotes": "更新日誌",
     "viewReleaseNotes": "檢視該版本更新日誌",

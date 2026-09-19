@@ -34,7 +34,6 @@ interface SettingsMock {
   settings: any;
   isLoading: boolean;
   isSaving: boolean;
-  isPortable: boolean;
   appConfigDir?: string;
   resolvedDirs: Record<string, string>;
   requiresRestart: boolean;
@@ -63,7 +62,6 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
     },
     isLoading: false,
     isSaving: false,
-    isPortable: false,
     appConfigDir: "/app-config",
     resolvedDirs: {
       claude: "/claude",
@@ -227,7 +225,7 @@ vi.mock("@/components/settings/DirectorySettings", () => ({
 }));
 
 vi.mock("@/components/settings/AboutSection", () => ({
-  AboutSection: ({ isPortable }: any) => <div>about:{String(isPortable)}</div>,
+  AboutSection: () => <div>about</div>,
 }));
 
 vi.mock("@/components/settings/WebdavSyncSection", () => ({

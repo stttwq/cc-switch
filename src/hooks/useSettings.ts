@@ -26,7 +26,6 @@ export interface UseSettingsResult {
   settings: SettingsFormState | null;
   isLoading: boolean;
   isSaving: boolean;
-  isPortable: boolean;
   appConfigDir?: string;
   resolvedDirs: ResolvedDirectories;
   requiresRestart: boolean;
@@ -98,13 +97,8 @@ export function useSettings(): UseSettingsResult {
   });
 
   // 3️⃣ 元数据管理
-  const {
-    isPortable,
-    requiresRestart,
-    isLoading: isMetadataLoading,
-    acknowledgeRestart,
-    setRequiresRestart,
-  } = useSettingsMetadata();
+  const { requiresRestart, acknowledgeRestart, setRequiresRestart } =
+    useSettingsMetadata();
 
   // 重置设置
   const resetSettings = useCallback(() => {
@@ -461,15 +455,14 @@ export function useSettings(): UseSettingsResult {
   );
 
   const isLoading = useMemo(
-    () => isFormLoading || isDirectoryLoading || isMetadataLoading,
-    [isFormLoading, isDirectoryLoading, isMetadataLoading],
+    () => isFormLoading || isDirectoryLoading,
+    [isFormLoading, isDirectoryLoading],
   );
 
   return {
     settings,
     isLoading,
     isSaving: saveMutation.isPending,
-    isPortable,
     appConfigDir,
     resolvedDirs,
     requiresRestart,

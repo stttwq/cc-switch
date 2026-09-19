@@ -619,7 +619,6 @@
     "browseDirectory": "浏览目录",
     "resetDefault": "恢复默认目录（需保存后生效）",
     "aboutHint": "查看版本信息与更新状态。",
-    "portableMode": "当前为便携版，更新需手动下载。",
     "openReleaseNotesFailed": "打开更新日志失败",
     "releaseNotes": "更新日志",
     "viewReleaseNotes": "查看该版本更新日志",

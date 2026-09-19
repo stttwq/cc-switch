@@ -53,10 +53,6 @@ export const settingsApi = {
     return await invoke("restart_app");
   },
 
-  async isPortable(): Promise<boolean> {
-    return await invoke("is_portable_mode");
-  },
-
   async getConfigDir(appId: AppId): Promise<string> {
     return await invoke("get_config_dir", { app: appId });
   },

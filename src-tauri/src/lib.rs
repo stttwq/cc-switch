@@ -571,6 +571,38 @@ pub fn run() {
                 }
             }
 
+            // 历史条目名找回：只装过中间开发版的机器上，凭据存在 `<user>.<规范名>`
+            // 下，规范名查不到就会误报「需要密钥」。必须在 live 重写与投递之前做，
+            // 否则那一步读不到凭据。跑完记一次标志，后续启动不再扫。
+            if app_state
+                .db
+                .get_setting("legacy_secret_recovery")
+                .ok()
+                .flatten()
+                .as_deref()
+                != Some("1")
+            {
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    match rt.block_on(crate::secrets::legacy::recover_legacy_named_secrets(
+                        &app_state.db,
+                        app_state.secrets.as_ref(),
+                    )) {
+                        Ok(out) => {
+                            log::info!(
+                                "凭据条目名找回完成: 搬迁 {}、清理旧名副本 {}、补登记 {}",
+                                out.moved,
+                                out.pruned,
+                                out.registered
+                            );
+                            if let Err(e) = app_state.db.set_setting("legacy_secret_recovery", "1") {
+                                log::warn!("写入 legacy_secret_recovery 标志失败: {e}");
+                            }
+                        }
+                        Err(e) => log::warn!("凭据条目名找回失败（不影响本次启动）: {e}"),
+                    }
+                }
+            }
+
             match app_state.db.get_setting("live_reapply_pending") {
                 Ok(Some(flag)) if flag == "1" => {
                     log::info!("检测到 live_reapply_pending=1，开始重写 live 并投递环境变量");
@@ -1053,7 +1085,6 @@ pub fn run() {
             commands::get_log_config,
             commands::set_log_config,
             commands::restart_app,
-            commands::is_portable_mode,
             commands::copy_text_to_clipboard,
             commands::get_claude_plugin_status,
             commands::read_claude_plugin_config,

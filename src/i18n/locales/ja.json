@@ -619,7 +619,6 @@
     "browseDirectory": "ディレクトリを選択",
     "resetDefault": "デフォルトに戻す（保存後に反映）",
     "aboutHint": "バージョン情報と更新状況を表示します。",
-    "portableMode": "ポータブルモード: 更新は手動ダウンロードが必要です。",
     "openReleaseNotesFailed": "リリースノートの表示に失敗しました",
     "releaseNotes": "リリースノート",
     "viewReleaseNotes": "このバージョンのリリースノートを見る",
