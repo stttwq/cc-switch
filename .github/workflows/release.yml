@@ -1,15 +1,23 @@
 name: Release
 
+# 正式产物由本地构建 + gh release 上传（见 docs/release-process-zh.md）。
+# 这里保留一条手动触发的云端发布，只作为本地发布不可用时的补位手段。
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 要发布的标签（如 v2.0.1-ab12cd3）
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+env:
+  RELEASE_TAG: ${{ github.event.inputs.tag }}
+
 concurrency:
-  group: release-${{ github.ref_name }}
+  group: release-${{ github.event.inputs.tag }}
   cancel-in-progress: true
 
 jobs:
@@ -21,8 +29,19 @@ jobs:
     environment: release
 
     steps:
+      - name: Validate tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ! [[ "${RELEASE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9a-f]+|-alpha|-beta|-rc(\.[0-9]+)?)?$ ]]; then
+            echo "标签格式不合法: '${RELEASE_TAG}'" >&2
+            exit 1
+          fi
+
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.tag }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -64,7 +83,8 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          $VERSION = $env:GITHUB_REF_NAME  # e.g., v3.5.0
+          $VERSION = $env:RELEASE_TAG  # e.g., v2.0.1-ab12cd3
+          if (-not $VERSION) { throw 'RELEASE_TAG 为空，无法命名产物' }
           $targetRoot = 'src-tauri/target/release'
 
           # 仅打包 MSI 安装器（自动更新已移除，不再产出 / 收集 .sig）
@@ -120,14 +140,28 @@ jobs:
           set -euo pipefail
           ls -la release-assets
 
+      # 版本号规则里短哈希后缀（v2.0.0-b7768a9）不算预发布，只有 alpha/beta/rc 才是
+      - name: Decide prerelease flag
+        id: precheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${RELEASE_TAG}" =~ -(alpha|beta|rc)([.-][0-9]+)?$ ]]; then
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "prerelease=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Upload Release Assets
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ github.ref_name }}
-          name: CC Switch ${{ github.ref_name }}
-          prerelease: true
+          tag_name: ${{ env.RELEASE_TAG }}
+          # 手动触发时 GITHUB_SHA 是分支头而非标签提交，必须显式指回标签，否则 Release 会链到错误的提交
+          target_commitish: ${{ env.RELEASE_TAG }}
+          name: CC Switch ${{ env.RELEASE_TAG }}
+          prerelease: ${{ steps.precheck.outputs.prerelease }}
           body: |
-            ## CC Switch ${{ github.ref_name }}
+            ## CC Switch ${{ env.RELEASE_TAG }}
 
             🌐 **Only Official Website / 唯一官方网站 / 唯一の公式サイト**: [ccswitch.io](https://ccswitch.io)
 
@@ -135,7 +169,7 @@ jobs:
 
             ### 下载
 
-            - **Windows (x86_64)**: `CC-Switch-${{ github.ref_name }}-Windows.msi`
+            - **Windows (x86_64)**: `CC-Switch-${{ env.RELEASE_TAG }}-Windows.msi`
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
