@@ -549,7 +549,7 @@ function App() {
     const { provider, action } = confirmAction;
 
     if (action === "remove") {
-      // Remove from live config only (for additive mode apps like OpenCode/OpenClaw)
+      // Remove from live config only (for additive-mode apps like Pi)
       // Does NOT delete from database - provider remains in the list
       try {
         await providersApi.removeFromLiveConfig(provider.id, activeApp);

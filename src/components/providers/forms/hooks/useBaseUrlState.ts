@@ -31,7 +31,7 @@ export function useBaseUrlState({
   const [codexBaseUrl, setCodexBaseUrl] = useState("");
   const isUpdatingRef = useRef(false);
 
-  // 从配置同步到 state（Claude / Claude Desktop）
+  // 从配置同步到 state（Claude 走 env、Pi 走顶层 baseUrl）
   useEffect(() => {
     if (appType !== "claude") return;
     // 只有 official 类别不显示 Base URL 输入框，其他类别都需要回填
