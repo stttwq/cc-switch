@@ -2,14 +2,14 @@
 
 ## Supported Versions / 支持的版本
 
-Only the latest release of CC Switch receives security updates.
+CC Switch 是本机上运行的 Windows 专版分支（基于上游 3.20.3）。仅当前 `2.0.x` 最新正式版收到安全更新；上游 3.x 与更早版本由上游仓库负责，不在本分支支持范围。
 
-仅最新版本的 CC Switch 会收到安全更新。
+This is a Windows-only fork of the upstream project. Only the latest `2.0.x` stable release of this branch receives security updates; upstream 3.x and earlier are maintained (if at all) by the upstream repository and are out of scope here.
 
 | Version / 版本 | Supported / 是否支持 |
 |----------------|---------------------|
-| Latest 3.x     | ✅ Yes / 是          |
-| < 3.0          | ❌ No / 否           |
+| Latest 2.0.x   | ✅ Yes / 是          |
+| Other / 其它   | ❌ No / 否           |
 
 ## Threat Model / 威胁模型
 
@@ -21,6 +21,10 @@ Credentials (API keys and Base URLs) are stored only in **Windows Credential Man
 
 密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。这些环境变量的值在 `HKCU\Environment` 中**明文存储**，且任何时刻只保留**当前激活**供应商的那一份——切换供应商时会先删掉旧值再写入新值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
 
+**Frontend zero-secret by default / 前端默认零密钥.** Batch reads — the provider list, cards, tray — never carry a secret value. A credential value crosses IPC only when the user **explicitly clicks "显示" for a single field of a single provider**, via the dedicated `reveal_provider_secret` command; the frontend must not place that value in a TanStack Query cache, `localStorage`, a form initial-value snapshot, or any log, and the value is dropped when the dialog closes. As an intentional exception, `get_providers` does return each provider's **Base URL** for the card display — a Base URL is far less sensitive than a key and the user explicitly wants to see which endpoint is active. It reads Credential Manager for that one non-secret field only.
+
+**前端默认零密钥。** 批量读取（列表、卡片、托盘）永不携带密钥值。密钥值只在用户**显式点击单个供应商单个字段的"显示"**时，经专用命令 `reveal_provider_secret` 按需回传一次；前端不得把它放进 TanStack Query 缓存、`localStorage`、表单初始值快照或任何日志，对话框关闭即丢弃。作为有意例外，`get_providers` 会为卡片显示回传每个供应商的 **Base URL**——Base URL 敏感度远低于密钥，且用户明确希望看到当前指向哪个端点；它仅为此一个非密钥字段读取凭据管理器。
+
 **Credential persistence scope and portability / 凭据持久化范围与可移植性.** Entries are written through `keyring` with `CRED_PERSIST_ENTERPRISE`, so on a domain-joined machine they roam with the Windows user profile to every machine that user signs into; domain users who want machine-local persistence can change the entry's scope in the Credential Manager control panel. Secret values live outside the database and are **never** part of SQL export, WebDAV / S3 sync payloads or backups — after restoring a config on another machine every provider needs its key typed in again. That is by design, not a defect.
 
 凭据条目经 `keyring` 以 `CRED_PERSIST_ENTERPRISE` 写入，因而在域环境下会随 Windows 用户配置文件漫游到该用户登录的每一台机器；希望只保留在本机的域环境用户，可在凭据管理器控制面板中改该条目的持久化范围。密钥存放在数据库之外，**不进入** SQL 导出、WebDAV / S3 同步载荷与备份——因此在另一台机器还原配置后，每个供应商都要重新输入密钥。这是设计，不是缺陷。
@@ -31,9 +35,9 @@ v18→v19 升级会保留一份带时间戳的备份 `~/.cc-switch/backups/pre-s
 
 ### The bundled renderer is inside the trust boundary / 打包的渲染进程属于信任边界之内
 
-The bundled WebView renderer is treated as a trusted component. This is a **scoping decision, supported by the facts below rather than derived from them** — the facts are what make the decision checkable, and if any ceases to hold the decision must be revisited. Verified against v3.18.0:
+The bundled WebView renderer is treated as a trusted component. This is a **scoping decision, supported by the facts below rather than derived from them** — the facts are what make the decision checkable, and if any ceases to hold the decision must be revisited. Verified against v2.0.x:
 
-打包的 WebView 渲染进程被视为可信组件。这是一项**范围划定决策，由下列事实支撑，而非从中必然推出**——这些事实的作用是让该决策可被核验；一旦任一条不再成立，该决策必须重新评估。已针对 v3.18.0 核实：
+打包的 WebView 渲染进程被视为可信组件。这是一项**范围划定决策，由下列事实支撑，而非从中必然推出**——这些事实的作用是让该决策可被核验；一旦任一条不再成立，该决策必须重新评估。已针对 v2.0.x 核实：
 
 1. **No remote executable content is loaded.** `frontendDist` is bundled at build time (`src-tauri/tauri.conf.json`); the codebase contains no `<iframe>`, no `<webview>`, and no remote script or stylesheet URL. Avatars may load over `img-src https:`; Skills and sync go through the Rust backend, not the WebView.
    前端资源在构建期打包。头像可通过 `img-src https:` 加载；Skills 与同步走 Rust 后端，不经 WebView 直连。
@@ -103,15 +107,35 @@ Inputs that genuinely cross a trust boundary:
 - Findings against unsupported versions — see Supported Versions
   针对不受支持版本的问题——见支持的版本
 
+## IPC Path Parameters / IPC 路径参数来源
+
+Commands that accept a filesystem path are enumerated below with where the value is allowed to originate. A path parameter must come from one of the trusted sources listed; anything flowing from a sync payload or other untrusted source into these parameters is a **confused deputy** and in scope.
+
+接受文件系统路径的命令列于此表，并标注其允许的来源。同步载荷或其它不可信来源流入这些路径参数即属 **confused deputy**，在范围内。
+
+| Command / 命令 | Path parameter / 路径参数 | Allowed source / 允许来源 |
+|---|---|---|
+| `get_session_messages` | `sourcePath` | 后端枚举的会话目录（限制在供应商根目录内，`canonicalize` + `starts_with` 校验） |
+| `delete_session` | `sourcePath` | 同上 |
+| `reveal_provider_secret` | `app` + `providerId` + `field` | 前端来自 `get_providers`；后端先校验供应商存在于 DB，`field` 仅 `api_key`/`base_url` |
+| `open_external` | `url` | 后端用 `url::Url::parse` 校验，仅放行 `http`/`https`；调用方传完整 URL |
+| 配置导入/导出 | 目标文件路径 | 由系统文件对话框在 Rust 侧产生，路径不经前端往返 |
+
+## Distribution and Signature / 分发与签名
+
+Releases ship an unsigned Windows `.msi`. Because there is no Authenticode certificate (an OV/EV cert or Azure Trusted Signing is not economical for a personal fork), Windows SmartScreen will show an "unknown publisher" warning on first run. To let users verify origin and integrity anyway, each release publishes `SHA256SUMS` alongside a **minisign** signature (`.minisig`); the maintainer's public key is pinned in this file's repository and in the README. Users should download the MSI, verify the SHA-256 and the minisign signature, and only then run it. The **build, release and signing pipeline** is in the scope above.
+
+发布产物是未做代码签名的 Windows `.msi`。个人 fork 承担不起 OV/EV 证书或 Azure Trusted Signing 的费用，因此首次运行 Windows SmartScreen 会给出"未知发布者"警告。为让用户仍能验证来源与完整性，每个 Release 随包发布 `SHA256SUMS` 与 **minisign** 签名（`.minisig`），维护者公钥固定在本仓库与 README。用户应下载 MSI、校验 SHA-256 与 minisign 签名后再运行。**构建、发布与签名链路**始终在上文范围内。
+
 ## Reporting a Vulnerability / 报告漏洞
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
 **请不要通过公开的 GitHub Issue 报告安全漏洞。**
 
-Instead, please report them through [GitHub Security Advisories](https://github.com/farion1231/cc-switch/security/advisories/new).
+Instead, please report them through [GitHub Security Advisories](https://github.com/stttwq/cc-switch/security/advisories/new).
 
-请通过 [GitHub 安全公告](https://github.com/farion1231/cc-switch/security/advisories/new) 进行报告。
+请通过 [GitHub 安全公告](https://github.com/stttwq/cc-switch/security/advisories/new) 进行报告。
 
 When reporting, please include:
 
@@ -160,6 +184,6 @@ Severity is scored with CVSS (v3.1 or v4.0), and the vector will reflect any req
 
 ## Security Updates / 安全更新
 
-Security fixes are released as patch versions and announced via [GitHub Releases](https://github.com/farion1231/cc-switch/releases). We recommend always updating to the latest version.
+Security fixes are released as patch versions and announced via [GitHub Releases](https://github.com/stttwq/cc-switch/releases). We recommend always updating to the latest version.
 
-安全修复通过补丁版本发布，并通过 [GitHub Releases](https://github.com/farion1231/cc-switch/releases) 通知。建议始终更新到最新版本。
+安全修复通过补丁版本发布，并通过 [GitHub Releases](https://github.com/stttwq/cc-switch/releases) 通知。建议始终更新到最新版本。
