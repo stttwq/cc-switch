@@ -1691,6 +1691,10 @@
     "cleanupOrphansDone": "{count} 件の残存資格情報を削除しました",
     "warningsTitle": "移行時の注意点（フィールドのみ、値は含みません）：",
     "warnGlobalProxyUrlInvalidated": "保存されていた外向きプロキシ URL にユーザー名/パスワードが含まれていたため、安全ポリシーにより削除しました。「設定 → グローバルプロキシ」で認証情報なしで再入力してください。",
-    "warnGeminiNativeApiFormat": "Gemini generateContent 上流フォーマットを使っていたサプライヤーは OpenAI Chat Completions に変更されました。プロトコル変換は削除されたため、エンドポイントをご確認ください。"
+    "warnGeminiNativeApiFormat": "Gemini generateContent 上流フォーマットを使っていたサプライヤーは OpenAI Chat Completions に変更されました。プロトコル変換は削除されたため、エンドポイントをご確認ください。",
+    "livePendingHint": "live 設定の書き換えが {{count}} 件未完了です（通常はファイルが使用中または読み取り専用です）",
+    "livePendingRetry": "今すぐ再試行",
+    "liveRetryDone": "live 設定の書き換えが完了しました",
+    "liveRetryStillFailing": "書き換えに失敗した live 設定があります。ファイルを使用中のプログラムを閉じて再試行してください"
   }
 }

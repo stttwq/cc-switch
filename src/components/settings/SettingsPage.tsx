@@ -38,6 +38,7 @@ import { settingsApi } from "@/lib/api";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
 import { SecretStoreMaintenance } from "@/components/settings/SecretStoreMaintenance";
+import { LiveReapplyMaintenance } from "@/components/settings/LiveReapplyMaintenance";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
 import { AppVisibilitySettings } from "@/components/settings/AppVisibilitySettings";
@@ -487,6 +488,7 @@ export function SettingsPage({
                         </AccordionTrigger>
                         <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
                           <SecretStoreMaintenance />
+                          <LiveReapplyMaintenance />
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>

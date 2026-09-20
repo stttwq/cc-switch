@@ -108,6 +108,41 @@ pub fn delete_plaintext_backups() -> Result<usize, String> {
 
 /// §6.4 / §6.5：live 重写失败后由用户点「重试」——重新置位标志，
 /// 下次启动的 live 重写步骤会自动补完（此时文件通常已不再被 CLI 占用）。
+/// §6.5：live 重写的待补状态。一次性迁移对话框确认之后，失败就再也没人说了——
+/// 设置页高级区常驻这一行，`pending=1` 且有失败项时列出并给「重试」。
+#[tauri::command]
+pub fn get_live_reapply_status(
+    state: State<'_, crate::store::AppState>,
+) -> Result<serde_json::Value, String> {
+    let pending = state
+        .db
+        .get_setting("live_reapply_pending")
+        .map_err(|e| e.to_string())?
+        .as_deref()
+        == Some("1");
+    let failures = state
+        .db
+        .get_setting("secrets_migration_report")
+        .map_err(|e| e.to_string())?
+        .and_then(|raw| {
+            serde_json::from_str::<crate::secrets::MigrationReport>(&raw)
+                .ok()
+                .map(|report| report.live_reapply_failures)
+        })
+        .unwrap_or_default();
+    Ok(serde_json::json!({ "pending": pending, "failures": failures }))
+}
+
+/// §6.5：立刻重跑一次 live 重写 + 投递，供设置页那一行的「立即重试」使用。
+/// 与 `retry_live_reapply`（只置标志、等下次启动）互补：用户已经关掉占用进程或
+/// 解除只读时，不必重启应用。
+#[tauri::command]
+pub fn run_live_reapply_now(
+    state: State<'_, crate::store::AppState>,
+) -> Result<Vec<String>, String> {
+    crate::services::provider::reapply_live_after_migration(&state).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn retry_live_reapply(state: State<'_, crate::store::AppState>) -> Result<(), String> {
     state

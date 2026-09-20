@@ -560,12 +560,8 @@ pub(crate) fn preflight_codex_live_write_for_state(
     // produces, or a key-in-store legacy shape is mis-refused here. The
     // injection is gated on the store actually holding the key, so a
     // keyless provider keeps the fail-closed fallback gate.
-    let has_store_key = futures::executor::block_on(state.secrets.retrieve(
-        &crate::secrets::SecretTarget::provider_api_key(AppType::Codex, provider.id.clone()),
-    ))
-    .ok()
-    .flatten()
-    .is_some();
+    let has_store_key =
+        super::ProviderService::provider_has_stored_key(state, &AppType::Codex, &provider.id)?;
     let config_for_preflight = config_str
         .map(|text| {
             crate::services::provider::codex_sanitizer::sanitize_codex_config_for_live_write_preflight(

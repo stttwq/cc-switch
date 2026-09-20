@@ -1691,6 +1691,10 @@
     "cleanupOrphansDone": "已清理 {count} 條殘留憑證",
     "warningsTitle": "遷移提示（僅列欄位，不含值）：",
     "warnGlobalProxyUrlInvalidated": "原先儲存的全局出站代理位址含使用者名稱/密碼，已依安全策略整條作廢，請在「設定 → 全域代理」中重新填寫（不要再帶認證資訊）。",
-    "warnGeminiNativeApiFormat": "原使用 Gemini generateContent 上游格式的供應商已改為 OpenAI Chat Completions（協定轉換已隨本地路由移除），請自行確認其端點是否可用。"
+    "warnGeminiNativeApiFormat": "原使用 Gemini generateContent 上游格式的供應商已改為 OpenAI Chat Completions（協定轉換已隨本地路由移除），請自行確認其端點是否可用。",
+    "livePendingHint": "有 {{count}} 個 live 設定未完成重寫（通常是檔案被佔用或唯讀）",
+    "livePendingRetry": "立即重試",
+    "liveRetryDone": "live 設定已補完",
+    "liveRetryStillFailing": "仍有 live 設定未能重寫，請關閉佔用該檔案的程式後再試"
   }
 }

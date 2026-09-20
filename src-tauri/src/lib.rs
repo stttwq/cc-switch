@@ -1066,6 +1066,8 @@ pub fn run() {
             commands::confirm_secrets_migration,
             commands::list_plaintext_backups,
             commands::delete_plaintext_backups,
+            commands::get_live_reapply_status,
+            commands::run_live_reapply_now,
             commands::retry_live_reapply,
             commands::secrets_cleanup_orphans,
             commands::get_skills_migration_result,

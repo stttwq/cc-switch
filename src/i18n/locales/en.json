@@ -1691,6 +1691,10 @@
     "cleanupOrphansDone": "Removed {count} orphan credential(s)",
     "warningsTitle": "Migration notes (fields only, no values):",
     "warnGlobalProxyUrlInvalidated": "The saved outbound proxy URL contained a username/password and was discarded entirely. Re-enter it under Settings → Global Proxy, without credentials.",
-    "warnGeminiNativeApiFormat": "Providers that used the Gemini generateContent upstream format were reset to OpenAI Chat Completions; format conversion no longer ships, so please verify their endpoints."
+    "warnGeminiNativeApiFormat": "Providers that used the Gemini generateContent upstream format were reset to OpenAI Chat Completions; format conversion no longer ships, so please verify their endpoints.",
+    "livePendingHint": "{{count}} live configuration(s) failed to rewrite (file usually locked or read-only)",
+    "livePendingRetry": "Retry now",
+    "liveRetryDone": "Live configurations rewritten",
+    "liveRetryStillFailing": "Some live configurations still failed; close the program holding the file and retry"
   }
 }

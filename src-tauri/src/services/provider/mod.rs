@@ -46,6 +46,10 @@ pub fn reapply_pi_live(state: &AppState) -> Result<usize, AppError> {
 pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, AppError> {
     let mut failures: Vec<String> = Vec::new();
 
+    // 缺陷 D-4：回滚到旧版再升级时，注册表里还留着上一轮投递的变量，而恢复出来的旧库
+    // 没有 `managed_env_vars` 登记，冲突检测会判成 foreign 并永久拒写。
+    ProviderService::adopt_unregistered_managed_env(state)?;
+
     for app_type in [AppType::Claude, AppType::Codex] {
         match crate::settings::get_effective_current_provider(&state.db, &app_type) {
             Ok(Some(id)) => match ProviderService::switch(state, app_type.clone(), &id) {
@@ -324,6 +328,11 @@ impl ProviderService {
             return pi::update(state, original_id, provider);
         }
 
+        // 编辑当前供应商会改 live 与环境变量，与切换是同一类互斥操作：按 app 取锁，
+        // 避免与并发切换交错出 `managed_env_vars` 与实际变量不一致的中间态。
+        let _switch_guard =
+            futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+
         let mut provider = provider;
         let original_id = original_id.unwrap_or(provider.id.as_str()).to_string();
         let provider_id_changed = original_id != provider.id;
@@ -403,6 +412,18 @@ impl ProviderService {
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
         strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
+
+        // 缺陷 D-1：编辑当前供应商的密钥后必须按新值重投环境变量，否则 live 里的
+        // `$VAR` 引用与 Codex 的 env_key 仍解析到旧密钥。放在写 DB 之前：投递失败时
+        // DB 与 live 都未改动，用户看到的「保存失败」与实际状态一致。
+        if is_current && Self::provider_has_stored_key(state, &app_type, &provider.id)? {
+            let mut delivered = SwitchResult::default();
+            Self::deliver_env_credentials(state, &app_type, &provider, &mut delivered)?;
+            for warning in &delivered.warnings {
+                log::warn!("编辑当前供应商后重投环境变量的提醒: {warning}");
+            }
+        }
+
         // Save to database
         if let Err(e) = state.db.save_provider(app_type.as_str(), &provider) {
             // §5.4：写 DB 失败 → best-effort 撤掉刚写入的凭据条目，不留孤儿。
@@ -739,6 +760,67 @@ impl ProviderService {
         Self::deliver_env_credentials(state, app_type, provider, result)
     }
 
+    /// 凭据管理器里是否存有该供应商的 `api_key`。投递与 live 写入两侧都要按这个判定：
+    /// 无密钥的官方卡不该因为「投不出值」而失败，有密钥才走间接引用注入。
+    pub(crate) fn provider_has_stored_key(
+        state: &AppState,
+        app_type: &AppType,
+        provider_id: &str,
+    ) -> Result<bool, AppError> {
+        let key = futures::executor::block_on(state.secrets.retrieve(
+            &crate::secrets::SecretTarget::provider_api_key(
+                app_type.clone(),
+                provider_id.to_string(),
+            ),
+        ))?;
+        Ok(key.is_some())
+    }
+
+    /// 缺陷 D-4：把注册表里「按我们的命名规则、但库里没有登记」的用户环境变量认领回来。
+    ///
+    /// 只用于迁移后的 live 自动重写：回滚到旧版再升级时，旧库里没有 `managed_env_vars`，
+    /// 而 `HKCU\Environment` 还留着上一轮投递的值，冲突检测判成 foreign 后每次启动都拒写，
+    /// 用户没有任何出路。手动切换不调用本函数，保留「不许覆盖用户自设同名变量」的保护。
+    pub(crate) fn adopt_unregistered_managed_env(state: &AppState) -> Result<(), AppError> {
+        use crate::env_delivery::ManagedEnvVars;
+
+        let sink = state.env_sink.clone();
+        let mut managed = ManagedEnvVars::load(&state.db)?;
+        let mut adopted: Vec<String> = Vec::new();
+
+        for app_type in [AppType::Claude, AppType::Codex, AppType::Pi] {
+            let Some(id) = crate::settings::get_effective_current_provider(&state.db, &app_type)?
+            else {
+                continue;
+            };
+            let providers = state.db.get_all_providers(app_type.as_str())?;
+            let Some(provider) = providers.get(&id) else {
+                continue;
+            };
+            let mut warnings = Vec::new();
+            let Ok(pending) = Self::provider_env_pairs(state, &app_type, provider, &mut warnings)
+            else {
+                continue;
+            };
+            for (name, _) in pending {
+                if managed.is_managed(&name) || sink.get(&name)?.is_none() {
+                    continue;
+                }
+                managed.register(&name, app_type.as_str(), &id);
+                adopted.push(name);
+            }
+        }
+
+        if adopted.is_empty() {
+            return Ok(());
+        }
+        managed.save(&state.db)?;
+        for name in &adopted {
+            log::warn!("认领上一轮投递的用户环境变量 {name}（回滚后再升级的常见形态）");
+        }
+        Ok(())
+    }
+
     pub(crate) fn preflight_env_delivery(
         state: &AppState,
         app_type: &AppType,
@@ -812,7 +894,13 @@ impl ProviderService {
         for (name, value) in pending {
             // S2：投递给用户环境变量（含 CC_SWITCH_*）的值登记进会话密钥表，
             // 之后任何日志与导出文本命中它都会被脱敏 / 拦下。
-            crate::secrets::scan::note_session_secret(value.as_str());
+            // 缺陷 D-2：Base URL 不是密钥，登记它会让护栏把 `providers.website_url`
+            // 这类合法的官网地址判成泄漏，用户同步被永久拒绝。例外是写成
+            // `https://user:pass@host` 的地址——那种形态本身就含凭据，照旧登记。
+            let holds_credential = !name.ends_with("_BASE_URL") || value.contains('@');
+            if holds_credential {
+                crate::secrets::scan::note_session_secret(value.as_str());
+            }
             sink.set(&name, &value)?;
             managed.register(&name, app_type.as_str(), &provider.id);
         }
@@ -1848,5 +1936,83 @@ mod required_secret_tests {
         .expect("store base url");
         let stored = provider_with("pi-stored", None, json!({"apiKey": "k"}));
         assert!(check(&state, &app, &stored).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod env_adopt_tests {
+    use super::*;
+    use crate::env_delivery::{EnvSink, InMemoryEnvSink, ManagedEnvVars};
+    use crate::secrets::{InMemorySecretStore, SecretTarget};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    /// 缺陷 D-4：回滚到旧版再升级时，恢复出来的旧库没有 `managed_env_vars`，
+    /// 而注册表里还留着上一轮投递的值——冲突检测判成 foreign 后每次启动都拒写。
+    /// 自动重写路径必须先认领这些按我们命名规则存在的变量。
+    #[test]
+    fn adopt_registers_leftover_names_that_conflict() {
+        let mut state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            Arc::new(InMemorySecretStore::new()),
+        );
+        let sink = InMemoryEnvSink::default();
+        state.env_sink = Arc::new(sink.clone());
+
+        let provider = Provider::from_parts(
+            "old".to_string(),
+            "Old".to_string(),
+            json!({ "env": {} }),
+            None,
+        );
+        state
+            .db
+            .save_provider("claude", &provider)
+            .expect("save provider");
+        state
+            .db
+            .set_current_provider("claude", "old")
+            .expect("set current");
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_api_key(AppType::Claude, "old".to_string()),
+            "fresh-key",
+        ))
+        .expect("store key");
+
+        // 上一轮投递残留：同名变量已在注册表里，且值与当前凭据不同。
+        let leftover = zeroize::Zeroizing::new("stale-key".to_string());
+        sink.set("ANTHROPIC_AUTH_TOKEN", &leftover)
+            .expect("seed leftover");
+
+        let managed = ManagedEnvVars::load(&state.db).expect("load managed");
+        assert!(
+            !managed.is_managed("ANTHROPIC_AUTH_TOKEN"),
+            "前置条件：旧库里没有该登记，投递会被判成冲突"
+        );
+        let pending = vec![(
+            "ANTHROPIC_AUTH_TOKEN".to_string(),
+            zeroize::Zeroizing::new("fresh-key".to_string()),
+        )];
+        assert!(
+            ProviderService::reject_if_env_conflicts(&state, &AppType::Claude, &pending).is_err(),
+            "认领之前必须确实复现出 foreign 冲突"
+        );
+
+        ProviderService::adopt_unregistered_managed_env(&state).expect("adopt");
+
+        let managed = ManagedEnvVars::load(&state.db).expect("reload managed");
+        assert!(
+            managed.is_managed("ANTHROPIC_AUTH_TOKEN"),
+            "认领后应把变量归属登记到当前供应商"
+        );
+        assert_eq!(
+            managed.vars_for_provider("claude", "old"),
+            vec!["ANTHROPIC_AUTH_TOKEN".to_string()],
+            "登记的归属要落在真正投递它的供应商上，删除时才知道收回"
+        );
+        assert!(
+            ProviderService::reject_if_env_conflicts(&state, &AppType::Claude, &pending).is_ok(),
+            "认领之后同一轮投递不再被拒"
+        );
     }
 }

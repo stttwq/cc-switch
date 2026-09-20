@@ -5,6 +5,17 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.1] - 2026-09-20
+
+Fixes from the first real-machine upgrade rehearsal (3.20.3 → 2.0.0), recorded in `docs/plans/secrets-slimdown-acceptance-zh.md`.
+
+### Fixed
+
+- **Editing the provider you are currently using now takes effect immediately.** Credentials were delivered to `HKCU\Environment` only when switching providers, so saving a new key or base URL on the active card left Claude Code, Codex and Pi reading the previous key. The save path re-delivers now — before anything is written to the database, so a failed delivery no longer leaves a card that says "save failed" while actually being half-saved.
+- **Cloud sync is no longer refused by the export guard.** Base URLs were registered among "secrets seen this session", so any payload mentioning the same domain as a provider's website was rejected with 「导出护栏拒绝」. A URL that embeds `user:password@` is still treated as a secret.
+- **Re-upgrading after a rollback no longer deadlocks.** With the pre-migration database restored, the environment variables left by the previous install were judged foreign and refused, so the live rewrite failed on every launch and the dialog blamed a running CLI. The rewrite step now adopts variables that follow our own naming before it delivers.
+- **Outstanding live rewrites are visible after the migration dialog is dismissed.** That one-time dialog was the only place reporting them. Settings → Advanced → Credential Manager maintenance now lists the pending rewrites with their reasons and offers a retry that runs immediately instead of waiting for the next launch.
+
 ## [2.0.0] - 2026-09-19
 
 **This is a breaking release.** It removes the local router, six of the nine supported apps, the auto-updater and every form of plaintext credential storage. Existing installations migrate automatically on first launch, but the shape of the product changes: cc-switch no longer proxies requests, no longer stores keys on disk, and no longer builds for macOS or Linux.

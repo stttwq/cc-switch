@@ -120,6 +120,19 @@ pub(super) fn update(
     let live_config = provider.settings_config.clone();
     strip_and_store_pi_secrets(state, &mut provider)?;
 
+    // 缺陷 D-1：live 节点只留 `$CC_SWITCH_PI_<ID>_API_KEY` 引用，编辑密钥后不重投该变量
+    // 就会继续解析到旧 key。次序沿用 enable：②投变量 → ③写节点；节点本就不在 models.json
+    // （未启用）时不投，免得留下无人引用的变量。
+    if crate::pi_config::pi_provider_exists(&original_id)?
+        && ProviderService::provider_has_stored_key(state, &app_type, &provider.id)?
+    {
+        let mut delivered = SwitchResult::default();
+        ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut delivered)?;
+        for warning in &delivered.warnings {
+            log::warn!("编辑 Pi 供应商后重投环境变量的提醒: {warning}");
+        }
+    }
+
     let previous_native =
         crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config)?;
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {

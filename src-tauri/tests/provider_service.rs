@@ -1996,3 +1996,248 @@ fn switch_claude_delivers_env_vars_and_registers_ownership() {
         "切走后 B 不再拥有任何用户环境变量"
     );
 }
+
+/// 缺陷 D-1（2026-09-20 真机 3.20.3→2.0.0 升级验收复现）：编辑**当前**供应商的密钥与
+/// Base URL 后，凭据管理器已是新值，但投出去的用户环境变量仍是旧值 —— 投递只挂在切换
+/// 路径上。CLI 读的是环境变量，用户侧症状就是"换了 key 不生效"。
+#[test]
+fn update_current_claude_redelivers_env_vars() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "a".to_string();
+        manager.providers.insert(
+            "a".to_string(),
+            Provider::from_parts(
+                "a".to_string(),
+                "A".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a", "ANTHROPIC_BASE_URL": "https://a.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+
+    ProviderService::switch(&state, AppType::Claude, "a").expect("让 A 完成首次投递");
+    assert_eq!(
+        sink.snapshot()
+            .get("ANTHROPIC_AUTH_TOKEN")
+            .map(String::as_str),
+        Some("key-a"),
+        "前置条件：切换已把 A 的密钥投出去"
+    );
+
+    let edited = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a-new", "ANTHROPIC_BASE_URL": "https://new.example.com" } }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Claude, Some("a"), edited).expect("编辑当前供应商");
+
+    let delivered = sink.snapshot();
+    assert_eq!(
+        delivered.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        Some("key-a-new"),
+        "编辑当前供应商后必须按新值重投密钥，实际快照: {delivered:?}"
+    );
+    assert_eq!(
+        delivered.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("https://new.example.com"),
+        "Base URL 同理必须重投，实际快照: {delivered:?}"
+    );
+
+    let managed = ManagedEnvVars::load(&state.db).expect("read managed_env_vars");
+    assert_eq!(
+        managed.vars_for_provider("claude", "a").len(),
+        2,
+        "重投后所有权登记仍归 A，否则删除供应商时会漏收变量"
+    );
+}
+
+/// 缺陷 D-1 的 Pi 面：Pi 的 live 节点只写 `$CC_SWITCH_PI_<ID>_API_KEY` 引用，编辑密钥后
+/// 若不重投该变量，节点仍解析到旧 key（真机表现为"换了站点与 key 后不生效"）。
+/// 顺带钉住两条既有不变量：live 节点只留变量引用、baseUrl 随编辑刷新。
+#[test]
+fn update_current_pi_redelivers_env_vars() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut state = create_test_state().expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+    let var = "CC_SWITCH_PI_JUN_API_KEY";
+
+    ProviderService::add(
+        &state,
+        AppType::Pi,
+        Provider::from_parts(
+            "jun".to_string(),
+            "Jun".to_string(),
+            json!({
+                "name": "Jun",
+                "api": "openai-responses",
+                "baseUrl": "https://old.example.com",
+                "apiKey": "key-old",
+                "models": [{ "id": "m1" }]
+            }),
+            None,
+        ),
+        true,
+    )
+    .expect("新增并启用 jun");
+
+    ProviderService::switch(&state, AppType::Pi, "jun").expect("启用 jun 完成首次投递");
+    assert_eq!(
+        sink.snapshot().get(var).map(String::as_str),
+        Some("key-old"),
+        "前置条件：启用路径已把旧密钥投成变量"
+    );
+
+    let edited = Provider::from_parts(
+        "jun".to_string(),
+        "Jun".to_string(),
+        json!({
+            "name": "Jun",
+            "api": "openai-responses",
+            "baseUrl": "https://new.example.com",
+            "apiKey": "key-new",
+            "models": [{ "id": "m1" }]
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Pi, Some("jun"), edited).expect("编辑当前 Pi 供应商");
+
+    assert_eq!(
+        sink.snapshot().get(var).map(String::as_str),
+        Some("key-new"),
+        "编辑后必须按新值重投该变量，实际快照: {:?}",
+        sink.snapshot()
+    );
+
+    let models = _home.join(".pi").join("agent").join("models.json");
+    let text = std::fs::read_to_string(&models).expect("读 models.json");
+    let doc: serde_json::Value = serde_json::from_str(&text).expect("解析 models.json");
+    assert_eq!(
+        doc["providers"]["jun"]["apiKey"].as_str(),
+        Some("$CC_SWITCH_PI_JUN_API_KEY"),
+        "live 节点只留变量引用，明文密钥不得落盘"
+    );
+    assert_eq!(
+        doc["providers"]["jun"]["baseUrl"].as_str(),
+        Some("https://new.example.com"),
+        "baseUrl 应随编辑刷新到 live 节点"
+    );
+}
+
+/// 缺陷 D-1 的 Codex 面：live 的 `env_key = "CC_SWITCH_CODEX_API_KEY"` 指向用户环境变量，
+/// 编辑密钥后不重投就让 Codex CLI 一直用旧 key。
+#[test]
+fn update_current_codex_redelivers_env_vars() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Codex)
+            .expect("codex manager");
+        manager.current = "cx".to_string();
+        manager.providers.insert(
+            "cx".to_string(),
+            Provider::from_parts(
+                "cx".to_string(),
+                "CX".to_string(),
+                json!({
+                    "auth": { "OPENAI_API_KEY": "key-old" },
+                    "config": "[model_providers.cx]\nbase_url = \"https://old.example.com/v1\"\n"
+                }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+    let var = "CC_SWITCH_CODEX_API_KEY";
+
+    ProviderService::switch(&state, AppType::Codex, "cx").expect("切换完成首次投递");
+    assert_eq!(
+        sink.snapshot().get(var).map(String::as_str),
+        Some("key-old"),
+        "前置条件：切换已把旧密钥投出去"
+    );
+
+    let edited = Provider::from_parts(
+        "cx".to_string(),
+        "CX".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-new" },
+            "config": "[model_providers.cx]\nbase_url = \"https://new.example.com/v1\"\n"
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Codex, Some("cx"), edited)
+        .expect("编辑当前 Codex 供应商");
+
+    assert_eq!(
+        sink.snapshot().get(var).map(String::as_str),
+        Some("key-new"),
+        "编辑当前供应商后必须按新值重投，实际快照: {:?}",
+        sink.snapshot()
+    );
+}
+
+/// 缺陷 D-2（2026-09-20 真机第 15 步复现）：投递时把 `ANTHROPIC_BASE_URL` 也登记成
+/// "本次会话已知密钥"，导出护栏于是按字面量拦下任何含该域名的文本。供应商官网地址
+/// （`providers.website_url`）与 Base URL 同域是常态，结果就是同步上传被永久拒绝：
+/// "导出护栏拒绝: 导出文本含本次会话写入过凭据管理器的密钥"。
+#[test]
+fn switch_claude_does_not_register_base_url_as_session_secret() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "g".to_string();
+        manager.providers.insert(
+            "g".to_string(),
+            Provider::from_parts(
+                "g".to_string(),
+                "G".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "guard-key-1234567890", "ANTHROPIC_BASE_URL": "https://guard-probe.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    attach_test_env_sink(&mut state);
+
+    ProviderService::switch(&state, AppType::Claude, "g").expect("切换完成投递");
+
+    let snapshot = cc_switch_lib::secrets::scan::session_secret_snapshot();
+    assert!(
+        snapshot.iter().any(|v| v == "guard-key-1234567890"),
+        "密钥必须登记，导出护栏才有字面量兜底"
+    );
+    assert!(
+        !snapshot
+            .iter()
+            .any(|v| v == "https://guard-probe.example.com"),
+        "Base URL 不是密钥：登记它会让护栏把合法的官网地址误判成泄漏"
+    );
+}
