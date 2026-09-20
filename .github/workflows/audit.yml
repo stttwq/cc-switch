@@ -25,8 +25,10 @@ jobs:
         with:
           tool: cargo-deny
       - name: Advisories (RustSec)
+        working-directory: src-tauri
         run: cargo deny check advisories
       - name: Licenses & bans (report only)
+        working-directory: src-tauri
         continue-on-error: true
         run: cargo deny check licenses bans
 

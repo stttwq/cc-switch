@@ -11,6 +11,11 @@ unmaintained = "workspace"
 yanked = "deny"
 ignore = [
     # 例：{ id = "RUSTSEC-0000-0000", reason = "上游 Tauri 插件传递依赖，等待其升级" }
+    # 仅非 Windows 目标的传递依赖（zip 等）会引入 quick-xml；C5 之后发布的
+    # Windows 二进制依赖树里不含 quick-xml（cargo tree -e no-dev | grep quick-xml = 0），
+    # 属 Cargo.lock 的跨平台残留。待上游把依赖升到 quick-xml >=0.41 后移除本豁免。
+    { id = "RUSTSEC-2026-0194", reason = "quick-xml 不在 Windows 发布目标依赖树，纯跨平台 lock 残留" },
+    { id = "RUSTSEC-2026-0195", reason = "quick-xml 不在 Windows 发布目标依赖树，纯跨平台 lock 残留" },
 ]
 
 [licenses]
@@ -31,6 +36,7 @@ allow = [
     "BSL-1.0",
     "MIT-0",
     "Python-2.0",
+    "CDLA-Permissive-2.0",
 ]
 
 [[licenses.clarify]]
