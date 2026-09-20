@@ -178,12 +178,34 @@ jobs:
           }
 
       - name: Secret scan (fixture literals outside the fixture home)
-        # 夹具本身按设计含明文，故豁免 fixtures/v18-home；其余任何位置出现夹具字面量
-        # 都说明密钥被复制进了源码或产物。
+        # 夹具本身按设计含明文，所以豁免范围要覆盖"定义 / 消费夹具的地方"，其余任何位置
+        # 出现夹具字面量都说明密钥被复制进了源码。
+        #   src-tauri\tests                    —— 夹具 home、v18-plaintext.db、生成器与消费它的集成测试
+        #   src-tauri\src\secrets\extractor.rs —— 该文件的 #[cfg(test)] 单测直接引用夹具字面量
+        #   scripts\secret-scan.ps1            —— 字面量清单本身
+        #   docs\plans                         —— 设计文档引用夹具字面量作说明（不是源码也不是产物）
+        #   src-tauri\target / dist / node_modules / .git —— 构建产物与版本库，不是"源码"
+        #   .workbuddy-ai                      —— 本地 AI 工作记录，被 .git/info/exclude 忽略、
+        #                                         永远不会进 CI；列出来是为了让同一条命令在本地也能通过
+        # 两点说明：
+        # 1. src-tauri\target 里唯一会命中夹具字面量的是 Rust 测试二进制（字面量按设计编进去），
+        #    而本 fork 的 target 目录本机就有 55 GB / 39064 个文件——扫它只有误报，没有信号。
+        # 2. 原豁免清单只写了 fixtures\v18-home，漏了 v18-plaintext.db、fixture_v18.rs、
+        #    migration_v18_cold_start.rs、extractor.rs、计划文档这 5 处，一旦跑到必然 FAIL。
+        #    由于 concurrency 的 cancel-in-progress，这一步此前从未跑完过，问题一直被掩盖。
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          & scripts/secret-scan.ps1 -Path . -Allow "src-tauri\tests\fixtures\v18-home", "scripts\secret-scan.ps1", ".git"
+          & scripts/secret-scan.ps1 -Path . -Allow `
+            "src-tauri\tests", `
+            "src-tauri\src\secrets\extractor.rs", `
+            "scripts\secret-scan.ps1", `
+            "docs\plans", `
+            "src-tauri\target", `
+            "dist", `
+            "node_modules", `
+            ".workbuddy-ai", `
+            ".git"
           if ($LASTEXITCODE -ne 0) {
             Write-Error "secret-scan found fixture literals outside the fixture home"
             exit 1

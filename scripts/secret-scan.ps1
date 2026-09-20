@@ -35,22 +35,23 @@ $allowFull = $Allow | ForEach-Object { Join-Path $fullPath $_ }
 $hits = 0
 Get-ChildItem -LiteralPath $fullPath -Recurse -File -Force | ForEach-Object {
     $file = $_.FullName
+    $skip = $false
     foreach ($a in $allowFull) {
-        if ($file.StartsWith($a, [System.StringComparison]::OrdinalIgnoreCase)) { return }
+        if ($file.StartsWith($a, [System.StringComparison]::OrdinalIgnoreCase)) { $skip = $true; break }
     }
-    $bytes = [System.IO.File]::ReadAllBytes($file)
+    if ($skip) { return }
+
+    # Decode once and use .NET's ordinal substring search instead of a hand-written
+    # byte-by-byte double loop. The old version cost ~14 s/MB on this machine, which
+    # made scanning a repo (let alone one containing build output) take tens of minutes.
+    #
+    # Byte-for-byte equivalence: every literal above is pure ASCII, and ASCII bytes
+    # decode to themselves in UTF-8 regardless of surrounding bytes (a continuation
+    # byte can never be < 0x80). Invalid sequences only ever decode to U+FFFD, which
+    # is non-ASCII, so this can neither miss a literal nor invent one.
+    $text = [System.Text.Encoding]::UTF8.GetString([System.IO.File]::ReadAllBytes($file))
     foreach ($lit in $Literals.Keys) {
-        $needle = [System.Text.Encoding]::UTF8.GetBytes($lit)
-        if ($bytes.Length -lt $needle.Length) { continue }
-        $found = $false
-        for ($i = 0; $i -le $bytes.Length - $needle.Length; $i++) {
-            $ok = $true
-            for ($j = 0; $j -lt $needle.Length; $j++) {
-                if ($bytes[$i + $j] -ne $needle[$j]) { $ok = $false; break }
-            }
-            if ($ok) { $found = $true; break }
-        }
-        if ($found) {
+        if ($text.Contains($lit)) {
             Write-Host "SECRET HIT: $($Literals[$lit]) ($lit) in $file"
             $script:hits++
         }
