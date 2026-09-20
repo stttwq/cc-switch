@@ -10,12 +10,12 @@ body:
       label: Self Checks / 自检
       options:
         - label: |
-            I have read the [FAQ](https://github.com/farion1231/cc-switch#faq) section in README.
-            我已阅读 README 中的[常见问题](https://github.com/farion1231/cc-switch#常见问题)。
+            I have read the [FAQ](https://github.com/stttwq/cc-switch#常见问题) section in README.
+            我已阅读 README 中的[常见问题](https://github.com/stttwq/cc-switch#常见问题)。
           required: true
         - label: |
-            I have searched for [existing issues](https://github.com/farion1231/cc-switch/issues), including closed ones.
-            我已搜索过[已有的 Issue](https://github.com/farion1231/cc-switch/issues)，包括已关闭的。
+            I have searched for [existing issues](https://github.com/stttwq/cc-switch/issues), including closed ones.
+            我已搜索过[已有的 Issue](https://github.com/stttwq/cc-switch/issues)，包括已关闭的。
           required: true
 
   - type: input
@@ -24,7 +24,7 @@ body:
       description: |
         See the Settings page in the app.
         查看应用设置页面中的版本号。
-      placeholder: "e.g. 3.11.1"
+      placeholder: "e.g. 2.0.2"
     validations:
       required: true
 
@@ -33,9 +33,8 @@ body:
       label: Operating System / 操作系统
       multiple: false
       options:
-        - Windows
-        - macOS
-        - Linux
+        - Windows 10
+        - Windows 11
     validations:
       required: true
 

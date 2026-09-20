@@ -6,9 +6,9 @@
 # each other's malicious PRs (a single non-owner approval is no longer enough).
 
 # Global fallback: every PR needs owner approval before merging to main.
-*                 @farion1231
+*                 @stttwq
 
 # Most sensitive paths — CI/signing/release and the Rust backend. Listed
 # explicitly so they stay locked even if the global rule above is relaxed later.
-/.github/         @farion1231
-/src-tauri/       @farion1231
+/.github/         @stttwq
+/src-tauri/       @stttwq

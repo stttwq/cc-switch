@@ -73,9 +73,7 @@ gh release create "$TAG" "$UP" \
   --latest \
   --notes "## CC Switch $TAG
 
-🌐 **唯一官方网站**: [ccswitch.io](https://ccswitch.io)
-
-Claude Code 供应商切换工具
+Claude Code、Codex 与 Pi 的供应商切换工具（Windows 专版）。
 
 ### 下载
 

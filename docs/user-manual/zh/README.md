@@ -84,23 +84,23 @@
 
 ## 版本信息
 
-- 文档版本：v3.16.0
-- 最后更新：2026-05-29
-- 适用于 CC Switch v3.16.0+
+- 文档版本：v2.0.2
+- 最后更新：2026-09-20
+- 适用于 CC Switch v2.0.0 及以上
 
-### v3.16.0 亮点
+### 2.0.0 关键变化
 
-- **Codex Chat Completions 供应商**：百度千帆、StepFun、SiliconFlow 等仅支持 Chat 协议的供应商可通过 Codex 使用 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
-- **托管 CLI 工具生命周期**：在设置 / 关于页安装、升级、全部升级并诊断 Claude / Codex / Pi — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
-- **供应商与模型矩阵刷新**：新增合作方预设，刷新默认模型与计费矩阵，Claude Opus 默认升级到 4.8，适用场景下 GPT 默认升级到 5.5
-- **轻量模式**：退出到托盘时销毁主窗口，空闲占用接近零 — 详见 [1.5 个性化配置](./1-getting-started/1.5-settings.md)
-- **托盘按应用分级菜单**：Claude / Codex / Pi 独立子菜单，标题展示当前供应商 — 详见 [2.2 切换供应商](./2-providers/2.2-switch.md)
-- **Skills 发现与批量更新**：SHA-256 更新检测、批量更新、skills.sh 公共注册表搜索 — 详见 [3.3 Skills 技能管理](./3-extensions/3.3-skills.md)
-- **完整 URL 端点模式**：高级选项支持将 base_url 视作完整上游端点 — 详见 [2.1 添加供应商](./2-providers/2.1-add.md)
+本 Windows 专版分支相对上游 3.x 的主要变化（完整清单见根目录 [`CHANGELOG.md`](../../../CHANGELOG.md)）：
+
+- **凭据全部进 Windows 凭据管理器**：API Key、Base URL、Pi 请求头、同步口令不再以明文写入 SQLite、`settings.json` 或 live 配置文件；切换时通过用户级环境变量投递给 CLI。
+- **移除本地代理、路由与用量看板**：不再监听端口、不再转发请求。
+- **移除六个应用与自动更新**：仅保留 Claude Code、Codex、Pi；不再检查或安装更新，升级请下载新的 Windows 安装包覆盖安装。
+- **仅发布 Windows 版本**：不再提供其他操作系统的构建。
+- **首次启动自动迁移**：旧版明文凭据自动抽取入凭据管理器并重写配置，报告列出迁移项与失败的 live 重写并提供重试。
 
 ## 贡献
 
 欢迎提交 Issue 或 PR 改进文档：
 
-- [GitHub Issues](https://github.com/farion1231/cc-switch/issues)
-- [GitHub Repository](https://github.com/farion1231/cc-switch)
+- [GitHub Issues](https://github.com/stttwq/cc-switch/issues)
+- [GitHub Repository](https://github.com/stttwq/cc-switch)

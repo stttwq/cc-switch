@@ -8,16 +8,7 @@ Pi 会读取 `~/.pi/agent/models.json` 中的 `providers`，并把同名显式�
 
 ## 目标架构
 
-整体行为与 OpenCode 的累加式供应商管理保持一致：
-
-| OpenCode                            | Pi                                  |
-| ----------------------------------- | ----------------------------------- |
-| `opencode.json.provider`            | `models.json.providers`             |
-| 显式 provider 同步为 CC Switch 卡片 | 显式 provider 同步为 CC Switch 卡片 |
-| `/connect` 认证由 OpenCode 管理     | `/login` 与 `auth.json` 由 Pi 管理  |
-| 添加和移除 provider 节点            | 启用和移除 provider 节点            |
-| 数据库保留未添加供应商              | 数据库保留未启用供应商              |
-| 不管理当前供应商                    | 不管理默认供应商和默认模型          |
+整体沿用累加式供应商管理：显式 provider 节点同步为 CC Switch 卡片、启停即增删 provider 节点、数据库保留未启用供应商、不管理 Pi 默认供应商与默认模型，认证由 Pi 自身的 `/login` 与 `auth.json` 负责。（早期设计曾参考 OpenCode，该应用已随 2.0.0 从本项目移除，此处仅作历史出处，不构成当前依赖。）
 
 Pi 额外需要支持同名内置供应商的显式覆盖：只要供应商节点存在于 `models.json.providers`，无论 ID 是否为 `anthropic`、`openai`、`deepseek` 或其他 Pi 内置 ID，都必须按普通显式供应商处理。
 
@@ -29,7 +20,7 @@ Pi 额外需要支持同名内置供应商的显式覆盖：只要供应商节�
 - 数据库中已有记录时，用 Pi 当前的显式配置同步对应记录。
 - provider 节点存在于 `models.json` 时，卡片显示为已启用。
 - provider 只存在于 CC Switch 数据库时，卡片保留并显示为未启用。
-- 已启用卡片沿用 OpenCode 的蓝色高亮。
+- 已启用卡片沿用蓝色高亮。
 - 外部修改 `models.json` 后，刷新供应商页面即自动同步，不要求二次确认。
 - 不再出现“不是 CC Switch 管理的值”或“配置刚发生变化，请确认后重试”等 ownership 冲突提示。
 - `PI_BUILTIN_PROVIDER_KEYS` 或等价集合不能参与配置归属判断，也不能用于跳过 live provider 同步。
@@ -82,7 +73,7 @@ Pi 额外需要支持同名内置供应商的显式覆盖：只要供应商节�
 
 ## 实现范围
 
-优先复用 OpenCode 已有能力：
+优先复用累加式供应商管理的既有能力：
 
 - live provider 导入与 upsert；
 - 累加模式下的启用和移除；

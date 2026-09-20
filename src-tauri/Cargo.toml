@@ -4,7 +4,7 @@ version = "2.0.2"
 description = "The All-in-One Manager for Claude Code, Codex & Pi"
 authors = ["Jason Young"]
 license = "MIT"
-repository = "https://github.com/farion1231/cc-switch"
+repository = "https://github.com/stttwq/cc-switch"
 edition = "2021"
 rust-version = "1.85.0"
 
@@ -62,16 +62,8 @@ keyring = { version = "3", default-features = false, features = ["windows-native
 zeroize = "1"
 async-trait = "0.1"
 
-[target.'cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))'.dependencies]
+[target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"
-
-[target.'cfg(target_os = "linux")'.dependencies]
-webkit2gtk = { version = "2.0.1", features = ["v2_16"] }
-
-[target.'cfg(not(target_os = "windows"))'.dependencies]
-libc = "0.2"
-
-[target.'cfg(target_os = "windows")'.dependencies]
 winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Globalization",
@@ -80,11 +72,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
-[target.'cfg(target_os = "macos")'.dependencies]
-objc2 = "0.5"
-objc2-app-kit = { version = "0.2", features = ["NSColor"] }
-
-# Optimize release binary size to help reduce AppImage footprint
+# Optimize release binary size for the Windows MSI
 [profile.release]
 codegen-units = 1
 lto = "thin"

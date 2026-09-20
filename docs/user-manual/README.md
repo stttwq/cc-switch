@@ -1,22 +1,17 @@
-# CC Switch User Manual / 用户手册 / ユーザーマニュアル
+# CC Switch 用户手册
 
-> Claude Code / Codex / Pi
+> Claude Code / Codex / Pi —— Windows 专版
 
-## Language / 语言 / 言語
+## 语言
 
-| Language | Link |
-|----------|------|
-| [中文](./zh/README.md) | 简体中文用户手册 |
-| [English](./en/README.md) | English User Manual |
-| [日本語](./ja/README.md) | 日本語ユーザーマニュアル |
+本分支的用户手册只提供简体中文版本（[中文用户手册](./zh/README.md)）。界面文案仍支持简中 / 繁中 / 英 / 日四语，但文档不再多语维护。
 
-## Version / 版本 / バージョン
+## 版本
 
-- Documentation version: v3.16.0
-- Last updated: 2026-05-29
-- Compatible with CC Switch v3.16.0+
+- 文档版本：v2.0.2
+- 适用于 CC Switch v2.0.0 及以上
 
-## Links
+## 链接
 
-- [GitHub Issues](https://github.com/farion1231/cc-switch/issues)
-- [GitHub Repository](https://github.com/farion1231/cc-switch)
+- [GitHub Issues](https://github.com/stttwq/cc-switch/issues)
+- [GitHub 仓库](https://github.com/stttwq/cc-switch)

@@ -21,11 +21,9 @@ Pi 界面必须同时满足两类用户：
 
 ## 2. 设计来源与家族化原则
 
-Pi 不建立独立设计系统。交互参考顺序如下：
+Pi 不建立独立设计系统。交互优先复用 CC Switch 现有的供应商表单、请求头、配置 JSON、卡片与操作按钮的视觉语言（与 Claude Code、Codex 同源）。
 
-1. OpenCode：供应商是可累加配置，最接近 Pi 的供应商管理方式。
-2. Hermes：模型详情、可选能力和原生设置的渐进展示。
-3. Claude Code、Codex：供应商表单、请求头、配置 JSON、卡片和操作按钮的视觉语言。
+> 历史设计参考：早期设计曾对照 OpenCode（累加式供应商管理）与 Hermes（模型详情、可选能力与原生设置的渐进展示），二者已随 2.0.0 从本项目移除，此处仅作历史出处，不构成当前依赖。
 
 应该复用现有的 `ProviderPresetSelector`、`BasicFormFields`、`ApiKeySection`、`EndpointField`、`RequestHeadersEditor`、`JsonEditor`、供应商卡片、图标、分类与合作伙伴排序。只有 Pi 原生语义无法用现有组件表达时，才增加 Pi 专用组件。
 
@@ -264,7 +262,7 @@ Pi Packages、Extensions 与 Themes 由 Pi 原生管理，当前不进入 CC Swi
 
 四项都满足才进入默认界面。Pi 原生但罕见的字段优先透传；需要专业用户偶尔修改的字段可以进入渐进区域；不属于 CC Switch 或缺少可靠后端支持的能力不进入 UI。
 
-参考 OpenCode 或 Hermes 时只复用相同问题的成熟交互。不能因为另一个应用有某个字段，就假设 Pi 也需要。
+参考历史设计（如已移除的 OpenCode / Hermes）时只复用相同问题的成熟交互。不能因为另一个应用有某个字段，就假设 Pi 也需要。
 
 ## 9. 错误处理与安全
 

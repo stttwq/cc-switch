@@ -13,8 +13,6 @@ mod env_delivery;
 mod error;
 mod init_status;
 mod lightweight;
-#[cfg(target_os = "linux")]
-mod linux_fix;
 mod mcp;
 mod panic_hook;
 mod pi_config;
@@ -260,10 +258,6 @@ pub fn run() {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    linux_fix::nudge_main_window(window.clone());
-                }
             }
         }));
     }
@@ -1029,14 +1023,6 @@ pub fn run() {
                     log::info!("正常启动模式：等待主页面加载完成后显示主窗口");
                     #[cfg(not(target_os = "windows"))]
                     log::info!("正常启动模式：主窗口已显示");
-
-                    // Linux: 解决首次启动 UI 无响应问题（Tauri #10746 + wry #637）。
-                    // 启动时 webview 未获取焦点 + surface 尺寸协商失败，导致点击无效。
-                    // 这里做 set_focus + 伪 resize，等价于无视觉版本的"最大化-还原"。
-                    #[cfg(target_os = "linux")]
-                    {
-                        linux_fix::nudge_main_window(window.clone());
-                    }
                 }
             }
 

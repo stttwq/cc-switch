@@ -303,7 +303,6 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 
 ### 最简单的方式：用文件管理器直接打开（完全不用命令行）
 
-- **macOS（Finder）**：按 `Cmd + Shift + G`，粘贴 `~/.codex/sessions` 回车，就能看到一堆 `.jsonl` 会话文件和它们的修改时间；备份目录粘贴 `~/.cc-switch/backups`。
 - **Windows（文件资源管理器）**：在地址栏粘贴 `%USERPROFILE%\.codex\sessions` 回车，就能看到会话文件夹和里面的 `.jsonl`；备份目录粘贴 `%USERPROFILE%\.cc-switch\backups`。
 
 **只要你能在这里看到一批 `.jsonl` 文件，就证明会话数据完好无损地在硬盘上。** 文件数量、修改时间，比任何文字都直观。
@@ -319,61 +318,6 @@ Codex 自己按"供应商标签"（一个叫 `model_provider` 的字段）给会
 | **还原备份**（点还原时自动产生） | `~/.cc-switch/backups/codex-official-history-unify-restore-v1/<时间戳>/` | 还原前的安全副本 |
 
 > **注意**：如果你在 CC Switch 里改过 Codex 目录，或在 `config.toml` 里设了 `sqlite_home`，请把上面的 `~/.codex` 换成你的实际目录。下文 `~` = 你的用户主目录。
-
-### macOS / Linux 命令
-
-**1. 数会话文件总数（这才是"没丢"的硬证据）**
-
-```bash
-# 统计会话文件总数 —— 只要这个数字符合你的预期，数据就都在
-find ~/.codex/sessions ~/.codex/archived_sessions -name '*.jsonl' 2>/dev/null | wc -l
-
-# 看最近修改的 10 个会话文件
-find ~/.codex/sessions -name '*.jsonl' 2>/dev/null -print0 \
-  | xargs -0 ls -lt 2>/dev/null | head -10
-```
-
-**2. （辅助）看每个"抽屉"各有多少会话**
-
-```bash
-# 官方抽屉（openai）会话文件数
-grep -rlE '"model_provider"[[:space:]]*:[[:space:]]*"openai"' ~/.codex/sessions 2>/dev/null | wc -l
-
-# 统一抽屉（custom）会话文件数
-grep -rlE '"model_provider"[[:space:]]*:[[:space:]]*"custom"' ~/.codex/sessions 2>/dev/null | wc -l
-
-# 看各标签分布一目了然
-grep -rhoE '"model_provider"[[:space:]]*:[[:space:]]*"[^"]*"' ~/.codex/sessions 2>/dev/null | sort | uniq -c
-```
-
-> **重要提示，别被这一步吓到**：**早期版本的 Codex 不在 `.jsonl` 里写 `model_provider` 字段**，这些旧官方会话用上面的 grep 是**数不到**的，但它们在索引库 `state_5.sqlite` 里仍然归类为 `openai`、续聊列表照样能看到。所以**判断"会话没丢"请以第 1 步的文件总数为准**——分桶 grep 只是帮你理解归类，数出来比文件总数少**完全正常**，绝不代表"丢了一批"。
-
-**3. （进阶）查索引库 `state_5.sqlite`——续聊列表真正读的归类**
-
-```bash
-# 需要已安装 sqlite3；没装可跳过
-sqlite3 ~/.codex/state_5.sqlite \
-  "SELECT COALESCE(model_provider,'<空>'), COUNT(*) FROM threads GROUP BY 1;"
-```
-
-> 这张 `threads` 表才是 Codex 续聊列表真正读取的归类来源，`openai` 行数 ≈ 你官方抽屉里能看到的会话数。它和第 2 步的 jsonl grep 可能对不上数——原因就是上面说的"旧会话不写 jsonl 字段，但索引库里仍是 openai"。两边对不上不是异常。
-
-**4. 直接读某条会话的内容（确认对话文字还在）**
-
-```bash
-# 把 <文件名> 换成上面 ls 列出的某个 .jsonl 路径
-python3 -m json.tool < "<文件名>.jsonl" 2>/dev/null | head -50
-
-# 或者直接用编辑器打开看（纯文本）
-open -e "<文件名>.jsonl"      # macOS
-```
-
-**5. 看 CC Switch 的备份目录（证明迁移 / 还原前都留了副本）**
-
-```bash
-ls -la ~/.cc-switch/backups/codex-official-history-unify-v1/ 2>/dev/null
-ls -la ~/.cc-switch/backups/codex-official-history-unify-restore-v1/ 2>/dev/null
-```
 
 ### Windows 命令（PowerShell）
 
