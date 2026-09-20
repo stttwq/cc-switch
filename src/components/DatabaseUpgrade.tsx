@@ -5,7 +5,7 @@ import { Database, ExternalLink, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api";
 
-const RELEASES_URL = "https://github.com/farion1231/cc-switch/releases";
+const RELEASES_URL = "https://github.com/stttwq/cc-switch/releases";
 
 interface DatabaseUpgradeProps {
   payload: {

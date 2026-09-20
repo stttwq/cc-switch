@@ -99,6 +99,9 @@ jobs:
       - name: Unit tests
         run: pnpm test:unit
 
+      - name: Check repository links
+        run: node scripts/check-links.mjs
+
   backend:
     name: Backend Checks
     runs-on: ${{ matrix.os }}
