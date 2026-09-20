@@ -1,0 +1,23 @@
+# gitleaks 配置 —— 证明没人往仓库提交真密钥。
+# 职责与 scripts/secret-scan.ps1 不同：后者证明测试夹具里的假密钥没漏进产物，
+# 前者用默认规则集扫真实密钥模式。
+# 由 .github/workflows/audit.yml 调用。
+
+title = "cc-switch gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "测试夹具与扫描脚本本身含有意构造的假密钥字面量，豁免之"
+paths = [
+    '''^src-tauri/tests/fixtures/''',
+    '''^scripts/secret-scan\.ps1$''',
+    '''^docs/plans/''',
+]
+# 这些是夹具里固定的占位串，非真实凭据
+regexes = [
+    '''sk-TEST[a-zA-Z0-9-]+''',
+    '''sk-ant-TEST[a-zA-Z0-9-]+''',
+    '''AKIATESTEXAMPLE''',
+]

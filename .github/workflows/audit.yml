@@ -1,0 +1,57 @@
+name: Dependency & Secret Audit
+
+# 供应链与密钥扫描。每周一定时 + 手动触发。默认只报告、不阻塞主干 CI。
+# 首次跑绿后，可把 advisories 提升为 ci.yml 后端作业的必过项（方案 D3）。
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # 每周一 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: audit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
+        with:
+          tool: cargo-deny
+      - name: Advisories (RustSec)
+        run: cargo deny check advisories
+      - name: Licenses & bans (report only)
+        continue-on-error: true
+        run: cargo deny check licenses bans
+
+  pnpm-audit:
+    name: pnpm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: "20"
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - name: Production dependencies only, high+
+        continue-on-error: true
+        run: pnpm audit --audit-level=high --prod
+
+  gitleaks:
+    name: gitleaks secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+      - name: Scan full history (allowlist in .gitleaks.toml)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

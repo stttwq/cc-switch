@@ -50,6 +50,31 @@ pnpm tauri build
 
 产物在 `src-tauri/target/release/bundle/msi/CC Switch_<版本号>_x64_zh-CN.msi`。装到自己机器上跑一遍，确认「关于」页版本号正确、供应商列表正常、能切换，再往下发。
 
+### 3.5 生成校验清单与 minisign 签名
+
+安装包未做 Authenticode 签名，个人 fork 也不买证书；改用 minisign 让用户验证"这个包确实是维护者发的、且没被篡改"。**首次**需先 `minisign -G` 生成密钥对——私钥只留在发布机、**绝不入库、不发给人**，公钥写进 README 与 SECURITY.md：
+
+```bash
+minisign -G -p ~/minisign.ccswitch.pub -s ~/minisign.ccswitch.key
+```
+
+每次发布对上面的 MSI 生成校验清单并签名：
+
+```bash
+MSI_DIR="src-tauri/target/release/bundle/msi"
+( cd "$MSI_DIR" && \
+  sha256sum CC\ Switch_*_x64_zh-CN.msi > SHA256SUMS && \
+  minisign -S -m SHA256SUMS \
+    -s ~/minisign.ccswitch.key -x SHA256SUMS.minisig -H )
+```
+
+`SHA256SUMS` 与 `SHA256SUMS.minisig` 随第 5 步一起上传。用户侧验证：
+
+```bash
+minisign -Vm SHA256SUMS -p <仓库里的公钥> -x SHA256SUMS.minisig
+sha256sum -c SHA256SUMS
+```
+
 ### 4. 打标签并推送
 
 ```bash
@@ -65,10 +90,12 @@ git push origin "$TAG"      # 只推标签，不会触发云端发布
 
 ```bash
 MSI="src-tauri/target/release/bundle/msi/CC Switch_$(node -p "require('./package.json').version")_x64_zh-CN.msi"
+MSI_DIR="src-tauri/target/release/bundle/msi"
 UP="src-tauri/target/release/CC-Switch-$TAG-Windows.msi"
 cp "$MSI" "$UP"
 
 gh release create "$TAG" "$UP" \
+  "$MSI_DIR/SHA256SUMS" "$MSI_DIR/SHA256SUMS.minisig" \
   --title "CC Switch $TAG" \
   --latest \
   --notes "## CC Switch $TAG
@@ -77,7 +104,8 @@ Claude Code、Codex 与 Pi 的供应商切换工具（Windows 专版）。
 
 ### 下载
 
-- **Windows (x86_64)**: \`CC-Switch-$TAG-Windows.msi\`"
+- **Windows (x86_64)**: \`CC-Switch-$TAG-Windows.msi\`
+- **校验**：\`SHA256SUMS\` 与 minisign 签名 \`SHA256SUMS.minisig\`（公钥见仓库 README / SECURITY.md）。安装包未做代码签名，首次运行 SmartScreen 会提示未知发布者，属正常。"
 ```
 
 预发布版本改加 `--prerelease`，正式版用 `--latest`。GitHub 上显示的产物名取的是文件本身的名字（不是上传参数），所以必须先 `cp` 成 `CC-Switch-<标签>-Windows.msi` 再传。
@@ -93,7 +121,7 @@ gh release view "$TAG"      # 产物名、大小、是否 latest
 别重复 `gh release create`，用 `--clobber` 覆盖同名产物，然后从公开地址回下载比对哈希，确认线上和本地是同一个文件：
 
 ```bash
-gh release upload "$TAG" "$UP" --clobber
+gh release upload "$TAG" "$UP" "$MSI_DIR/SHA256SUMS" "$MSI_DIR/SHA256SUMS.minisig" --clobber
 curl -sL "https://github.com/stttwq/cc-switch/releases/download/$TAG/CC-Switch-$TAG-Windows.msi" | sha256sum
 sha256sum "$UP"             # 两行哈希一致即通过
 ```
