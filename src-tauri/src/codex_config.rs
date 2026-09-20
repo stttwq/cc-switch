@@ -1188,10 +1188,8 @@ fn load_codex_model_template_from_cache() -> Result<Option<Value>, AppError> {
 /// Fixed candidates for locating the `codex` CLI when it is not on the process
 /// PATH (common in GUI apps launched outside a terminal).
 const CODEX_CLI_FIXED_CANDIDATES: &[&str] = &[
-    "codex",                                // PATH (all platforms)
-    "/opt/homebrew/bin/codex",              // macOS Apple Silicon Homebrew
-    "/usr/local/bin/codex",                 // macOS Intel Homebrew / Linux
-    "/home/linuxbrew/.linuxbrew/bin/codex", // Linux Homebrew
+    "codex",     // PATH（Windows 上经 PATHEXT 解析 codex.exe / .cmd / .ps1）
+    "codex.exe", // 显式 .exe
 ];
 
 fn push_codex_cli_candidate(

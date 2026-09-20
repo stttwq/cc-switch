@@ -4245,7 +4245,7 @@ mod tests {
             "user.name/topic",
         ] {
             assert!(
-                SkillService::validate_repo_ref("farion1231", "cc-switch", branch).is_ok(),
+                SkillService::validate_repo_ref("some-user", "some-repo", branch).is_ok(),
                 "must accept branch: {branch:?}"
             );
         }
@@ -4260,7 +4260,7 @@ mod tests {
         // 第一行就 INVALID_REPO_REF，整个技能面板列不出东西——前端两处
         // `repo.branch || "main"` 正是照着"空串可用"写的。
         assert!(
-            SkillService::validate_repo_ref("farion1231", "cc-switch", "").is_ok(),
+            SkillService::validate_repo_ref("some-user", "some-repo", "").is_ok(),
             "the empty-branch sentinel must stay usable"
         );
     }

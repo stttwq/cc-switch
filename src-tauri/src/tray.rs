@@ -501,25 +501,6 @@ pub fn refresh_tray_menu(app: &tauri::AppHandle) {
     }
 }
 
-#[cfg(target_os = "macos")]
-pub fn apply_tray_policy(app: &tauri::AppHandle, dock_visible: bool) {
-    use tauri::ActivationPolicy;
-
-    let desired_policy = if dock_visible {
-        ActivationPolicy::Regular
-    } else {
-        ActivationPolicy::Accessory
-    };
-
-    if let Err(err) = app.set_dock_visibility(dock_visible) {
-        log::warn!("设置 Dock 显示状态失败: {err}");
-    }
-
-    if let Err(err) = app.set_activation_policy(desired_policy) {
-        log::warn!("设置激活策略失败: {err}");
-    }
-}
-
 /// 处理托盘菜单事件
 pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
     log::info!("处理托盘菜单事件: {event_id}");
@@ -534,14 +515,6 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
                 let _ = window.unminimize();
                 let _ = window.show();
                 let _ = window.set_focus();
-                #[cfg(target_os = "linux")]
-                {
-                    crate::linux_fix::nudge_main_window(window.clone());
-                }
-                #[cfg(target_os = "macos")]
-                {
-                    apply_tray_policy(app, true);
-                }
             } else if crate::lightweight::is_lightweight_mode() {
                 if let Err(e) = crate::lightweight::exit_lightweight_mode(app) {
                     log::error!("退出轻量模式重建窗口失败: {e}");
@@ -549,8 +522,11 @@ pub fn handle_tray_menu_event(app: &tauri::AppHandle, event_id: &str) {
             }
         }
         "open_website" => {
-            if let Err(e) = app.opener().open_url("https://ccswitch.io", None::<String>) {
-                log::error!("打开官方网站失败: {e}");
+            if let Err(e) = app
+                .opener()
+                .open_url("https://github.com/stttwq/cc-switch", None::<String>)
+            {
+                log::error!("打开项目主页失败: {e}");
             }
         }
         "lightweight_mode" => {
