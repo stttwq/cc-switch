@@ -14,6 +14,7 @@ paths = [
     '''^src-tauri/tests/fixtures/''',
     '''^scripts/secret-scan\.ps1$''',
     '''^docs/plans/''',
+    '''^minisign\.pub$''',
 ]
 # 这些是夹具里固定的占位串，非真实凭据
 regexes = [

@@ -52,26 +52,31 @@ pnpm tauri build
 
 ### 3.5 生成校验清单与 minisign 签名
 
-安装包未做 Authenticode 签名，个人 fork 也不买证书；改用 minisign 让用户验证"这个包确实是维护者发的、且没被篡改"。**首次**需先 `minisign -G` 生成密钥对——私钥只留在发布机、**绝不入库、不发给人**，公钥写进 README 与 SECURITY.md：
+安装包未做 Authenticode 签名，个人 fork 也不买证书；改用 minisign 让用户验证"这个包确实是维护者发的、且没被篡改"。密钥对**已生成**（一次性），私钥只留在发布机 `D:\GZ\Xlh\minisign.ccswitch.key`、**绝不入库**，公钥已提交为仓库根 [`minisign.pub`](../minisign.pub) 并写进 README 与 SECURITY.md。若日后轮换密钥：
 
 ```bash
-minisign -G -p ~/minisign.ccswitch.pub -s ~/minisign.ccswitch.key
+"D:\GZ\Xlh\minisign-win64\x86_64\minisign.exe" -G \
+  -p D:\GZ\Xlh\minisign.ccswitch.pub -s D:\GZ\Xlh\minisign.ccswitch.key
+# 然后把新的 minisign.ccswitch.pub 覆盖仓库根 minisign.pub 并公告
 ```
 
 每次发布对上面的 MSI 生成校验清单并签名：
 
+每次发布对 MSI 生成校验清单并签名（Git Bash；`SHA256SUMS` 用通配符确保文件名与仓库一致）：
+
 ```bash
+MINISIGN="/d/GZ/Xlh/minisign-win64/x86_64/minisign.exe"
+KEY="/d/GZ/Xlh/minisign.ccswitch.key"
 MSI_DIR="src-tauri/target/release/bundle/msi"
 ( cd "$MSI_DIR" && \
   sha256sum CC\ Switch_*_x64_zh-CN.msi > SHA256SUMS && \
-  minisign -S -m SHA256SUMS \
-    -s ~/minisign.ccswitch.key -x SHA256SUMS.minisig -H )
+  "$MINISIGN" -S -m SHA256SUMS -s "$KEY" -x SHA256SUMS.minisig -H )   # 提示输一次 passcode
 ```
 
-`SHA256SUMS` 与 `SHA256SUMS.minisig` 随第 5 步一起上传。用户侧验证：
+`SHA256SUMS` 与 `SHA256SUMS.minisig` 随第 5 步一起上传。用户侧验证（公钥取本仓库根 `minisign.pub`）：
 
 ```bash
-minisign -Vm SHA256SUMS -p <仓库里的公钥> -x SHA256SUMS.minisig
+minisign -Vm SHA256SUMS -p minisign.pub -x SHA256SUMS.minisig
 sha256sum -c SHA256SUMS
 ```
 
@@ -105,7 +110,7 @@ Claude Code、Codex 与 Pi 的供应商切换工具（Windows 专版）。
 ### 下载
 
 - **Windows (x86_64)**: \`CC-Switch-$TAG-Windows.msi\`
-- **校验**：\`SHA256SUMS\` 与 minisign 签名 \`SHA256SUMS.minisig\`（公钥见仓库 README / SECURITY.md）。安装包未做代码签名，首次运行 SmartScreen 会提示未知发布者，属正常。"
+- **校验**：\`SHA256SUMS\` 与 minisign 签名 \`SHA256SUMS.minisig\`（公钥见仓库根 \`minisign.pub\`）。安装包未做代码签名，首次运行 SmartScreen 会提示未知发布者，属正常。"
 ```
 
 预发布版本改加 `--prerelease`，正式版用 `--latest`。GitHub 上显示的产物名取的是文件本身的名字（不是上传参数），所以必须先 `cp` 成 `CC-Switch-<标签>-Windows.msi` 再传。

@@ -152,7 +152,14 @@ CC Switch 使用“通用配置片段”功能，在不同的供应商之间传�
 
 从 [Releases](https://github.com/stttwq/cc-switch/releases) 页面下载最新版本的 `CC-Switch-v{版本号}-Windows.msi` 安装包。
 
-安装包未经数字签名，Windows SmartScreen 可能弹出"未知发布者"警告——这是正常现象。请核对 Releases 页面随包发布的 `SHA256SUMS` 与 `minisign` 签名，确认下载文件未被篡改后再运行（公钥见 [SECURITY.md](SECURITY.md)）。
+安装包未经数字签名，Windows SmartScreen 可能弹出"未知发布者"警告——这是正常现象。请核对 Releases 页面随包发布的 `SHA256SUMS` 与 `minisign` 签名，确认下载文件未被篡改后再运行（公钥见仓库根 [`minisign.pub`](minisign.pub) 与 [SECURITY.md](SECURITY.md)）。
+
+下载 `CC-Switch-<版本>-Windows.msi`、`SHA256SUMS`、`SHA256SUMS.minisig` 与本仓库的 `minisign.pub` 后：
+
+```bash
+minisign -Vm SHA256SUMS -p minisign.pub -x SHA256SUMS.minisig   # 验来源
+sha256sum -c SHA256SUMS                                          # 验完整性
+```
 
 <details>
 <summary><strong>架构总览</strong></summary>

@@ -127,6 +127,20 @@ Releases ship an unsigned Windows `.msi`. Because there is no Authenticode certi
 
 发布产物是未做代码签名的 Windows `.msi`。个人 fork 承担不起 OV/EV 证书或 Azure Trusted Signing 的费用，因此首次运行 Windows SmartScreen 会给出"未知发布者"警告。为让用户仍能验证来源与完整性，每个 Release 随包发布 `SHA256SUMS` 与 **minisign** 签名（`.minisig`），维护者公钥固定在本仓库与 README。用户应下载 MSI、校验 SHA-256 与 minisign 签名后再运行。**构建、发布与签名链路**始终在上文范围内。
 
+维护者公钥（本仓库根 [`minisign.pub`](minisign.pub)）：
+
+```
+untrusted comment: minisign public key 0877A52104C63DB6
+RWS2PcYEIaV3CIrxcer+LZzEqHAVEC9r38Y4HIO9ZxCd0mRCTU5tLCQG
+```
+
+下载后按序验证（先验签名确认清单来源，再验哈希确认安装包未被替换）：
+
+```bash
+minisign -Vm SHA256SUMS -p minisign.pub -x SHA256SUMS.minisig
+sha256sum -c SHA256SUMS
+```
+
 ## Reporting a Vulnerability / 报告漏洞
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
