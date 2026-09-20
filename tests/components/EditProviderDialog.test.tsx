@@ -480,4 +480,115 @@ describe("EditProviderDialog", () => {
     act(() => staleCallback?.(true));
     expect(reopenedButton).toBeDisabled();
   });
+
+  it("把 Claude 的 Base URL 回填到 env.ANTHROPIC_BASE_URL，且不留顶层 baseUrl", async () => {
+    const provider: Provider = {
+      id: "claude-a",
+      name: "Claude A",
+      settingsConfig: { env: { ANTHROPIC_AUTH_TOKEN: "sk-db" } },
+      secretStatus: {
+        apiKey: { present: true },
+        baseUrl: "https://api.claude.example.com",
+        extraEnv: [],
+      },
+    };
+    const liveSettings = { env: { ANTHROPIC_AUTH_TOKEN: "sk-live" } };
+
+    apiMocks.getCurrent.mockResolvedValue(provider.id);
+    apiMocks.getLiveProviderSettings.mockResolvedValue(liveSettings);
+
+    render(
+      <EditProviderDialog
+        open
+        provider={provider}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+        appId="claude"
+      />,
+    );
+
+    await waitFor(() => {
+      const config = JSON.parse(
+        screen.getByTestId("settings-config").textContent ?? "{}",
+      );
+      expect(config.env).toEqual({
+        ANTHROPIC_AUTH_TOKEN: "sk-live",
+        ANTHROPIC_BASE_URL: "https://api.claude.example.com",
+      });
+      expect(config).not.toHaveProperty("baseUrl");
+    });
+  });
+
+  it("把 Codex 的 Base URL 写进当前 [model_providers.*] 段，且不留顶层 baseUrl", async () => {
+    const toml =
+      'model_provider = "custom"\n[model_providers.custom]\nbase_url = "https://old.example/v1"\n';
+    const provider: Provider = {
+      id: "codex-a",
+      name: "Codex A",
+      settingsConfig: {
+        auth: { OPENAI_API_KEY: "sk-db" },
+        config: toml,
+      },
+      secretStatus: {
+        apiKey: { present: true },
+        baseUrl: "https://new.example/v1",
+        extraEnv: [],
+      },
+    };
+
+    apiMocks.getCurrent.mockResolvedValue(provider.id);
+    apiMocks.getLiveProviderSettings.mockResolvedValue({
+      auth: { OPENAI_API_KEY: "sk-live" },
+      config: toml,
+    });
+
+    render(
+      <EditProviderDialog
+        open
+        provider={provider}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+        appId="codex"
+      />,
+    );
+
+    await waitFor(() => {
+      const config = JSON.parse(
+        screen.getByTestId("settings-config").textContent ?? "{}",
+      );
+      expect(config.config).toContain('base_url = "https://new.example/v1"');
+      expect(config.config).not.toContain("https://old.example/v1");
+      expect(config).not.toHaveProperty("baseUrl");
+    });
+  });
+
+  it("Pi 的 Base URL 保持在顶层 baseUrl", async () => {
+    const provider: Provider = {
+      id: "pi-a",
+      name: "Pi A",
+      settingsConfig: { models: [{ id: "model" }] },
+      secretStatus: {
+        apiKey: { present: true },
+        baseUrl: "https://pi.example/v1",
+        extraEnv: [],
+      },
+    };
+
+    render(
+      <EditProviderDialog
+        open
+        provider={provider}
+        onOpenChange={vi.fn()}
+        onSubmit={vi.fn()}
+        appId="pi"
+      />,
+    );
+
+    await waitFor(() => {
+      const config = JSON.parse(
+        screen.getByTestId("settings-config").textContent ?? "{}",
+      );
+      expect(config.baseUrl).toBe("https://pi.example/v1");
+    });
+  });
 });

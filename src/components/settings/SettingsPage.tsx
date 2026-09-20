@@ -92,15 +92,12 @@ export function SettingsPage({
   } = useSettings();
 
   const {
-    selectedFile,
     status: importStatus,
     errorMessage,
     backupId,
     isImporting,
-    selectImportFile,
     importConfig,
     exportConfig,
-    clearSelection,
     resetStatus,
   } = useImportExport({ onImportSuccess });
 
@@ -132,10 +129,9 @@ export function SettingsPage({
   const closeAfterSave = useCallback(() => {
     // 保存成功后关闭：不再重置语言，避免需要“保存两次”才生效
     acknowledgeRestart();
-    clearSelection();
     resetStatus();
     onOpenChange(false);
-  }, [acknowledgeRestart, clearSelection, onOpenChange, resetStatus]);
+  }, [acknowledgeRestart, onOpenChange, resetStatus]);
 
   const handleSave = useCallback(async () => {
     try {
@@ -353,14 +349,11 @@ export function SettingsPage({
                         <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
                           <ImportExportSection
                             status={importStatus}
-                            selectedFile={selectedFile}
                             errorMessage={errorMessage}
                             backupId={backupId}
                             isImporting={isImporting}
-                            onSelectFile={selectImportFile}
                             onImport={importConfig}
                             onExport={exportConfig}
-                            onClear={clearSelection}
                           />
                         </AccordionContent>
                       </AccordionItem>

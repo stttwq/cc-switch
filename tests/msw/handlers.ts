@@ -268,32 +268,14 @@ export const handlers = [
     return success(initial ? `${initial}/picked` : "/mock/selected-dir");
   }),
 
-  http.post(`${TAURI_ENDPOINT}/open_file_dialog`, () =>
-    success("/mock/import-settings.json"),
-  ),
-
-  http.post(
-    `${TAURI_ENDPOINT}/import_config_from_file`,
-    async ({ request }) => {
-      const { filePath } = await withJson<{ filePath: string }>(request);
-      if (!filePath) {
-        return success({ success: false, message: "Missing file" });
-      }
-      setSettings({ language: "en" });
-      return success({ success: true, backupId: "backup-123" });
-    },
-  ),
-
-  http.post(`${TAURI_ENDPOINT}/export_config_to_file`, async ({ request }) => {
-    const { filePath } = await withJson<{ filePath: string }>(request);
-    if (!filePath) {
-      return success({ success: false, message: "Invalid destination" });
-    }
-    return success({ success: true, filePath });
+  // 计划 4.2.1 S-2：选文件与导入/导出合成一条命令，对话框在 Rust 侧弹。
+  http.post(`${TAURI_ENDPOINT}/import_config_via_dialog`, () => {
+    setSettings({ language: "en" });
+    return success({ success: true, backupId: "backup-123" });
   }),
 
-  http.post(`${TAURI_ENDPOINT}/save_file_dialog`, () =>
-    success("/mock/export-settings.json"),
+  http.post(`${TAURI_ENDPOINT}/export_config_via_dialog`, () =>
+    success({ success: true, filePath: "/mock/export-settings.sql" }),
   ),
 
   // Sync current providers live (no-op success)

@@ -3,7 +3,8 @@ use crate::secrets::target::SecretTarget;
 use async_trait::async_trait;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::Duration;
 use thiserror::Error;
 use zeroize::Zeroizing;
 
@@ -12,6 +13,34 @@ use zeroize::Zeroizing;
 const MAX_VALUE_UTF16_UNITS: usize = 1280;
 /// 附录 B：target 名上限（keyring/`CredWriteW` 的 `TargetName` 上限）。
 const MAX_TARGET_CHARS: usize = 32767;
+
+/// T-3：凭据管理器瞬时失败的退避间隔（毫秒）。`CredReadW` / `CredWriteW` 在登录会话
+/// 切换、锁屏解锁瞬间会偶发 `ERROR_NO_SUCH_LOGON_SESSION`，重试一下就好，
+/// 而旧实现直接把它报给了用户。
+const BACKEND_RETRY_DELAYS_MS: [u64; 3] = [50, 100, 200];
+
+/// 只对 `SecretError::Backend` 重试：`NoEntry` / `TooLong` / `Unsupported` 都是
+/// 确定性结果，重试只会白等。
+///
+/// 用 `std::thread::sleep` 而不是 `tokio::time::sleep`：本实现整体是阻塞式的
+/// （`CredReadW` 本身就是同步调用），而调用方大量走 `futures::executor::block_on`，
+/// 那里没有 Tokio 反应堆，`tokio::time::sleep` 会直接 panic。
+fn with_backend_retry<T, F>(mut op: F) -> Result<T, SecretError>
+where
+    F: FnMut() -> Result<T, SecretError>,
+{
+    let mut retries = 0usize;
+    loop {
+        match op() {
+            Err(SecretError::Backend(message)) if retries < BACKEND_RETRY_DELAYS_MS.len() => {
+                std::thread::sleep(Duration::from_millis(BACKEND_RETRY_DELAYS_MS[retries]));
+                retries += 1;
+                log::warn!("凭据管理器瞬时失败，第 {retries} 次重试: {message}");
+            }
+            other => return other,
+        }
+    }
+}
 
 /// 计划 §5.1：`SecretStore` 的类型化错误。
 ///
@@ -113,8 +142,12 @@ impl WindowsSecretStore {
     /// 计划 §5.1：`keyring` 不保证同一条目的多线程读写顺序，这里用一把 Mutex 把
     /// **所有写操作**（`set` / `delete`，以及 `probe()` 的写-读-删三步）串行化。
     /// 普通 `get` 不持锁（计划只要求写串行化）；probe 在锁内的回读走 `read_locked`。
+    ///
+    /// T-2：一次 panic 不该让后续所有保存都 panic，因此毒化后继续用内部值。
     fn lock_writes(&self) -> MutexGuard<'_, ()> {
-        self.write_lock.lock().unwrap()
+        self.write_lock
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
     }
 
     /// 写入单条凭据（不含长度校验，校验在 `set` 里做）。`_guard` 参数用于强制调用方已持锁。
@@ -141,11 +174,7 @@ impl WindowsSecretStore {
     }
 
     /// 读取单条凭据；`Error::NoEntry` 映射为 `Ok(None)`（计划 §5.1）。
-    fn read_locked(
-        &self,
-        _guard: &MutexGuard<'_, ()>,
-        target: &SecretTarget,
-    ) -> Result<Option<Zeroizing<String>>, SecretError> {
+    fn read_entry(&self, target: &SecretTarget) -> Result<Option<Zeroizing<String>>, SecretError> {
         #[cfg(target_os = "windows")]
         {
             match windows_entry(target)?.get_password() {
@@ -157,9 +186,18 @@ impl WindowsSecretStore {
 
         #[cfg(not(target_os = "windows"))]
         {
-            let _ = (_guard, target);
+            let _ = target;
             Err(SecretError::Unsupported)
         }
+    }
+
+    /// 读取单条凭据；`_guard` 参数用于强制调用方已持锁（`probe`）。
+    fn read_locked(
+        &self,
+        _guard: &MutexGuard<'_, ()>,
+        target: &SecretTarget,
+    ) -> Result<Option<Zeroizing<String>>, SecretError> {
+        self.read_entry(target)
     }
 
     /// 删除单条凭据；条目不存在视为成功（幂等）。
@@ -209,12 +247,8 @@ impl SecretStore for WindowsSecretStore {
                 .into());
             }
 
-            let _guard = self.write_lock.lock().unwrap();
-            let entry = windows_entry(target)?;
-
-            entry
-                .set_password(&value)
-                .map_err(|e| AppError::SecretStoreError(format!("Failed to set secret: {}", e)))?;
+            let _guard = self.lock_writes();
+            with_backend_retry(|| self.write_locked(&_guard, target, value.as_str()))?;
 
             Ok(())
         }
@@ -231,16 +265,8 @@ impl SecretStore for WindowsSecretStore {
     async fn get(&self, target: &SecretTarget) -> Result<Option<Zeroizing<String>>, AppError> {
         #[cfg(target_os = "windows")]
         {
-            let entry = windows_entry(target)?;
-
-            match entry.get_password() {
-                Ok(password) => Ok(Some(Zeroizing::new(password))),
-                Err(keyring::Error::NoEntry) => Ok(None),
-                Err(e) => Err(AppError::SecretStoreError(format!(
-                    "Failed to get secret: {}",
-                    e
-                ))),
-            }
+            let found = with_backend_retry(|| self.read_entry(target))?;
+            Ok(found)
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -257,16 +283,9 @@ impl SecretStore for WindowsSecretStore {
         {
             // §5.1：删除同样是写操作，与 set / probe 共用这把锁串行化
             let _guard = self.lock_writes();
-            let entry = windows_entry(target)?;
+            with_backend_retry(|| self.delete_locked(&_guard, target))?;
 
-            match entry.delete_credential() {
-                Ok(()) => Ok(()),
-                Err(keyring::Error::NoEntry) => Ok(()), // Already deleted, idempotent
-                Err(e) => Err(AppError::SecretStoreError(format!(
-                    "Failed to delete secret: {}",
-                    e
-                ))),
-            }
+            Ok(())
         }
 
         #[cfg(not(target_os = "windows"))]
@@ -501,6 +520,69 @@ mod tests {
     async fn test_in_memory_store_probe() {
         let store = InMemorySecretStore::new();
         assert!(store.probe().await.is_ok());
+    }
+
+    /// T-3：瞬时后端失败重试后成功。
+    #[test]
+    fn backend_retry_recovers_after_transient_failures() {
+        let mut attempts = 0;
+        let result: Result<&str, SecretError> = with_backend_retry(|| {
+            attempts += 1;
+            if attempts < 3 {
+                Err(SecretError::Backend(format!("transient #{attempts}")))
+            } else {
+                Ok("ok")
+            }
+        });
+
+        assert_eq!(result.expect("第三次应成功"), "ok");
+        assert_eq!(attempts, 3);
+    }
+
+    /// T-3：连续失败时最多重试 3 次（首次 + 3 次重试 = 4 次调用）后放弃。
+    #[test]
+    fn backend_retry_gives_up_after_three_retries() {
+        let mut attempts = 0;
+        let result: Result<(), SecretError> = with_backend_retry(|| {
+            attempts += 1;
+            Err(SecretError::Backend("still down".to_string()))
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 1 + BACKEND_RETRY_DELAYS_MS.len());
+    }
+
+    /// T-3：确定性错误不重试。
+    #[test]
+    fn backend_retry_does_not_retry_deterministic_errors() {
+        let mut attempts = 0;
+        let result: Result<(), SecretError> = with_backend_retry(|| {
+            attempts += 1;
+            Err(SecretError::TooLong {
+                field: "f".to_string(),
+                max: 1,
+            })
+        });
+
+        assert!(result.is_err());
+        assert_eq!(attempts, 1);
+    }
+
+    /// T-2：一次 panic 毒化写锁后，后续写入仍能拿到锁（旧实现在这里 panic）。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn poisoned_write_lock_is_tolerated() {
+        let store = WindowsSecretStore::new().expect("windows store");
+
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = store.write_lock.lock().unwrap();
+            panic!("poison the write lock");
+        }));
+        assert!(poisoned.is_err(), "测试前提：锁已被毒化");
+        assert!(store.write_lock.is_poisoned());
+
+        // 不 panic 即通过
+        let _guard = store.lock_writes();
     }
 
     /// 计划 §5.1 / 附录 B：`Display` 输出即凭据管理器的 target 名。

@@ -50,7 +50,9 @@
   "apiKeyInput": {
     "placeholder": "API Key を入力",
     "show": "API Key を表示",
-    "hide": "API Key を隠す"
+    "hide": "API Key を隠す",
+    "reveal": "保存済みの API Key を表示",
+    "revealFailed": "保存済みの API Key を読み取れませんでした。しばらくしてから再試行してください"
   },
   "jsonEditor": {
     "mustBeObject": "設定はオブジェクト形式の JSON で入力してください（配列や他の型は不可）",
@@ -155,7 +157,8 @@
     "sortUpdated": "並び順を更新しました",
     "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください",
     "keyMissing": "キーが必要",
-    "keyMissingHint": "キーは同期・エクスポートされません。このプロバイダーを編集して API キーを再入力してください。"
+    "keyMissingHint": "キーは同期・エクスポートされません。このプロバイダーを編集して API キーを再入力してください。",
+    "endpoint": "エンドポイント"
   },
   "claudeCode": {},
   "codex": {
@@ -1110,7 +1113,8 @@
     "fetchModelsEndpointNotFound": "利用可能なモデル一覧エンドポイントが見つかりません。Base URL を確認するか、プロバイダーが該当 API を公開しているかご確認ください",
     "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
     "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください",
-    "apiKeyConfigured": "設定済み、空白のままなら変更なし"
+    "apiKeyConfigured": "設定済み、空白のままなら変更なし",
+    "apiKeyConfiguredHint": "設定済み、空白のままなら変更なし。右の目アイコンで表示できます"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",

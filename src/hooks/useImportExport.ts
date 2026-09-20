@@ -16,13 +16,10 @@ export interface UseImportExportOptions {
 }
 
 export interface UseImportExportResult {
-  selectedFile: string;
   status: ImportStatus;
   errorMessage: string | null;
   backupId: string | null;
   isImporting: boolean;
-  selectImportFile: () => Promise<void>;
-  clearSelection: () => void;
   importConfig: () => Promise<void>;
   exportConfig: () => Promise<void>;
   resetStatus: () => void;
@@ -34,47 +31,14 @@ export function useImportExport(
   const { t } = useTranslation();
   const { onImportSuccess } = options;
 
-  const [selectedFile, setSelectedFile] = useState("");
   const [status, setStatus] = useState<ImportStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [backupId, setBackupId] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
 
-  const clearSelection = useCallback(() => {
-    setSelectedFile("");
-    setStatus("idle");
-    setErrorMessage(null);
-    setBackupId(null);
-  }, []);
-
-  const selectImportFile = useCallback(async () => {
-    try {
-      const filePath = await settingsApi.openFileDialog();
-      if (filePath) {
-        setSelectedFile(filePath);
-        setStatus("idle");
-        setErrorMessage(null);
-      }
-    } catch (error) {
-      console.error("[useImportExport] Failed to open file dialog", error);
-      toast.error(
-        t("settings.selectFileFailed", {
-          defaultValue: "选择文件失败",
-        }),
-      );
-    }
-  }, [t]);
-
+  // 计划 4.2.1 S-2：选文件与导入合成一步，路径只在 Rust 侧弹的对话框里产生，
+  // 前端不再持有、也不再回传任意绝对路径。
   const importConfig = useCallback(async () => {
-    if (!selectedFile) {
-      toast.error(
-        t("settings.selectFileFailed", {
-          defaultValue: "请选择有效的 SQL 备份文件",
-        }),
-      );
-      return;
-    }
-
     if (isImporting) return;
 
     setIsImporting(true);
@@ -82,7 +46,12 @@ export function useImportExport(
     setErrorMessage(null);
 
     try {
-      const result = await settingsApi.importConfigFromFile(selectedFile);
+      const result = await settingsApi.importConfigViaDialog();
+      if (result === null) {
+        // 用户取消：静默回到 idle，不当作失败
+        setStatus("idle");
+        return;
+      }
       if (!result.success) {
         setStatus("error");
         const message =
@@ -138,30 +107,25 @@ export function useImportExport(
     } finally {
       setIsImporting(false);
     }
-  }, [isImporting, onImportSuccess, selectedFile, t]);
+  }, [isImporting, onImportSuccess, t]);
 
   const exportConfig = useCallback(async () => {
     try {
       const now = new Date();
       const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
       const defaultName = `cc-switch-export-${stamp}.sql`;
-      const destination = await settingsApi.saveFileDialog(defaultName);
-      if (!destination) {
-        toast.error(
-          t("settings.selectFileFailed", {
-            defaultValue: "请选择 SQL 备份保存路径",
-          }),
-        );
+
+      const result = await settingsApi.exportConfigViaDialog(defaultName);
+      if (result === null) {
+        // 用户取消保存对话框
         return;
       }
 
-      const result = await settingsApi.exportConfigToFile(destination);
       if (result.success) {
-        const displayPath = result.filePath ?? destination;
         toast.success(
           t("settings.configExported", {
             defaultValue: "配置已导出",
-          }) + `\n${displayPath}`,
+          }) + (result.filePath ? `\n${result.filePath}` : ""),
           { closeButton: true },
         );
       } else {
@@ -189,13 +153,10 @@ export function useImportExport(
   }, []);
 
   return {
-    selectedFile,
     status,
     errorMessage,
     backupId,
     isImporting,
-    selectImportFile,
-    clearSelection,
     importConfig,
     exportConfig,
     resetStatus,

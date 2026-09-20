@@ -50,7 +50,9 @@
   "apiKeyInput": {
     "placeholder": "请输入API Key",
     "show": "显示API Key",
-    "hide": "隐藏API Key"
+    "hide": "隐藏API Key",
+    "reveal": "查看已保存的API Key",
+    "revealFailed": "读取已保存的API Key失败，请稍后重试"
   },
   "jsonEditor": {
     "mustBeObject": "配置必须是JSON对象，不能是数组或其他类型",
@@ -155,7 +157,8 @@
     "sortUpdated": "排序已更新",
     "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试",
     "keyMissing": "需要密钥",
-    "keyMissingHint": "密钥不参与同步与导出，请编辑该供应商重新输入 API 密钥。"
+    "keyMissingHint": "密钥不参与同步与导出，请编辑该供应商重新输入 API 密钥。",
+    "endpoint": "接口地址"
   },
   "claudeCode": {},
   "codex": {
@@ -1110,7 +1113,8 @@
     "fetchModelsEndpointNotFound": "未找到可用的模型列表端点，请检查 Base URL 或确认供应商是否开放该接口",
     "fetchModelsTimeout": "请求超时，请检查网络连接",
     "requiredFields": "请填写供应商名称、API 地址、API Key 和模型",
-    "apiKeyConfigured": "已配置，留空保持不变"
+    "apiKeyConfigured": "已配置，留空保持不变",
+    "apiKeyConfiguredHint": "已配置，留空保持不变，点击右侧眼睛查看"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",

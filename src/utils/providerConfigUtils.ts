@@ -2,6 +2,7 @@
 
 import type { TemplateValueConfig } from "../config/claudeProviderPresets";
 import type { CodexApiFormat } from "@/types";
+import type { AppId } from "@/lib/api/types";
 import { deepClone } from "@/utils/deepClone";
 import { normalizeTomlText } from "@/utils/textNormalization";
 import { parse as parseToml } from "smol-toml";
@@ -1224,6 +1225,37 @@ export const getCodexBaseUrl = (
   } catch {
     return undefined;
   }
+};
+
+/**
+ * §1.4.3：把回显的 Base URL 放进该应用**真正读取**的位置。
+ *
+ * 之前一律注入顶层 `baseUrl`：Claude 只读 `env.ANTHROPIC_BASE_URL`、Codex 只读 TOML
+ * 里的 `base_url`，只有 Pi 读顶层键。于是编辑 Claude / Codex 时 Base URL 框是空的，
+ * 而那个顶层键还会被提取器当成杂物（§1.4.2 已加防御）。
+ */
+export const applyBaseUrlForApp = (
+  appId: AppId,
+  config: Record<string, unknown>,
+  baseUrl: string | null | undefined,
+): Record<string, unknown> => {
+  const url = baseUrl?.trim();
+  if (!url) return config;
+
+  if (appId === "claude") {
+    const env = isPlainObject(config.env) ? config.env : {};
+    return { ...config, env: { ...env, ANTHROPIC_BASE_URL: url } };
+  }
+
+  if (appId === "codex") {
+    const configText = typeof config.config === "string" ? config.config : "";
+    // 空 TOML 里插 base_url 只会得到一个 Codex 不认的顶层键，不如不插。
+    if (!configText.trim()) return config;
+    return { ...config, config: setCodexBaseUrl(configText, url) };
+  }
+
+  // Pi 的顶层 `baseUrl` 就是它的正常形态。
+  return { ...config, baseUrl: url };
 };
 
 // 在 Codex 的 TOML 配置文本中写入或更新 base_url 字段

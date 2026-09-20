@@ -1434,6 +1434,10 @@ export function PiProviderForm({
                   ? t("providerForm.apiKeyConfigured")
                   : t("providerForm.apiKeyAutoFill"),
               }}
+              configuredStatus={existingKeyHint}
+              revealTarget={
+                isEdit && providerId ? { app: "pi", providerId } : null
+              }
             />
 
             <div className="space-y-2">

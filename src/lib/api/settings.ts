@@ -104,20 +104,22 @@ export const settingsApi = {
     return await invoke("clear_claude_onboarding_skip");
   },
 
-  async saveFileDialog(defaultName: string): Promise<string | null> {
-    return await invoke("save_file_dialog", { defaultName });
+  /**
+   * 弹出保存对话框并导出（计划 4.2.1 S-2）。
+   * 用户取消返回 null。
+   */
+  async exportConfigViaDialog(
+    defaultName: string,
+  ): Promise<ConfigTransferResult | null> {
+    return await invoke("export_config_via_dialog", { defaultName });
   },
 
-  async openFileDialog(): Promise<string | null> {
-    return await invoke("open_file_dialog");
-  },
-
-  async exportConfigToFile(filePath: string): Promise<ConfigTransferResult> {
-    return await invoke("export_config_to_file", { filePath });
-  },
-
-  async importConfigFromFile(filePath: string): Promise<ConfigTransferResult> {
-    return await invoke("import_config_from_file", { filePath });
+  /**
+   * 弹出选择对话框并导入（计划 4.2.1 S-2）。
+   * 用户取消返回 null。
+   */
+  async importConfigViaDialog(): Promise<ConfigTransferResult | null> {
+    return await invoke("import_config_via_dialog");
   },
 
   // ─── WebDAV sync ──────────────────────────────────────────

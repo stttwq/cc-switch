@@ -30,6 +30,24 @@ export const providersApi = {
     return await invoke("get_current_provider", { app: appId });
   },
 
+  /**
+   * 按需回显单个供应商的单个字段（计划 §1.4.1）。
+   *
+   * 只在用户显式点击「显示」时调用；返回的明文不得进 React Query 缓存、
+   * localStorage 或任何表单初始值快照。
+   */
+  async revealSecret(
+    appId: AppId,
+    providerId: string,
+    field: "api_key" | "base_url",
+  ): Promise<string | null> {
+    return await invoke("reveal_provider_secret", {
+      app: appId,
+      providerId,
+      field,
+    });
+  },
+
   async add(
     provider: Provider,
     appId: AppId,

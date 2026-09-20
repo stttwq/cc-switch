@@ -45,6 +45,7 @@ import {
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
+import type { AppId } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import type {
   ClaudeApiKeyField,
@@ -64,6 +65,8 @@ interface CodexFormFieldsProps {
   partnerPromotionKey?: string;
   /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显，只提示已配置 */
   apiKeyConfiguredStatus?: { present: boolean } | null;
+  /** 计划 §1.4.1：点眼睛时按需回显的目标 */
+  apiKeyRevealTarget?: { app: AppId; providerId: string } | null;
 
   // Base URL
   isNonOfficialCategory: boolean;
@@ -315,6 +318,7 @@ export function CodexFormFields({
   isPartner,
   partnerPromotionKey,
   apiKeyConfiguredStatus,
+  apiKeyRevealTarget,
   isNonOfficialCategory,
   codexBaseUrl,
   onBaseUrlChange,
@@ -525,6 +529,7 @@ export function CodexFormFields({
         isPartner={isPartner}
         partnerPromotionKey={partnerPromotionKey}
         configuredStatus={apiKeyConfiguredStatus}
+        revealTarget={apiKeyRevealTarget}
         placeholder={{
           official: t("providerForm.codexOfficialNoApiKey", {
             defaultValue: "官方供应商无需 API Key",

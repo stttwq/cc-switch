@@ -166,6 +166,11 @@ function ProviderFormFull({
 }: ProviderFormProps) {
   const { t } = useTranslation();
   const isEditMode = Boolean(initialData);
+  // 计划 §1.4.1：只有编辑已存在的供应商时才有可回显的凭据条目。
+  const apiKeyRevealTarget = useMemo(
+    () => (isEditMode && providerId ? { app: appId, providerId } : null),
+    [isEditMode, providerId, appId],
+  );
   const initialCodexOfficialIdentity =
     appId === "codex" && initialData
       ? resolveCodexOfficialIdentity(appId, {
@@ -853,6 +858,7 @@ function ProviderFormFull({
               isPartner={isClaudePartner}
               partnerPromotionKey={claudePartnerPromotionKey}
               apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
+              apiKeyRevealTarget={apiKeyRevealTarget}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}
@@ -892,6 +898,7 @@ function ProviderFormFull({
               isPartner={isCodexPartner}
               partnerPromotionKey={codexPartnerPromotionKey}
               apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
+              apiKeyRevealTarget={apiKeyRevealTarget}
               isNonOfficialCategory={isNonOfficialCategory}
               codexBaseUrl={codexBaseUrl}
               onBaseUrlChange={handleCodexBaseUrlChange}

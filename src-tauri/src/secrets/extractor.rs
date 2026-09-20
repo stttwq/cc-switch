@@ -405,12 +405,24 @@ fn is_local_proxy_takeover_url(url: &str) -> bool {
         .any(|host| lower.contains(&format!("://{host}")))
 }
 
+/// §1.4.2 防御：前端曾把 `secretStatus.baseUrl` 注入成 settingsConfig 的**顶层**
+/// `baseUrl`，而 Claude / Codex 的提取器都不认这个位置，于是它以明文落进了
+/// `providers.settings_config`。这里兜底剥掉——即使前端再出错也不会入库。
+///
+/// Pi 的顶层 `baseUrl` 是它的正常形态，由 `extract_pi` 自己提取，不走这里。
+fn drop_stray_top_level_base_url(root: &mut serde_json::Map<String, Value>, app: &str) {
+    if root.remove("baseUrl").is_some() {
+        log::warn!("extractor: dropped stray top-level baseUrl from {app} provider config");
+    }
+}
+
 fn extract_claude(raw: &Value, api_key_field: Option<&str>) -> Result<Extracted, AppError> {
     let mut stripped = raw.clone();
     let mut secrets = ProviderSecrets::new();
     let Some(root) = stripped.as_object_mut() else {
         return Ok(Extracted::new(stripped, secrets));
     };
+    drop_stray_top_level_base_url(root, "claude");
     let Some(env) = root.get_mut("env").and_then(Value::as_object_mut) else {
         return Ok(Extracted::new(stripped, secrets));
     };
@@ -460,6 +472,7 @@ fn extract_codex(raw: &Value) -> Result<Extracted, AppError> {
     let Some(root) = stripped.as_object_mut() else {
         return Ok(Extracted::new(stripped, secrets));
     };
+    drop_stray_top_level_base_url(root, "codex");
 
     let mut dropped_oauth_tokens = false;
     if let Some(auth) = root.get_mut("auth").and_then(Value::as_object_mut) {
@@ -627,6 +640,52 @@ mod tests {
         assert!(!config.contains("experimental_bearer_token"));
         assert!(!config.contains("https://api.example.com/v1"));
         assert!(extracted.stripped["auth"].get("OPENAI_API_KEY").is_none());
+    }
+
+    /// §1.4.2 回归：前端曾把 base URL 注入成顶层 `baseUrl`，Claude / Codex 的
+    /// 提取器必须兜底剥掉它，否则明文会落进 `providers.settings_config`。
+    #[test]
+    fn extract_claude_drops_stray_top_level_base_url() {
+        let raw = json!({
+            "baseUrl": "https://stray.example.com/v1",
+            "env": { "ANTHROPIC_MODEL": "claude-opus-4" }
+        });
+        let extracted = SecretExtractor::extract("p1", &AppType::Claude, &raw).unwrap();
+        assert!(
+            extracted.stripped.get("baseUrl").is_none(),
+            "顶层 baseUrl 不得留在剥离后的配置里: {}",
+            extracted.stripped
+        );
+        assert_eq!(
+            extracted.stripped["env"]["ANTHROPIC_MODEL"],
+            "claude-opus-4"
+        );
+    }
+
+    #[test]
+    fn extract_codex_drops_stray_top_level_base_url() {
+        let raw = json!({
+            "baseUrl": "https://stray.example.com/v1",
+            "auth": { "OPENAI_API_KEY": "sk-fixture-codex-stray-0003" }
+        });
+        let extracted = SecretExtractor::extract("p1", &AppType::Codex, &raw).unwrap();
+        assert!(
+            extracted.stripped.get("baseUrl").is_none(),
+            "顶层 baseUrl 不得留在剥离后的配置里: {}",
+            extracted.stripped
+        );
+    }
+
+    /// Pi 的顶层 `baseUrl` 是正常形态，必须继续走它自己的提取路径。
+    #[test]
+    fn extract_pi_keeps_extracting_top_level_base_url() {
+        let raw = json!({ "baseUrl": "https://fixture-pi.example.com" });
+        let extracted = SecretExtractor::extract("pi-one", &AppType::Pi, &raw).unwrap();
+        assert_eq!(
+            extracted.secrets.base_url.as_ref().unwrap().as_str(),
+            "https://fixture-pi.example.com"
+        );
+        assert!(extracted.stripped.get("baseUrl").is_none());
     }
 
     #[test]

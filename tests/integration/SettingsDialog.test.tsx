@@ -94,23 +94,17 @@ vi.mock("@/components/settings/DirectorySettings", async () => {
 vi.mock("@/components/settings/ImportExportSection", () => ({
   ImportExportSection: ({
     status,
-    selectedFile,
     errorMessage,
     isImporting,
-    onSelectFile,
     onImport,
     onExport,
-    onClear,
   }: any) => (
     <div>
       <div data-testid="import-status">{status}</div>
-      <div data-testid="selected-file">{selectedFile || "none"}</div>
-      <button onClick={onSelectFile}>settings.selectConfigFile</button>
-      <button onClick={onImport} disabled={!selectedFile || isImporting}>
+      <button onClick={onImport} disabled={isImporting}>
         {isImporting ? "settings.importing" : "settings.import"}
       </button>
       <button onClick={onExport}>settings.exportConfig</button>
-      <button onClick={onClear}>common.clear</button>
       {errorMessage ? <span>{errorMessage}</span> : null}
     </div>
   ),
@@ -168,13 +162,8 @@ describe("SettingsPage integration", () => {
 
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
-    fireEvent.click(screen.getByText("settings.selectConfigFile"));
-    await waitFor(() =>
-      expect(screen.getByTestId("selected-file").textContent).toContain(
-        "/mock/import-settings.json",
-      ),
-    );
 
+    // 计划 4.2.1 S-2：导入一步完成（对话框在 Rust 侧弹）
     fireEvent.click(screen.getByText("settings.import"));
     await waitFor(() => expect(toastSuccessMock).toHaveBeenCalled());
     await waitFor(() => expect(onImportSuccess).toHaveBeenCalled(), {
@@ -261,25 +250,20 @@ describe("SettingsPage integration", () => {
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
 
     server.use(
-      http.post("http://tauri.local/save_file_dialog", () =>
+      http.post("http://tauri.local/export_config_via_dialog", () =>
         HttpResponse.json(null),
       ),
     );
     fireEvent.click(screen.getByText("settings.exportConfig"));
 
-    await waitFor(() => expect(toastErrorMock).toHaveBeenCalled());
-    const cancelMessage = toastErrorMock.mock.calls.at(-1)?.[0] as string;
-    expect(cancelMessage).toMatch(
-      /settings\.selectFileFailed|请选择.*保存路径/,
-    );
+    // 用户取消保存对话框：不提示、不报错
+    await waitFor(() => expect(toastSuccessMock).not.toHaveBeenCalled());
+    expect(toastErrorMock).not.toHaveBeenCalled();
 
     toastErrorMock.mockClear();
 
     server.use(
-      http.post("http://tauri.local/save_file_dialog", () =>
-        HttpResponse.json("/mock/export-settings.json"),
-      ),
-      http.post("http://tauri.local/export_config_to_file", () =>
+      http.post("http://tauri.local/export_config_via_dialog", () =>
         HttpResponse.json({ success: false, message: "disk-full" }),
       ),
     );

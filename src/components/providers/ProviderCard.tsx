@@ -70,6 +70,23 @@ const extractApiUrl = (provider: Provider, fallbackText: string) => {
   return fallbackText;
 };
 
+/**
+ * §1.4.5：卡片上显示当前端点的主机名，让用户不进编辑页也知道切到了哪个端点。
+ *
+ * 只取 `secretStatus.baseUrl`——它由后端从凭据管理器读回，是唯一权威来源；
+ * settingsConfig 里的 base URL 已被提取器剥离，不能作为依据。
+ */
+const extractEndpointHost = (provider: Provider): string | null => {
+  const raw = provider.secretStatus?.baseUrl?.trim();
+  if (!raw) return null;
+  try {
+    return new URL(raw).host || null;
+  } catch {
+    // 不是合法 URL（例如用户填了裸主机名）时原样显示，总比不显示好。
+    return raw;
+  }
+};
+
 export function ProviderCard({
   provider,
   isCurrent,
@@ -99,6 +116,8 @@ export function ProviderCard({
   const displayUrl = useMemo(() => {
     return extractApiUrl(provider, fallbackUrlText);
   }, [provider, fallbackUrlText]);
+
+  const endpointHost = useMemo(() => extractEndpointHost(provider), [provider]);
 
   const isClickableUrl = useMemo(() => {
     if (provider.notes?.trim()) {
@@ -196,6 +215,15 @@ export function ProviderCard({
                     {t("provider.keyMissing")}
                   </span>
                 )}
+              {/* §1.4.5：端点主机名（完整 URL 在 title 里） */}
+              {endpointHost && (
+                <span
+                  className="max-w-[16rem] truncate rounded-md bg-muted px-1.5 py-0.5 text-xs text-muted-foreground"
+                  title={`${t("provider.endpoint")}: ${provider.secretStatus?.baseUrl}`}
+                >
+                  {endpointHost}
+                </span>
+              )}
             </div>
 
             {codexOfficialIdentity === "native_login" ? (

@@ -14,18 +14,14 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const openFileDialogMock = vi.fn();
-const importConfigMock = vi.fn();
-const saveFileDialogMock = vi.fn();
-const exportConfigMock = vi.fn();
+const importViaDialogMock = vi.fn();
+const exportViaDialogMock = vi.fn();
 const syncCurrentProvidersLiveMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
-    openFileDialog: (...args: unknown[]) => openFileDialogMock(...args),
-    importConfigFromFile: (...args: unknown[]) => importConfigMock(...args),
-    saveFileDialog: (...args: unknown[]) => saveFileDialogMock(...args),
-    exportConfigToFile: (...args: unknown[]) => exportConfigMock(...args),
+    importConfigViaDialog: (...args: unknown[]) => importViaDialogMock(...args),
+    exportConfigViaDialog: (...args: unknown[]) => exportViaDialogMock(...args),
     syncCurrentProvidersLive: (...args: unknown[]) =>
       syncCurrentProvidersLiveMock(...args),
   },
@@ -33,10 +29,8 @@ vi.mock("@/lib/api", () => ({
 
 describe("useImportExport Hook (edge cases)", () => {
   beforeEach(() => {
-    openFileDialogMock.mockReset();
-    importConfigMock.mockReset();
-    saveFileDialogMock.mockReset();
-    exportConfigMock.mockReset();
+    importViaDialogMock.mockReset();
+    exportViaDialogMock.mockReset();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     toastWarningMock.mockReset();
@@ -48,27 +42,12 @@ describe("useImportExport Hook (edge cases)", () => {
     vi.useRealTimers();
   });
 
-  it("keeps state unchanged when file dialog resolves to null", async () => {
-    openFileDialogMock.mockResolvedValue(null);
-    const { result } = renderHook(() => useImportExport());
-
-    await act(async () => {
-      await result.current.selectImportFile();
+  it("resetStatus clears errors", async () => {
+    importViaDialogMock.mockResolvedValue({
+      success: false,
+      message: "broken",
     });
-
-    expect(result.current.selectedFile).toBe("");
-    expect(result.current.status).toBe("idle");
-    expect(toastErrorMock).not.toHaveBeenCalled();
-  });
-
-  it("resetStatus clears errors but preserves selected file", async () => {
-    openFileDialogMock.mockResolvedValue("/config.json");
-    importConfigMock.mockResolvedValue({ success: false, message: "broken" });
     const { result } = renderHook(() => useImportExport());
-
-    await act(async () => {
-      await result.current.selectImportFile();
-    });
 
     await act(async () => {
       await result.current.importConfig();
@@ -78,24 +57,18 @@ describe("useImportExport Hook (edge cases)", () => {
       result.current.resetStatus();
     });
 
-    expect(result.current.selectedFile).toBe("/config.json");
     expect(result.current.status).toBe("idle");
     expect(result.current.errorMessage).toBeNull();
     expect(result.current.backupId).toBeNull();
   });
 
   it("does not call onImportSuccess when import fails", async () => {
-    openFileDialogMock.mockResolvedValue("/config.json");
-    importConfigMock.mockResolvedValue({
+    importViaDialogMock.mockResolvedValue({
       success: false,
       message: "invalid",
     });
     const onImportSuccess = vi.fn();
     const { result } = renderHook(() => useImportExport({ onImportSuccess }));
-
-    await act(async () => {
-      await result.current.selectImportFile();
-    });
 
     await act(async () => {
       await result.current.importConfig();
@@ -106,8 +79,7 @@ describe("useImportExport Hook (edge cases)", () => {
   });
 
   it("propagates export success message to toast with saved path", async () => {
-    saveFileDialogMock.mockResolvedValue("/exports/config.json");
-    exportConfigMock.mockResolvedValue({
+    exportViaDialogMock.mockResolvedValue({
       success: true,
       filePath: "/final/config.json",
     });
@@ -117,10 +89,22 @@ describe("useImportExport Hook (edge cases)", () => {
       await result.current.exportConfig();
     });
 
-    expect(exportConfigMock).toHaveBeenCalledWith("/exports/config.json");
     expect(toastSuccessMock).toHaveBeenCalledWith(
       expect.stringContaining("/final/config.json"),
       expect.objectContaining({ closeButton: true }),
     );
+  });
+
+  it("marks partial success when live sync fails after a successful import", async () => {
+    importViaDialogMock.mockResolvedValue({ success: true, backupId: "b-1" });
+    syncCurrentProvidersLiveMock.mockRejectedValue(new Error("sync down"));
+    const { result } = renderHook(() => useImportExport());
+
+    await act(async () => {
+      await result.current.importConfig();
+    });
+
+    expect(result.current.status).toBe("partial-success");
+    expect(toastWarningMock).toHaveBeenCalledTimes(1);
   });
 });

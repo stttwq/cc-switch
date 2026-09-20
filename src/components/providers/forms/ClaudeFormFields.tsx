@@ -25,6 +25,7 @@ import {
   Wand2,
 } from "lucide-react";
 import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
+import type { AppId } from "@/lib/api";
 import {
   fetchModelsForConfig,
   showFetchModelsError,
@@ -58,6 +59,8 @@ interface ClaudeFormFieldsProps {
   partnerPromotionKey?: string;
   /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显，只提示已配置 */
   apiKeyConfiguredStatus?: { present: boolean } | null;
+  /** 计划 §1.4.1：点眼睛时按需回显的目标 */
+  apiKeyRevealTarget?: { app: AppId; providerId: string } | null;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -108,6 +111,7 @@ export function ClaudeFormFields({
   isPartner,
   partnerPromotionKey,
   apiKeyConfiguredStatus,
+  apiKeyRevealTarget,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -324,6 +328,7 @@ export function ClaudeFormFields({
           isPartner={isPartner}
           partnerPromotionKey={partnerPromotionKey}
           configuredStatus={apiKeyConfiguredStatus}
+          revealTarget={apiKeyRevealTarget}
         />
       )}
 

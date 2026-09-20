@@ -1,6 +1,7 @@
 import { useTranslation } from "react-i18next";
 import ApiKeyInput from "../ApiKeyInput";
 import type { ProviderCategory } from "@/types";
+import type { AppId } from "@/lib/api";
 
 interface ApiKeySectionProps {
   id?: string;
@@ -19,6 +20,8 @@ interface ApiKeySectionProps {
   partnerPromotionKey?: string;
   /** 后端凭据状态（secretStatus.apiKey）：present=true 时不回显，只提示已配置 */
   configuredStatus?: { present: boolean } | null;
+  /** 计划 §1.4.1：点眼睛时按需回显的目标（缺省时眼睛只切遮罩） */
+  revealTarget?: { app: AppId; providerId: string } | null;
 }
 
 export function ApiKeySection({
@@ -33,6 +36,7 @@ export function ApiKeySection({
   disabled,
   partnerPromotionKey,
   configuredStatus,
+  revealTarget,
 }: ApiKeySectionProps) {
   const { t } = useTranslation();
 
@@ -61,6 +65,7 @@ export function ApiKeySection({
         }
         disabled={disabled ?? category === "official"}
         configuredStatus={configuredStatus}
+        revealTarget={revealTarget}
       />
       {/* API Key 获取链接 */}
       {shouldShowLink && websiteUrl && (

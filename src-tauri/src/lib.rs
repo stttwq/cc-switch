@@ -1046,6 +1046,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::get_providers,
             commands::get_current_provider,
+            commands::reveal_provider_secret,
             commands::add_provider,
             commands::update_provider,
             commands::delete_provider,
@@ -1142,8 +1143,8 @@ pub fn run() {
             // provider sort order management
             commands::update_providers_sort_order,
             // theirs: config import/export and dialogs
-            commands::export_config_to_file,
-            commands::import_config_from_file,
+            commands::export_config_via_dialog,
+            commands::import_config_via_dialog,
             commands::webdav_test_connection,
             commands::webdav_sync_upload,
             commands::webdav_sync_download,
@@ -1154,8 +1155,6 @@ pub fn run() {
             commands::s3_sync_download,
             commands::s3_sync_save_settings,
             commands::s3_sync_fetch_remote_info,
-            commands::save_file_dialog,
-            commands::open_file_dialog,
             commands::open_zip_file_dialog,
             commands::create_db_backup,
             commands::list_db_backups,

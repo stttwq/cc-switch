@@ -50,7 +50,9 @@
   "apiKeyInput": {
     "placeholder": "Enter API Key",
     "show": "Show API Key",
-    "hide": "Hide API Key"
+    "hide": "Hide API Key",
+    "reveal": "Reveal the saved API Key",
+    "revealFailed": "Failed to read the saved API Key. Please try again."
   },
   "jsonEditor": {
     "mustBeObject": "Configuration must be a JSON object, not an array or other type",
@@ -155,7 +157,8 @@
     "sortUpdated": "Sort order updated",
     "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again",
     "keyMissing": "Key required",
-    "keyMissingHint": "Keys are never synced or exported. Edit this provider to re-enter its API key."
+    "keyMissingHint": "Keys are never synced or exported. Edit this provider to re-enter its API key.",
+    "endpoint": "Endpoint"
   },
   "claudeCode": {},
   "codex": {
@@ -1110,7 +1113,8 @@
     "fetchModelsEndpointNotFound": "No reachable models endpoint found. Please check the Base URL or confirm whether the provider exposes this API.",
     "fetchModelsTimeout": "Request timed out, please check network connection",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
-    "apiKeyConfigured": "Configured; leave blank to keep unchanged"
+    "apiKeyConfigured": "Configured; leave blank to keep unchanged",
+    "apiKeyConfiguredHint": "Configured; leave blank to keep unchanged, click the eye icon to reveal"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",

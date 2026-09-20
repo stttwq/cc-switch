@@ -11,14 +11,28 @@ use std::str::FromStr;
 
 /// 获取所有供应商（前端安全版本，不包含 settings_config）
 /// Phase 5 S1: IPC 零密钥 - 防止 settings_config 中的敏感字段泄漏到前端
+///
+/// 计划 §1.4.2 / T-1：内部逐供应商调 `CredReadW`，同步命令会在主线程上执行，
+/// 供应商一多就是可感知的卡顿，因此整个收集过程挪进 `spawn_blocking`。
 #[tauri::command]
-pub fn get_providers(
+pub async fn get_providers(
     state: State<'_, AppState>,
     app: String,
 ) -> Result<IndexMap<String, ProviderForFrontend>, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    let providers =
-        ProviderService::list(state.inner(), app_type.clone()).map_err(|e| e.to_string())?;
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        collect_providers_for_frontend(&state, app_type).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("读取供应商列表任务执行失败: {e}"))?
+}
+
+fn collect_providers_for_frontend(
+    state: &AppState,
+    app_type: AppType,
+) -> Result<IndexMap<String, ProviderForFrontend>, AppError> {
+    let providers = ProviderService::list(state, app_type.clone())?;
     // 一次读盘、所有行共用：known_secret_targets 既是 extra_env 的唯一真源，
     // 也用来跳过确实没有凭据的行（§5.2.1）。
     let mut known_targets =
@@ -28,7 +42,7 @@ pub fn get_providers(
     for (id, provider) in providers {
         let mut front = provider.to_frontend();
         front.secret_status = Some(load_secret_status(
-            state.inner(),
+            state,
             &app_type,
             &id,
             &mut known_targets,
@@ -111,6 +125,74 @@ fn extra_env_keys(known_targets: &[String], app_type: &AppType, provider_id: &st
         .filter_map(|t| t.strip_prefix(&prefix).map(str::to_string))
         .filter(|k| !k.is_empty())
         .collect()
+}
+
+/// 计划 §1.4.1：按需回显单个供应商的单个字段值。
+///
+/// 前端默认零密钥（原则 3.1-3 改版）：批量读取永不携带密钥值，只有用户在编辑页
+/// 显式点击「显示」时，才针对这一个供应商的这一个字段读一次。
+///
+/// 只接受 `api_key` / `base_url` 两个字段名——**不接受** `env/<VAR>`：extra_env 的
+/// 键数量不定、名字任意，放进来等于把命令的输入面变成任意字符串（决策 A5）。
+#[tauri::command]
+pub async fn reveal_provider_secret(
+    app_handle: tauri::AppHandle,
+    app: String,
+    #[allow(non_snake_case)] providerId: String,
+    field: String,
+) -> Result<Option<String>, String> {
+    let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle
+            .try_state::<AppState>()
+            .ok_or_else(|| "应用状态不可用".to_string())?;
+        reveal_provider_secret_internal(state.inner(), app_type, &providerId, &field)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("回显凭据任务执行失败: {e}"))?
+}
+
+#[cfg_attr(not(feature = "test-hooks"), doc(hidden))]
+pub fn reveal_provider_secret_internal(
+    state: &AppState,
+    app_type: AppType,
+    provider_id: &str,
+    field: &str,
+) -> Result<Option<String>, AppError> {
+    let target = match field {
+        "api_key" => SecretTarget::provider_api_key(app_type.clone(), provider_id),
+        "base_url" => SecretTarget::provider_base_url(app_type.clone(), provider_id),
+        other => {
+            return Err(AppError::InvalidInput(format!(
+                "不支持的字段名 {other}，只允许 api_key / base_url"
+            )))
+        }
+    };
+
+    // 先确认供应商确实在库，否则本命令会变成任意 target 的探测器。
+    let providers = ProviderService::list(state, app_type.clone())?;
+    if !providers.contains_key(provider_id) {
+        return Err(AppError::InvalidInput(format!(
+            "供应商不存在: {provider_id}"
+        )));
+    }
+
+    // 只记字段名，绝不记值。
+    log::info!("reveal {}/{provider_id}/{field}", app_type.as_str());
+
+    let Some(value) = futures::executor::block_on(state.secrets.retrieve(&target))? else {
+        return Ok(None);
+    };
+
+    // 密钥值进本会话的脱敏名单，之后任何日志行都会被替换掉（§1.4.1）。
+    // base_url 不进：它不是密钥，get_providers 本来也照常回传，记进去只会让
+    // 正常诊断日志里的端点变成 [REDACTED]。
+    if field == "api_key" {
+        crate::secrets::scan::note_session_secret(value.as_str());
+    }
+
+    Ok(Some(value.to_string()))
 }
 
 #[tauri::command]
@@ -350,5 +432,71 @@ mod tests {
             known.is_empty(),
             "没有凭据的行不该往名册里写东西: {known:?}"
         );
+    }
+
+    fn state_with_provider(id: &str) -> AppState {
+        let state = state_with_store();
+        let provider = crate::provider::Provider::from_parts(
+            id.to_string(),
+            format!("Provider {id}"),
+            serde_json::json!({}),
+            None,
+        );
+        state
+            .db
+            .save_provider(AppType::Claude.as_str(), &provider)
+            .expect("写入供应商");
+        state
+    }
+
+    /// §1.4.1：凭据存在时按需回传一次明文值。
+    #[test]
+    fn reveal_returns_value_when_credential_present() {
+        let state = state_with_provider("p1");
+        let target = SecretTarget::provider_api_key(AppType::Claude, "p1".to_string());
+        futures::executor::block_on(
+            state
+                .secrets
+                .set(&target, Zeroizing::new("sk-reveal".into())),
+        )
+        .expect("写入凭据");
+
+        let revealed =
+            reveal_provider_secret_internal(&state, AppType::Claude, "p1", "api_key").unwrap();
+        assert_eq!(revealed.as_deref(), Some("sk-reveal"));
+    }
+
+    /// §1.4.1：条目不存在返回 `Ok(None)`，不是错误——前端据此保持「未配置」。
+    #[test]
+    fn reveal_returns_none_when_credential_missing() {
+        let state = state_with_provider("p1");
+        let revealed =
+            reveal_provider_secret_internal(&state, AppType::Claude, "p1", "api_key").unwrap();
+        assert_eq!(revealed, None);
+    }
+
+    /// §1.4.1：先校验供应商存在，挡掉用本命令探测任意 target。
+    #[test]
+    fn reveal_rejects_unknown_provider() {
+        let state = state_with_provider("p1");
+        let err = reveal_provider_secret_internal(&state, AppType::Claude, "nope", "api_key")
+            .expect_err("供应商不存在必须报错");
+        assert!(
+            err.to_string().contains("供应商不存在"),
+            "错误文案应说明原因: {err}"
+        );
+    }
+
+    /// 决策 A5：`extra_env` 与任意字段名都不在允许范围内。
+    #[test]
+    fn reveal_rejects_unsupported_field() {
+        let state = state_with_provider("p1");
+        for field in ["env/OPENROUTER_API_KEY", "auth_token", ""] {
+            let result = reveal_provider_secret_internal(&state, AppType::Claude, "p1", field);
+            assert!(
+                matches!(result, Err(AppError::InvalidInput(_))),
+                "字段 {field:?} 必须被拒绝，实际: {result:?}"
+            );
+        }
     }
 }

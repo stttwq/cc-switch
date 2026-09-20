@@ -27,38 +27,71 @@ where
 
 // ─── File import/export ──────────────────────────────────────
 
-/// 导出数据库为 SQL 备份
+/// 选择 SQL 备份并导出（计划 4.2.1 S-2）。
+///
+/// 对话框在 Rust 侧弹、路径不经前端往返：命令本身不再接受任意绝对路径。
+/// 取消返回 `Ok(None)`，与"导出失败"区分开。
 #[tauri::command]
-pub async fn export_config_to_file(
-    #[allow(non_snake_case)] filePath: String,
+pub async fn export_config_via_dialog<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    #[allow(non_snake_case)] defaultName: String,
     state: State<'_, AppState>,
-) -> Result<Value, String> {
+) -> Result<Option<Value>, String> {
+    let Some(target) = app
+        .dialog()
+        .file()
+        .add_filter("SQL", &["sql"])
+        .set_file_name(&defaultName)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+
+    let target_path = PathBuf::from(target.to_string());
     let db = state.db.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let target_path = PathBuf::from(&filePath);
+    let exported = tauri::async_runtime::spawn_blocking(move || {
         db.export_sql(&target_path)?;
-        Ok::<_, AppError>(json!({
-            "success": true,
-            "message": "SQL exported successfully",
-            "filePath": filePath
-        }))
+        Ok::<_, AppError>(target_path)
     })
     .await
     .map_err(|e| format!("导出配置失败: {e}"))?
-    .map_err(|e: AppError| e.to_string())
+    .map_err(|e: AppError| e.to_string())?;
+
+    Ok(Some(json!({
+        "success": true,
+        "message": "SQL exported successfully",
+        "filePath": exported.to_string_lossy()
+    })))
 }
 
-/// 从 SQL 备份导入数据库
+/// 选择 SQL 备份并导入（计划 4.2.1 S-2）。
 #[tauri::command]
-pub async fn import_config_from_file(
-    #[allow(non_snake_case)] filePath: String,
+pub async fn import_config_via_dialog<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
+) -> Result<Option<Value>, String> {
+    let Some(source) = app
+        .dialog()
+        .file()
+        .add_filter("SQL", &["sql"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    import_config_from_path(state.inner().clone(), source.to_string())
+        .await
+        .map(Some)
+}
+
+async fn import_config_from_path(
+    app_state_for_sync: AppState,
+    file_path: String,
 ) -> Result<Value, String> {
-    let app_state_for_sync = state.inner().clone();
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
-            let path_buf = PathBuf::from(&filePath);
+            let path_buf = PathBuf::from(&file_path);
             let backup_id = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
@@ -97,36 +130,6 @@ pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<V
 }
 
 // ─── File dialogs ────────────────────────────────────────────
-
-/// 保存文件对话框
-#[tauri::command]
-pub async fn save_file_dialog<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-    #[allow(non_snake_case)] defaultName: String,
-) -> Result<Option<String>, String> {
-    let dialog = app.dialog();
-    let result = dialog
-        .file()
-        .add_filter("SQL", &["sql"])
-        .set_file_name(&defaultName)
-        .blocking_save_file();
-
-    Ok(result.map(|p| p.to_string()))
-}
-
-/// 打开文件对话框
-#[tauri::command]
-pub async fn open_file_dialog<R: tauri::Runtime>(
-    app: tauri::AppHandle<R>,
-) -> Result<Option<String>, String> {
-    let dialog = app.dialog();
-    let result = dialog
-        .file()
-        .add_filter("SQL", &["sql"])
-        .blocking_pick_file();
-
-    Ok(result.map(|p| p.to_string()))
-}
 
 /// 打开 ZIP 文件选择对话框
 #[tauri::command]

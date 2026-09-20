@@ -82,11 +82,13 @@ pub fn scan_sessions() -> Vec<SessionMeta> {
 }
 
 pub fn load_messages(provider_id: &str, source_path: &str) -> Result<Vec<SessionMessage>, String> {
-    let path = Path::new(source_path);
+    let roots = provider_roots(provider_id)?;
+    let (_, validated_source) =
+        resolve_session_source(provider_id, Path::new(source_path), &roots)?;
     match provider_id {
-        "codex" => codex::load_messages(path),
-        "claude" => claude::load_messages(path),
-        "pi" => pi::load_messages(path),
+        "codex" => codex::load_messages(&validated_source),
+        "claude" => claude::load_messages(&validated_source),
+        "pi" => pi::load_messages(&validated_source),
         _ => Err(format!("Unsupported provider: {provider_id}")),
     }
 }
@@ -116,6 +118,25 @@ fn delete_session_with_roots(
     source_path: &Path,
     roots: &[PathBuf],
 ) -> Result<bool, String> {
+    let (validated_root, validated_source) =
+        resolve_session_source(provider_id, source_path, roots)?;
+    match provider_id {
+        "codex" => codex::delete_session(&validated_root, &validated_source, session_id),
+        "claude" => claude::delete_session(&validated_root, &validated_source, session_id),
+        "pi" => pi::delete_session(&validated_root, &validated_source, session_id),
+        _ => Err(format!("Unsupported provider: {provider_id}")),
+    }
+}
+
+/// 校验会话文件确实落在该供应商的会话根目录内，返回（根目录, 已解析的源路径）。
+///
+/// `delete_session` 与 `load_messages` 共用这条边界（计划 4.2.1 S-1）：会话列表本来就是
+/// 后端枚举出来的，前端没有理由传一个根目录之外的路径。
+fn resolve_session_source(
+    provider_id: &str,
+    source_path: &Path,
+    roots: &[PathBuf],
+) -> Result<(PathBuf, PathBuf), String> {
     let validated_source = canonicalize_existing_path(source_path, "session source")?;
 
     let mut saw_existing_root = false;
@@ -127,12 +148,7 @@ fn delete_session_with_roots(
         saw_existing_root = true;
         let validated_root = canonicalize_existing_path(root, "session root")?;
         if validated_source.starts_with(&validated_root) {
-            return match provider_id {
-                "codex" => codex::delete_session(&validated_root, &validated_source, session_id),
-                "claude" => claude::delete_session(&validated_root, &validated_source, session_id),
-                "pi" => pi::delete_session(&validated_root, &validated_source, session_id),
-                _ => Err(format!("Unsupported provider: {provider_id}")),
-            };
+            return Ok((validated_root, validated_source));
         }
     }
 
@@ -269,6 +285,36 @@ mod tests {
                 .expect_err("expected missing source path to fail");
 
         assert!(err.contains("session source not found"));
+    }
+
+    /// 计划 4.2.1 S-1：`load_messages` 与 `delete_session` 共用同一条根目录边界，
+    /// 不能再用任意路径读文件。
+    #[test]
+    fn resolve_session_source_rejects_path_outside_roots() {
+        let root = tempdir().expect("tempdir");
+        let outside = tempdir().expect("tempdir");
+        let source = outside.path().join("session.jsonl");
+        std::fs::write(&source, "{}").expect("write source");
+
+        let err = resolve_session_source("codex", &source, &[root.path().to_path_buf()])
+            .expect_err("expected outside-root path to be rejected");
+        assert!(err.contains("outside provider roots"), "实际错误: {err}");
+
+        // 根目录内的路径正常放行
+        let inside = root.path().join("session.jsonl");
+        std::fs::write(&inside, "{}").expect("write source");
+        let (validated_root, validated_source) =
+            resolve_session_source("codex", &inside, &[root.path().to_path_buf()])
+                .expect("inside-root path must pass");
+        assert!(validated_source.starts_with(&validated_root));
+    }
+
+    /// 计划 4.2.1 S-1：供应商 id 不认识时直接拒绝，不会退化成"任意路径可读"。
+    #[test]
+    fn load_messages_rejects_unknown_provider() {
+        let err = load_messages("gemini", "/tmp/whatever.jsonl")
+            .expect_err("unknown provider must be rejected");
+        assert!(err.contains("Unsupported provider"), "实际错误: {err}");
     }
 
     #[test]

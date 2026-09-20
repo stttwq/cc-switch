@@ -18,20 +18,29 @@ use std::os::windows::process::CommandExt;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
-/// 打开外部链接
+/// 打开外部链接（计划 4.2.1 S-4）。
+///
+/// 只放行 `http` / `https`。旧实现遇到没有 scheme 的输入会补 `https://`，这让
+/// `file:///…`、`javascript:…` 这类值的处理取决于"看起来像不像链接"，边界反而模糊；
+/// 现在调用方都传完整 URL，直接按 scheme 白名单拒绝。
 #[tauri::command]
 pub async fn open_external(app: AppHandle, url: String) -> Result<bool, String> {
-    let url = if url.starts_with("http://") || url.starts_with("https://") {
-        url
-    } else {
-        format!("https://{url}")
-    };
+    let parsed = validate_external_url(&url)?;
 
     app.opener()
-        .open_url(&url, None::<String>)
+        .open_url(parsed.as_str(), None::<String>)
         .map_err(|e| format!("打开链接失败: {e}"))?;
 
     Ok(true)
+}
+
+/// `open_external` 的 scheme 白名单校验，抽出来是为了能直接单测。
+fn validate_external_url(url: &str) -> Result<url::Url, String> {
+    let parsed = url::Url::parse(url.trim()).map_err(|e| format!("无效链接: {e}"))?;
+    if !matches!(parsed.scheme(), "http" | "https") {
+        return Err(format!("不允许的链接协议: {}", parsed.scheme()));
+    }
+    Ok(parsed)
 }
 
 #[tauri::command]
@@ -4971,6 +4980,43 @@ mod tests {
             command,
             "pushd \"\\\\wsl$\\Ubuntu\\home\\coder\\repo\" || exit /b 1\r\n"
         );
+    }
+
+    #[test]
+    fn validate_external_url_accepts_http_and_https() {
+        assert_eq!(
+            validate_external_url("https://example.com/a")
+                .expect("https should be allowed")
+                .scheme(),
+            "https"
+        );
+        assert_eq!(
+            validate_external_url("  http://example.com  ")
+                .expect("http should be allowed and trimmed")
+                .scheme(),
+            "http"
+        );
+    }
+
+    #[test]
+    fn validate_external_url_rejects_file_scheme() {
+        let error = validate_external_url("file:///C:/Windows/System32/calc.exe")
+            .expect_err("file scheme must be rejected");
+        assert!(error.contains("file"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn validate_external_url_rejects_javascript_scheme() {
+        let error = validate_external_url("javascript:alert(1)")
+            .expect_err("javascript scheme must be rejected");
+        assert!(error.contains("javascript"), "unexpected error: {error}");
+    }
+
+    #[test]
+    fn validate_external_url_no_longer_silently_prefixes_https() {
+        // 旧实现给没有 scheme 的输入补 `https://`；现在调用方都传完整 URL，
+        // 相对引用应当直接报错，而不是被猜成一个链接。
+        assert!(validate_external_url("example.com/a").is_err());
     }
 
     #[test]

@@ -11,70 +11,35 @@ vi.mock("react-i18next", () => ({
 describe("ImportExportSection Component", () => {
   const baseProps = {
     status: "idle" as const,
-    selectedFile: "",
     errorMessage: null,
     backupId: null,
     isImporting: false,
-    onSelectFile: vi.fn(),
     onImport: vi.fn(),
     onExport: vi.fn(),
-    onClear: vi.fn(),
   };
 
   beforeEach(() => {
     tMock.mockImplementation((key: string) => key);
-    baseProps.onSelectFile.mockReset();
     baseProps.onImport.mockReset();
     baseProps.onExport.mockReset();
-    baseProps.onClear.mockReset();
   });
 
-  it("should disable import button and show placeholder when no file selected", () => {
+  it("triggers import and export from the two buttons", () => {
     render(<ImportExportSection {...baseProps} />);
 
-    // When no file selected, button shows "selectConfigFile" and clicking it opens file dialog
-    expect(
-      screen.getByRole("button", { name: /settings\.selectConfigFile/ }),
-    ).toBeInTheDocument();
+    // 计划 4.2.1 S-2：选文件与导入合成一步，按钮直接触发导入
+    fireEvent.click(screen.getByRole("button", { name: /settings\.import/ }));
+    expect(baseProps.onImport).toHaveBeenCalledTimes(1);
+
     fireEvent.click(
       screen.getByRole("button", { name: "settings.exportConfig" }),
     );
     expect(baseProps.onExport).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(
-      screen.getByRole("button", { name: /settings\.selectConfigFile/ }),
-    );
-    expect(baseProps.onSelectFile).toHaveBeenCalledTimes(1);
-  });
-
-  it("should show filename and enable import/clear when file is selected", () => {
-    render(
-      <ImportExportSection
-        {...baseProps}
-        selectedFile={"/tmp/test/config.json"}
-      />,
-    );
-
-    expect(screen.getByText(/config\.json/)).toBeInTheDocument();
-    const importButton = screen.getByRole("button", {
-      name: /settings\.import/,
-    });
-    expect(importButton).toBeEnabled();
-    fireEvent.click(importButton);
-    expect(baseProps.onImport).toHaveBeenCalledTimes(1);
-
-    fireEvent.click(screen.getByRole("button", { name: "common.clear" }));
-    expect(baseProps.onClear).toHaveBeenCalledTimes(1);
   });
 
   it("should show loading text and disable import button during import", () => {
     render(
-      <ImportExportSection
-        {...baseProps}
-        selectedFile={"/tmp/test/config.json"}
-        isImporting
-        status="importing"
-      />,
+      <ImportExportSection {...baseProps} isImporting status="importing" />,
     );
 
     const importingLabels = screen.getAllByText("settings.importing");
@@ -89,7 +54,6 @@ describe("ImportExportSection Component", () => {
     render(
       <ImportExportSection
         {...baseProps}
-        selectedFile={"/tmp/test/config.json"}
         status="success"
         backupId="backup-001"
       />,

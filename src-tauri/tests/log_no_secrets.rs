@@ -5,7 +5,9 @@ use std::sync::{Mutex, OnceLock};
 
 use serde_json::json;
 
-use cc_switch_lib::{AppType, MultiAppConfig, Provider, ProviderService};
+use cc_switch_lib::{
+    reveal_provider_secret_internal, AppType, MultiAppConfig, Provider, ProviderService,
+};
 
 #[path = "support.rs"]
 mod support;
@@ -99,6 +101,13 @@ fn logs_never_contain_secret_values_across_migrate_add_switch() {
 
     // 切换（读凭据 + 投递环境变量 + 写 live）
     ProviderService::switch(&state, AppType::Claude, "second").expect("switch claude provider");
+
+    // §1.4.1 回显：按需读出明文值一次，日志里同样不得出现它
+    let revealed = reveal_provider_secret_internal(&state, AppType::Claude, "second", "api_key")
+        .expect("reveal provider secret")
+        .expect("second provider has a credential");
+    assert_eq!(revealed, SWITCH_KEY);
+    drop(revealed);
 
     let logs = captured_logs();
     assert!(!logs.is_empty(), "日志捕获器未生效，本测试将失去回归价值");

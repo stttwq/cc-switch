@@ -9,7 +9,10 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import { providersApi, vscodeApi, type AppId } from "@/lib/api";
-import { extractCodexExperimentalBearerToken } from "@/utils/providerConfigUtils";
+import {
+  applyBaseUrlForApp,
+  extractCodexExperimentalBearerToken,
+} from "@/utils/providerConfigUtils";
 
 interface EditProviderDialogProps {
   open: boolean;
@@ -190,12 +193,6 @@ export function EditProviderDialog({
 
   const initialSettingsConfig = useMemo(() => {
     const storedSettings = asRecord(provider?.settingsConfig);
-    const withSecrets = {
-      ...(storedSettings ?? {}),
-      ...(provider?.secretStatus?.baseUrl
-        ? { baseUrl: provider.secretStatus.baseUrl }
-        : {}),
-    };
     const base =
       appId === "codex" && liveSettings
         ? reconcileCodexLiveAuth(
@@ -203,7 +200,15 @@ export function EditProviderDialog({
             storedSettings,
             provider?.category,
           )
-        : (liveSettings ?? withSecrets);
+        : (liveSettings ?? storedSettings ?? {});
+
+    // Base URL 单独叠一层：live 快照里没有它（写 live 时被剥掉），DB 快照里也没有
+    // （提取器把它收进了凭据管理器），只能从 secretStatus 补回来。
+    const withBaseUrl = applyBaseUrlForApp(
+      appId,
+      base,
+      provider?.secretStatus?.baseUrl,
+    );
 
     // Codex 的 modelCatalog 是 cc-switch 私有字段，SSOT 在数据库。Live 的 config.toml
     // 仅在写入时投影出 model_catalog_json 指针；Codex.app 改写配置、代理接管/恢复周期、
@@ -219,11 +224,11 @@ export function EditProviderDialog({
       const dbCatalog = (provider.settingsConfig as Record<string, unknown>)
         .modelCatalog;
       if (dbCatalog !== undefined) {
-        return { ...base, modelCatalog: dbCatalog };
+        return { ...withBaseUrl, modelCatalog: dbCatalog };
       }
     }
 
-    return base;
+    return withBaseUrl;
   }, [
     liveSettings,
     provider?.settingsConfig,

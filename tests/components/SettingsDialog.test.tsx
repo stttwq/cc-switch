@@ -85,29 +85,23 @@ const createSettingsMock = (overrides: Partial<SettingsMock> = {}) => {
 };
 
 interface ImportExportMock {
-  selectedFile: string;
   status: string;
   errorMessage: string | null;
   backupId: string | null;
   isImporting: boolean;
-  selectImportFile: ReturnType<typeof vi.fn>;
   importConfig: ReturnType<typeof vi.fn>;
   exportConfig: ReturnType<typeof vi.fn>;
-  clearSelection: ReturnType<typeof vi.fn>;
   resetStatus: ReturnType<typeof vi.fn>;
 }
 
 const createImportExportMock = (overrides: Partial<ImportExportMock> = {}) => {
   const base: ImportExportMock = {
-    selectedFile: "",
     status: "idle",
     errorMessage: null,
     backupId: null,
     isImporting: false,
-    selectImportFile: vi.fn(),
     importConfig: vi.fn(),
     exportConfig: vi.fn(),
-    clearSelection: vi.fn(),
     resetStatus: vi.fn(),
   };
 
@@ -309,10 +303,7 @@ describe("SettingsPage Component", () => {
 
   it("should render general and advanced tabs and trigger child callbacks", () => {
     const onOpenChange = vi.fn();
-    // 设置 selectedFile 后，按钮显示 settings.import（可执行导入）
-    importExportMock = createImportExportMock({
-      selectedFile: "/tmp/config.json",
-    });
+    importExportMock = createImportExportMock();
 
     renderSettingsPage({ onOpenChange });
 
@@ -334,7 +325,7 @@ describe("SettingsPage Component", () => {
     expect(screen.getByText("webdav-sync-section:none")).toBeInTheDocument();
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
 
-    // 有文件时，点击导入按钮执行 importConfig
+    // 计划 4.2.1 S-2：导入按钮直接触发 importConfig（对话框在 Rust 侧弹）
     fireEvent.click(screen.getByRole("button", { name: /settings\.import/ }));
     expect(importExportMock.importConfig).toHaveBeenCalled();
 
@@ -342,10 +333,6 @@ describe("SettingsPage Component", () => {
       screen.getByRole("button", { name: "settings.exportConfig" }),
     );
     expect(importExportMock.exportConfig).toHaveBeenCalled();
-
-    // 清除选择按钮
-    fireEvent.click(screen.getByRole("button", { name: "common.clear" }));
-    expect(importExportMock.clearSelection).toHaveBeenCalled();
   });
 
   it("should reset tab content scroll position when switching settings tabs", () => {
@@ -390,7 +377,6 @@ describe("SettingsPage Component", () => {
 
     await waitFor(() => {
       expect(settingsMock.saveSettings).toHaveBeenCalledTimes(1);
-      expect(importExportMock.clearSelection).toHaveBeenCalledTimes(1);
       expect(importExportMock.resetStatus).toHaveBeenCalledTimes(2);
       expect(settingsMock.acknowledgeRestart).toHaveBeenCalledTimes(1);
       expect(onOpenChange).toHaveBeenCalledWith(false);
