@@ -5,6 +5,36 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.2] - Unreleased
+
+On-demand credential reveal, IPC input hardening, and a large Windows-only repo/security cleanup.
+
+### Added
+
+- **Reveal a provider's API key on demand.** Editing a provider now shows an eye button that reads a single field's key from Credential Manager once (`reveal_provider_secret`), unmasks it in place, and re-masks on blur or after 60 s. Batch reads (list/cards/tray) still never carry a key — the frontend is zero-secret by default, not zero-secret ever.
+- **Base URL is back-filled and visible.** The Base URL edit box now defaults to the current value per app (Claude `env`, Codex TOML `base_url`, Pi top-level), and provider cards show the active endpoint's host so you can tell which endpoint you are on without opening the editor.
+
+### Changed
+
+- `get_providers` is now async and no longer reads Credential Manager per provider on the main thread.
+- Credential principle updated from "frontend zero-secret" to "frontend zero-secret by default + explicit on-demand reveal"; documented in SECURITY.md.
+
+### Fixed / Security
+
+- **IPC input surface tightened (S-1/S-2/S-4):** `get_session_messages`/`delete_session` confine `sourcePath` to the provider root; config import/export go through a native dialog so the path never round-trips through the renderer; `open_external` parses the URL and allows only `http`/`https`.
+- **HTTP stack (S-8):** reqwest no longer pulls `native-tls`/`schannel`; it uses rustls against the **OS certificate store** (`rustls-tls-native-roots`), which also fixes a real-machine `UnknownIssuer` failure downloading skills behind a TLS-intercepting proxy. A single reqwest version now appears in the shipped target.
+- Bumped transitive deps (rustls, rustls-webpki, h2, anyhow, uds_windows) to clear five RustSec advisories.
+
+### Removed / Cleanup
+
+- **Windows-only code (C5):** deleted `linux_fix`, the macOS-only session-terminal subsystem and `launch_session_terminal`, non-Windows `cfg` branches in `misc.rs`/`lib.rs`/`tray.rs`/`lightweight.rs`/`auto_launch.rs`, the `webkit2gtk`/`libc`/`objc2` dependencies, and the iOS/Android/macOS icons and `Info.plist`.
+- **Repo identity:** README, CHANGELOG, CONTRIBUTING/SUPPORT/CODE_OF_CONDUCT/CODEOWNERS, issue templates and docs now point at this fork instead of upstream `farion1231`/`ccswitch.io`; upstream 3.x history moved to `docs/changelog-upstream-3.x.md`; 92 upstream release notes and the en/ja manuals removed; in-app copy no longer describes removed apps (Gemini/Claude Desktop) as managed.
+
+### Build / Release
+
+- All GitHub Actions pinned to commit SHAs; added a weekly `cargo-deny` + `gitleaks` + `pnpm audit` workflow and a blocking `cargo deny check advisories` gate on the main CI backend job.
+- Releases ship `SHA256SUMS` + a **minisign** signature (public key committed as `minisign.pub`); SECURITY.md rewritten for 2.x.
+
 ## [2.0.1] - 2026-09-20
 
 Fixes from the first real-machine upgrade rehearsal (3.20.3 → 2.0.0), recorded in `docs/plans/secrets-slimdown-acceptance-zh.md`.
