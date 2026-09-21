@@ -1,8 +1,9 @@
 use serde_json::json;
 
 use cc_switch_lib::{
-    get_claude_settings_path, read_json_file, write_codex_live_atomic, AppError, AppType,
-    ManagedEnvVars, McpApps, McpServer, MultiAppConfig, Provider, ProviderMeta, ProviderService,
+    get_claude_settings_path, read_json_file, reapply_live_after_migration,
+    write_codex_live_atomic, AppError, AppType, ManagedEnvVars, McpApps, McpServer, MultiAppConfig,
+    Provider, ProviderMeta, ProviderService,
 };
 
 #[path = "support.rs"]
@@ -1994,6 +1995,177 @@ fn switch_claude_delivers_env_vars_and_registers_ownership() {
     assert!(
         managed_after.vars_for_provider("claude", "b").is_empty(),
         "切走后 B 不再拥有任何用户环境变量"
+    );
+}
+
+/// T-7 事务性：切换投递写新变量中途失败时，必须回到切换前状态——旧的删了、新的没写上
+/// 的中间态不可接受。这里让 B 的 `ANTHROPIC_BASE_URL` 在 `sink.set` 时注入失败，断言
+/// A 的两个变量原样回写、B 一个都没留下、DB 所有权登记仍归 A（回滚路径刻意不 save 登记）。
+#[test]
+fn switch_rolls_back_env_delivery_when_set_fails() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "a".to_string();
+        manager.providers.insert(
+            "a".to_string(),
+            Provider::from_parts(
+                "a".to_string(),
+                "A".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a", "ANTHROPIC_BASE_URL": "https://a.example.com" } }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "b".to_string(),
+            Provider::from_parts(
+                "b".to_string(),
+                "B".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-b", "ANTHROPIC_BASE_URL": "https://b.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+
+    // 先正常切到 A，让 A 的变量落到 sink。
+    ProviderService::switch(&state, AppType::Claude, "a").expect("switch to a");
+    assert_eq!(
+        sink.snapshot()
+            .get("ANTHROPIC_AUTH_TOKEN")
+            .map(String::as_str),
+        Some("key-a")
+    );
+
+    // 注入：切到 B 时写 BASE_URL 失败。
+    sink.fail_set_for("ANTHROPIC_BASE_URL");
+    ProviderService::switch(&state, AppType::Claude, "b")
+        .expect_err("写新变量失败时切换应整体失败");
+
+    let after = sink.snapshot();
+    assert_eq!(
+        after.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        Some("key-a"),
+        "回滚后 A 的密钥原样写回（不是 B 的 key-b，也不是被删空）"
+    );
+    assert_eq!(
+        after.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        Some("https://a.example.com"),
+        "回滚后 A 的 Base URL 原样写回"
+    );
+
+    let managed = ManagedEnvVars::load(&state.db).expect("read managed_env_vars");
+    assert!(
+        managed.vars_for_provider("claude", "b").is_empty(),
+        "失败的切换不该把 B 的变量登记进来"
+    );
+    assert_eq!(
+        managed.vars_for_provider("claude", "a").len(),
+        2,
+        "回滚后所有权登记仍是切换前的 A"
+    );
+}
+
+/// T-7（Windows）：live 文件被设成只读后，`reapply_live_after_migration` 应把该失败归类为
+/// `claude|file_locked` 并保持 `live_reapply_pending == "1"`（下次启动再试）；解除只读后重跑
+/// 应成功并把 pending 清零。锁在 `#[cfg(windows)]`：只读导致 `ReplaceFileW` 失败是 Windows 行为。
+#[cfg(windows)]
+#[test]
+fn reapply_live_keeps_pending_when_live_file_readonly() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        SetFileAttributesW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    };
+
+    fn set_readonly(path: &std::path::Path, ro: bool) {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        let attr = if ro {
+            FILE_ATTRIBUTE_READONLY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        // SAFETY: `wide` 是以 NUL 结尾的 UTF-16 路径，调用期间保持存活。
+        let ok = unsafe { SetFileAttributesW(wide.as_ptr(), attr) };
+        assert_ne!(ok, 0, "SetFileAttributesW 失败: {}", path.display());
+    }
+
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "a".to_string();
+        manager.providers.insert(
+            "a".to_string(),
+            Provider::from_parts(
+                "a".to_string(),
+                "A".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a", "ANTHROPIC_BASE_URL": "https://a.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    attach_test_env_sink(&mut state);
+
+    // 首次切换生成 live 文件（settings.json），作为随后被设只读的既有目标。
+    ProviderService::switch(&state, AppType::Claude, "a").expect("首次切换生成 live 文件");
+    let live = get_claude_settings_path();
+    assert!(live.exists(), "切换应生成 {}", live.display());
+
+    state
+        .db
+        .set_setting("live_reapply_pending", "1")
+        .expect("置 pending");
+
+    // ① 只读 → 重投失败并保持 pending。
+    set_readonly(&live, true);
+    let failures = reapply_live_after_migration(&state).expect("重投流程本身不 panic");
+    assert!(
+        failures.iter().any(|f| f == "claude|file_locked"),
+        "只读文件应归类为 claude|file_locked，实际: {failures:?}"
+    );
+    assert_eq!(
+        state
+            .db
+            .get_setting("live_reapply_pending")
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("1"),
+        "仍有失败项时 pending 不该被清零"
+    );
+
+    // ② 解除只读 → 重跑成功并清零。
+    set_readonly(&live, false);
+    let failures2 = reapply_live_after_migration(&state).expect("重投流程本身不 panic");
+    assert!(
+        !failures2.iter().any(|f| f.starts_with("claude|")),
+        "解除只读后 claude 不该再失败，实际: {failures2:?}"
+    );
+    assert_eq!(
+        state
+            .db
+            .get_setting("live_reapply_pending")
+            .ok()
+            .flatten()
+            .as_deref(),
+        Some("0"),
+        "全部成功后 pending 应清零"
     );
 }
 

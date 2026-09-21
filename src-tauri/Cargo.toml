@@ -89,3 +89,7 @@ strip = "symbols"
 serial_test = "3"
 tempfile = "3"
 futures = "0.3"
+
+# T-7 集成测试需在 Windows 上把 live 文件设为只读（std 的 Permissions 无 setter）。
+[target.'cfg(windows)'.dev-dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

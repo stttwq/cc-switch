@@ -896,6 +896,17 @@ impl ProviderService {
         let pending = Self::collect_pending_env(state, app_type, provider, result)?;
         Self::reject_if_env_conflicts(state, app_type, &pending)?;
 
+        // 删除旧变量前，先把它们在 sink 里的当前值读出暂存（`Zeroizing`），供写新变量
+        // 失败时回滚——否则会出现"旧的已删、新的没写上"的中间态（T-7 事务性）。
+        let mut old_snapshot: Vec<(String, Zeroizing<String>)> = Vec::new();
+        for var_name in &old_vars {
+            match sink.get(var_name) {
+                Ok(Some(value)) => old_snapshot.push((var_name.clone(), value)),
+                Ok(None) => {}
+                Err(e) => log::warn!("读取待删除环境变量 {var_name} 失败（回滚将不完整）: {e}"),
+            }
+        }
+
         for var_name in &old_vars {
             if let Err(e) = sink.remove(var_name) {
                 log::warn!("Failed to remove env var {var_name}: {e}");
@@ -906,7 +917,12 @@ impl ProviderService {
             managed.unregister(var_name);
         }
 
-        for (name, value) in pending {
+        // 逐条写新变量。任一条 `sink.set` 失败即回滚到切换前：撤掉本轮已写入的新变量、
+        // 把旧变量原值写回、广播，然后原样上抛。此路径刻意不调 `managed.save`——
+        // 登记要到全部写成功后才落库，DB 仍是切换前状态（旧变量归上一供应商所有），
+        // 与回滚后的 sink 天然一致，无需再改登记。
+        let mut written: Vec<String> = Vec::new();
+        for (name, value) in &pending {
             // S2：投递给用户环境变量（含 CC_SWITCH_*）的值登记进会话密钥表，
             // 之后任何日志与导出文本命中它都会被脱敏 / 拦下。
             // 缺陷 D-2：Base URL 不是密钥，登记它会让护栏把 `providers.website_url`
@@ -916,8 +932,28 @@ impl ProviderService {
             if holds_credential {
                 crate::secrets::scan::note_session_secret(value.as_str());
             }
-            sink.set(&name, &value)?;
-            managed.register(&name, app_type.as_str(), &provider.id);
+            if let Err(e) = sink.set(name, value) {
+                for w in &written {
+                    if let Err(undo) = sink.remove(w) {
+                        log::warn!("回滚环境变量投递失败（移除已写入 {w}）: {undo}");
+                    }
+                }
+                for (n, v) in &old_snapshot {
+                    // 与主循环同一 D-2 规则：明文 Base URL 不登记为会话密钥。
+                    if !n.ends_with("_BASE_URL") || v.contains('@') {
+                        crate::secrets::scan::note_session_secret(v.as_str());
+                    }
+                    if let Err(undo) = sink.set(n, v) {
+                        log::warn!("回滚环境变量投递失败（写回旧值 {n}）: {undo}");
+                    }
+                }
+                if let Err(undo) = sink.broadcast() {
+                    log::warn!("回滚环境变量投递后广播失败: {undo}");
+                }
+                return Err(e);
+            }
+            managed.register(name, app_type.as_str(), &provider.id);
+            written.push(name.clone());
         }
 
         managed.save(&state.db)?;

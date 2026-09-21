@@ -49,7 +49,7 @@ pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
-    provider::reapply_current_codex_official_live,
+    provider::{reapply_current_codex_official_live, reapply_live_after_migration},
     skill::{migrate_skills_to_ssot, ImportSkillSelection},
     ConfigService, McpService, PromptService, ProviderService, SkillService,
 };

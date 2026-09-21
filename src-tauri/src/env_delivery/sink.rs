@@ -107,6 +107,9 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
 #[derive(Clone, Default)]
 pub struct InMemoryEnvSink {
     vars: Arc<Mutex<HashMap<String, Zeroizing<String>>>>,
+    /// 测试注入：置位后对该变量名的 `set` 返回 `Err`，模拟注册表写入失败，
+    /// 供切换投递的事务回滚用例（T-7 事务性）断言"写新失败→旧值原样回写"。
+    fail_set_for: Arc<Mutex<Option<String>>>,
 }
 
 impl InMemoryEnvSink {
@@ -125,11 +128,24 @@ impl InMemoryEnvSink {
             .map(|(k, v)| (k.clone(), v.to_string()))
             .collect()
     }
+
+    /// 测试注入：让**下一次**对该变量名的 `set` 失败一次（一次性，模拟注册表偶发写失败），
+    /// 供切换投递的事务回滚用例（T-7 事务性）断言"写新失败→旧值原样回写"。
+    pub fn fail_set_for(&self, name: &str) {
+        *self.fail_set_for.lock().unwrap() = Some(name.to_string());
+    }
 }
 
 impl EnvSink for InMemoryEnvSink {
     fn set(&self, name: &str, value: &Zeroizing<String>) -> Result<(), AppError> {
         validate_env_name(name)?;
+        // 一次性：命中即清除注入，随后的回滚写回不再被挡。
+        let mut inject = self.fail_set_for.lock().unwrap();
+        if inject.as_deref() == Some(name) {
+            *inject = None;
+            return Err(AppError::Config(format!("injected set failure for {name}")));
+        }
+        drop(inject);
         self.vars
             .lock()
             .unwrap()
