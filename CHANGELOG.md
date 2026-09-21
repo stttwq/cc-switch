@@ -5,14 +5,18 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.2] - Unreleased
+## [2.1.0] - Unreleased
 
-On-demand credential reveal, IPC input hardening, and a large Windows-only repo/security cleanup.
+End-to-end encrypted cloud sync, a strict credential-delivery mode, one-click diagnostics, and a large Windows-only repo/security hardening pass (on-demand key reveal, IPC input tightening).
 
 ### Added
 
 - **Reveal a provider's API key on demand.** Editing a provider now shows an eye button that reads a single field's key from Credential Manager once (`reveal_provider_secret`), unmasks it in place, and re-masks on blur or after 60 s. Batch reads (list/cards/tray) still never carry a key — the frontend is zero-secret by default, not zero-secret ever.
 - **Base URL is back-filled and visible.** The Base URL edit box now defaults to the current value per app (Claude `env`, Codex TOML `base_url`, Pi top-level), and provider cards show the active endpoint's host so you can tell which endpoint you are on without opening the editor.
+- **End-to-end encrypted sync (E2E).** Opt-in per transport (WebDAV / S3). A user passphrase (Argon2id → KEK) seals a per-snapshot data key (XChaCha20-Poly1305) that encrypts `db.sql` and `skills.zip`; the AAD binds `snapshotId + seq`, the inner manifest (device name / time / plaintext hash) is itself encrypted, and a monotonic `seq` blocks rollback. The server only ever sees ciphertext and an opaque `snapshot_id`. The passphrase is stored in Credential Manager and **never uploaded**; losing it means the remote is unrecoverable. Keys are not part of the synced payload, so a restored device shows "key required". v3 lives in a separate `{root}/v3/{profile}` layout — 2.0 clients ignore it, and enabling E2E refuses to downgrade to v2 plaintext.
+- **Conditional writes for concurrency.** WebDAV manifest uploads use `If-Match`/`If-None-Match` (412 → "remote changed"); S3 does a best-effort HEAD compare. A rollback conflict returns a structured payload so the UI can offer an explicit "apply anyway".
+- **Strict credential-delivery mode (B5).** A global switch (off by default) that stops writing secrets into `HKCU\Environment` on provider switch — keys are injected only into terminals launched from cc-switch (`Command::env`). Enabling it immediately reclaims any already-delivered keys. Off-machine CLIs then fail closed (Codex missing `env_key`, Pi unresolved vars); provider cards show a "strict delivery" badge.
+- **One-click diagnostics.** The About page copies a redacted bundle — version, DB schema, migration markers, key-target count, strict-mode state, `crash.log` presence, and up to the last 50 log lines run through known-secret redaction — with no keys, provider names, or full base URLs.
 
 ### Changed
 
@@ -24,6 +28,10 @@ On-demand credential reveal, IPC input hardening, and a large Windows-only repo/
 - **IPC input surface tightened (S-1/S-2/S-4):** `get_session_messages`/`delete_session` confine `sourcePath` to the provider root; config import/export go through a native dialog so the path never round-trips through the renderer; `open_external` parses the URL and allows only `http`/`https`.
 - **HTTP stack (S-8):** reqwest no longer pulls `native-tls`/`schannel`; it uses rustls against the **OS certificate store** (`rustls-tls-native-roots`), which also fixes a real-machine `UnknownIssuer` failure downloading skills behind a TLS-intercepting proxy. A single reqwest version now appears in the shipped target.
 - Bumped transitive deps (rustls, rustls-webpki, h2, anyhow, uds_windows) to clear five RustSec advisories.
+- **Sync transport security.** `http` remote endpoints are refused by default — only loopback / private-network URLs pass, and only when "allow insecure" is checked; existing http remotes configured before the upgrade get a one-time grandfather so they aren't silently cut off. Wrong passphrase and tampered ciphertext are deliberately indistinguishable (fail closed, no oracle).
+- **Provider-switch delivery is now transactional.** The old value of each environment variable is snapshotted (`Zeroizing`) before the delete-then-write sequence; if writing any new variable fails, the switch rolls back — previously written vars are removed and the old values restored — instead of leaving a half-applied "old deleted, new not written" state.
+- **DB robustness (T-4/T-5).** `busy_timeout = 5000` and a startup `PRAGMA quick_check` with an offline "restore from latest backup" path (WAL intentionally not enabled — it corrupts on cloud/NAS/WSL2-UNC sync dirs); a `pre-sync-restore-<ts>.db` file backup is taken before applying a synced snapshot.
+- **Tighter local ACL (S-10).** On first run, `~/.cc-switch` is locked down to the current user + SYSTEM + Administrators (idempotent `icacls`).
 
 ### Removed / Cleanup
 
