@@ -37,7 +37,7 @@ tauri-plugin-window-state = "2"
 dirs = "5.0"
 toml = "0.8"
 toml_edit = "0.22"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "stream", "socks", "http2", "charset"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-native-roots", "json", "stream", "socks", "http2", "charset"] }
 arboard = "3.6"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "sync"] }
 futures = "0.3"
