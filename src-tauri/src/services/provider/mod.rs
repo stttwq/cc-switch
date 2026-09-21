@@ -51,7 +51,8 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
         let s = e.to_string();
         if s.contains("ENV_CONFLICT") {
             "env_conflict"
-        } else if s.contains("原子替换失败") || s.contains("拒绝访问") || s.contains("os error 5") {
+        } else if s.contains("原子替换失败") || s.contains("拒绝访问") || s.contains("os error 5")
+        {
             "file_locked"
         } else {
             "other"

@@ -328,7 +328,7 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         source_path: Some(source_path.clone()),
         resume_command: Some(format!(
             "pi --session {}",
-            crate::session_manager::terminal::shell_escape(&source_path)
+            crate::session_manager::shell_escape(&source_path)
         )),
     })
 }

@@ -1,10 +1,18 @@
 pub mod providers;
-pub mod terminal;
 
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use providers::{claude, codex, pi};
+
+/// POSIX 单引号转义，供各 provider 构造 `resume_command` 时安全嵌入磁盘上扫来的
+/// 路径（`projectDir` 可能含 `$` `(` `)` 等，双引号包裹会被 shell 求值）。
+///
+/// 单引号内不做任何展开，唯一表示不了的是 `'` 自身，用「闭合-转义-重开」的
+/// `'\''` 序列绕过。
+pub(crate) fn shell_escape(value: &str) -> String {
+    format!("'{}'", value.replace('\'', r"'\''"))
+}
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
