@@ -134,6 +134,15 @@ jobs:
         shell: bash
         run: mkdir -p dist
 
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@94c31af3204a9f15ab40b35ad084410b905bbc73 # v2
+        with:
+          tool: cargo-deny
+
+      - name: Dependency advisories (RustSec) — blocking
+        working-directory: src-tauri
+        run: cargo deny check advisories
+
       - name: Check Rust formatting
         run: cargo fmt --check --manifest-path src-tauri/Cargo.toml
 
