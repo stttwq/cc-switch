@@ -260,6 +260,10 @@ export interface Settings {
   // Linux: "gnome-terminal" | "konsole" | "xfce4-terminal" | "alacritty" | "kitty" | "ghostty"
   preferredTerminal?: string;
 
+  // ===== 环境变量投递（B5 严格模式）=====
+  // 开启后切换供应商不把密钥写入 HKCU\Environment，密钥仅经 cc-switch「打开终端」注入。
+  envDeliveryStrictMode?: boolean;
+
   // ===== 本机自动迁移状态 =====
   localMigrations?: {
     codexThirdPartyHistoryProviderBucketV1?: {

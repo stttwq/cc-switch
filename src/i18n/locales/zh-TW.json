@@ -158,6 +158,8 @@
     "duplicateLiveIdsLoadFailed": "讀取設定中的供應商識別碼失敗，請先修復設定後再試",
     "keyMissing": "需要金鑰",
     "keyMissingHint": "金鑰不會同步或匯出，請編輯此供應商重新輸入 API 金鑰。",
+    "strictDelivery": "嚴格投遞",
+    "strictDeliveryHint": "嚴格投遞模式已開啟：此供應商的金鑰不會寫入使用者環境變數，只有自 cc-switch「開啟終端機」啟動的 CLI 才能取得。",
     "endpoint": "介面位址"
   },
   "claudeCode": {},
@@ -255,6 +257,10 @@
       "backup": {
         "title": "備份與還原",
         "description": "管理自動備份，查看和還原資料庫快照"
+      },
+      "security": {
+        "title": "安全性",
+        "description": "環境變數投遞等本機憑證處理"
       },
       "cloudSync": {
         "title": "雲端同步",
@@ -699,6 +705,15 @@
     "unifyCodexHistoryRestoreFailed": "還原官方會話歷史失敗，請重試",
     "unifyCodexHistoryRestoreNothing": "目前 Codex 目錄沒有可恢復的遷移備份",
     "unifyCodexHistoryRestoreSkippedToggleOn": "統一會話歷史開關已重新開啟，已跳過還原",
+    "envDelivery": {
+      "title": "環境變數投遞",
+      "description": "切換供應商時，目前供應商的密鑰會寫入使用者環境變數（HKCU\\Environment），供本機命令列工具讀取。",
+      "strictMode": "嚴格投遞模式",
+      "strictModeHint": "開啟後不再把密鑰寫入使用者環境變數，只經 cc-switch「開啟終端機」注入。",
+      "strictModeActive": "已開啟：從別處啟動的 claude / codex / pi 將讀不到密鑰（會因缺少憑證而報錯），必須從 cc-switch 點「開啟終端機」啟動。關閉開關即恢復常規投遞。",
+      "enabledToast": "已開啟嚴格投遞模式，並從使用者環境變數收回已投遞的密鑰",
+      "disabledToast": "已關閉嚴格投遞模式，下次切換供應商時恢復常規投遞"
+    },
     "syncEncryption": {
       "title": "端到端同步加密",
       "description": "同步載荷在本機加密、只在用同一密碼的另一台機器解密；WebDAV/S3 伺服器只能看到密文。",

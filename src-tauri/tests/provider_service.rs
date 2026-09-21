@@ -1,9 +1,9 @@
 use serde_json::json;
 
 use cc_switch_lib::{
-    get_claude_settings_path, read_json_file, reapply_live_after_migration,
-    write_codex_live_atomic, AppError, AppType, ManagedEnvVars, McpApps, McpServer, MultiAppConfig,
-    Provider, ProviderMeta, ProviderService,
+    get_claude_settings_path, read_json_file, reapply_live_after_migration, update_settings,
+    write_codex_live_atomic, AppError, AppSettings, AppType, ManagedEnvVars, McpApps, McpServer,
+    MultiAppConfig, Provider, ProviderMeta, ProviderService,
 };
 
 #[path = "support.rs"]
@@ -2411,5 +2411,86 @@ fn switch_claude_does_not_register_base_url_as_session_secret() {
             .iter()
             .any(|v| v == "https://guard-probe.example.com"),
         "Base URL 不是密钥：登记它会让护栏把合法的官网地址误判成泄漏"
+    );
+}
+
+/// B5 严格投递模式：先在常规模式投递 A，再开严格模式切到 B——断言切换成功、A 的密钥被
+/// 收回（严格模式的安全网）、B 的密钥一个都不写进注册表，所有权登记清空。live 文件写入
+/// 由 switch 自身完成（本测试聚焦注册表侧）。
+#[test]
+fn strict_mode_skips_and_purges_env_delivery_on_switch() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    let _home = ensure_test_home();
+
+    let mut config = MultiAppConfig::default();
+    {
+        let manager = config
+            .get_manager_mut(&AppType::Claude)
+            .expect("claude manager");
+        manager.current = "a".to_string();
+        manager.providers.insert(
+            "a".to_string(),
+            Provider::from_parts(
+                "a".to_string(),
+                "A".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-a", "ANTHROPIC_BASE_URL": "https://a.example.com" } }),
+                None,
+            ),
+        );
+        manager.providers.insert(
+            "b".to_string(),
+            Provider::from_parts(
+                "b".to_string(),
+                "B".to_string(),
+                json!({ "env": { "ANTHROPIC_AUTH_TOKEN": "key-b", "ANTHROPIC_BASE_URL": "https://b.example.com" } }),
+                None,
+            ),
+        );
+    }
+
+    let mut state = create_test_state_with_config(&config).expect("create test state");
+    let sink = attach_test_env_sink(&mut state);
+
+    // ① 常规模式：投递 A 并登记所有权。
+    ProviderService::switch(&state, AppType::Claude, "a").expect("常规切换到 a");
+    assert_eq!(
+        sink.snapshot()
+            .get("ANTHROPIC_AUTH_TOKEN")
+            .map(String::as_str),
+        Some("key-a"),
+        "常规模式应把密钥投进注册表"
+    );
+
+    // ② 开严格模式，切到 B。
+    let s = AppSettings {
+        env_delivery_strict_mode: true,
+        ..AppSettings::default()
+    };
+    update_settings(s).expect("置严格模式");
+
+    ProviderService::switch(&state, AppType::Claude, "b").expect("严格模式切换应成功");
+
+    let after = sink.snapshot();
+    assert_eq!(
+        after.get("ANTHROPIC_AUTH_TOKEN").map(String::as_str),
+        None,
+        "严格模式：A 的旧密钥应被收回"
+    );
+    assert_eq!(
+        after.get("ANTHROPIC_BASE_URL").map(String::as_str),
+        None,
+        "严格模式：A 的旧 Base URL 应被收回"
+    );
+    assert!(
+        !after.contains_key("ANTHROPIC_AUTH_TOKEN") && after.is_empty(),
+        "严格模式：B 的密钥一个都不写，实际快照: {after:?}"
+    );
+
+    let managed = ManagedEnvVars::load(&state.db).expect("read managed_env_vars");
+    assert!(
+        managed.vars_for_provider("claude", "a").is_empty()
+            && managed.vars_for_provider("claude", "b").is_empty(),
+        "严格模式：所有权登记应清空"
     );
 }

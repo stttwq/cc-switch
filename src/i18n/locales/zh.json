@@ -158,6 +158,8 @@
     "duplicateLiveIdsLoadFailed": "读取配置中的供应商标识失败，请先修复配置后再试",
     "keyMissing": "需要密钥",
     "keyMissingHint": "密钥不参与同步与导出，请编辑该供应商重新输入 API 密钥。",
+    "strictDelivery": "严格投递",
+    "strictDeliveryHint": "严格投递模式已开启：该供应商的密钥不写入用户环境变量，只有从 cc-switch「打开终端」启动的 CLI 才能拿到。",
     "endpoint": "接口地址"
   },
   "claudeCode": {},
@@ -255,6 +257,10 @@
       "backup": {
         "title": "备份与恢复",
         "description": "管理自动备份，查看和恢复数据库快照"
+      },
+      "security": {
+        "title": "安全",
+        "description": "环境变量投递等本机凭据处理"
       },
       "cloudSync": {
         "title": "云同步",
@@ -699,6 +705,15 @@
     "unifyCodexHistoryRestoreFailed": "还原官方会话历史失败，请重试",
     "unifyCodexHistoryRestoreNothing": "当前 Codex 目录没有可恢复的迁移备份",
     "unifyCodexHistoryRestoreSkippedToggleOn": "统一会话历史开关已重新开启，已跳过还原",
+    "envDelivery": {
+      "title": "环境变量投递",
+      "description": "切换供应商时，当前供应商的密钥会写入用户环境变量（HKCU\\Environment），供本机命令行工具读取。",
+      "strictMode": "严格投递模式",
+      "strictModeHint": "开启后不再把密钥写入用户环境变量，只经 cc-switch「打开终端」注入。",
+      "strictModeActive": "已开启：从别处启动的 claude / codex / pi 将读不到密钥（会因缺少凭据而报错），必须从 cc-switch 点「打开终端」启动。关闭开关即恢复常规投递。",
+      "enabledToast": "已开启严格投递模式，并从用户环境变量收回了已投递的密钥",
+      "disabledToast": "已关闭严格投递模式，下次切换供应商时恢复常规投递"
+    },
     "syncEncryption": {
       "title": "端到端同步加密",
       "description": "同步载荷在本机加密、只在用同一口令的另一台机器解密；WebDAV/S3 服务器只能看到密文。",

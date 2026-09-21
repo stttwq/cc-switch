@@ -158,6 +158,8 @@
     "duplicateLiveIdsLoadFailed": "Failed to read provider identifiers from config, please fix the config and try again",
     "keyMissing": "Key required",
     "keyMissingHint": "Keys are never synced or exported. Edit this provider to re-enter its API key.",
+    "strictDelivery": "Strict delivery",
+    "strictDeliveryHint": "Strict delivery mode is on: this provider's key is not written to user environment variables. Only CLIs launched from cc-switch's \"Open Terminal\" can read it.",
     "endpoint": "Endpoint"
   },
   "claudeCode": {},
@@ -255,6 +257,10 @@
       "backup": {
         "title": "Backup & Restore",
         "description": "Manage automatic backups, view and restore database snapshots"
+      },
+      "security": {
+        "title": "Security",
+        "description": "Local credential handling such as environment-variable delivery"
       },
       "cloudSync": {
         "title": "Cloud Sync",
@@ -699,6 +705,15 @@
     "unifyCodexHistoryRestoreFailed": "Failed to restore official session history, please try again",
     "unifyCodexHistoryRestoreNothing": "No restorable migration backup for the current Codex directory",
     "unifyCodexHistoryRestoreSkippedToggleOn": "Unified session history was re-enabled; restore skipped",
+    "envDelivery": {
+      "title": "Environment variable delivery",
+      "description": "When switching providers, the active provider's key is written to user environment variables (HKCU\\Environment) so command-line tools on this machine can read it.",
+      "strictMode": "Strict delivery mode",
+      "strictModeHint": "When on, keys are no longer written to user environment variables and are injected only via cc-switch's \"Open Terminal\".",
+      "strictModeActive": "On: CLIs launched elsewhere (claude / codex / pi) will not find the key and will fail for missing credentials. You must launch them from cc-switch's \"Open Terminal\". Turning the switch off restores normal delivery.",
+      "enabledToast": "Strict delivery mode enabled; delivered keys were removed from user environment variables",
+      "disabledToast": "Strict delivery mode disabled; normal delivery resumes on the next provider switch"
+    },
     "syncEncryption": {
       "title": "End-to-end sync encryption",
       "description": "Sync payloads are encrypted on this device and decrypted only on another device with the same passphrase; the WebDAV/S3 server only ever sees ciphertext.",

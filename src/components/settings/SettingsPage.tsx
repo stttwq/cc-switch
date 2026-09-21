@@ -51,6 +51,7 @@ import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
 import { SyncEncryptionSection } from "@/components/settings/SyncEncryptionSection";
+import { EnvDeliverySection } from "@/components/settings/EnvDeliverySection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { useInstalledSkills } from "@/hooks/useSkills";
@@ -389,6 +390,28 @@ export function SettingsPage({
                               handleAutoSave(updates)
                             }
                           />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem
+                        value="security"
+                        className="rounded-xl glass-card overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <ShieldCheck className="h-5 w-5 text-rose-500" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold">
+                                {t("settings.advanced.security.title")}
+                              </h3>
+                              <p className="text-sm text-muted-foreground font-normal">
+                                {t("settings.advanced.security.description")}
+                              </p>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
+                          <EnvDeliverySection />
                         </AccordionContent>
                       </AccordionItem>
 

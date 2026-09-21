@@ -99,6 +99,22 @@ pub async fn save_settings(
     Ok(true)
 }
 
+/// B5：切换严格投递模式。开启时立即把已投递到 `HKCU\Environment` 的密钥全部收回（不必等
+/// 下一次切换）；关闭只置标志，下次切换恢复常规投递。当前状态由 `get_settings` 的
+/// `envDeliveryStrictMode` 字段回传前端。
+#[tauri::command]
+pub async fn set_env_delivery_strict_mode(
+    state: tauri::State<'_, crate::store::AppState>,
+    enabled: bool,
+) -> Result<bool, String> {
+    crate::settings::set_env_delivery_strict_mode(enabled).map_err(|e| e.to_string())?;
+    if enabled {
+        crate::services::provider::ProviderService::purge_all_env_delivery(state.inner())
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(enabled)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexUnifyHistoryRestoreResult {

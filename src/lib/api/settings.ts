@@ -44,6 +44,14 @@ export const settingsApi = {
     return await invoke("save_settings", { settings });
   },
 
+  /**
+   * B5 严格投递模式开关。开启时后端立即把已投递到 `HKCU\Environment` 的密钥全部收回；
+   * 返回生效后的状态。调用后需 invalidate ["settings"] 以刷新徽标。
+   */
+  async setEnvDeliveryStrictMode(enabled: boolean): Promise<boolean> {
+    return await invoke("set_env_delivery_strict_mode", { enabled });
+  },
+
   /** 是否存在统一 Codex 会话历史的迁移备份（关闭弹窗据此显示"恢复备份"勾选） */
   async hasCodexUnifyHistoryBackup(): Promise<boolean> {
     return await invoke("has_codex_unify_history_backup");

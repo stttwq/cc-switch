@@ -449,6 +449,13 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_terminal: Option<String>,
 
+    // ===== 环境变量投递（B5 严格模式，方案 2.4.7）=====
+    /// 严格投递模式：开启后切换供应商不再把密钥写入 `HKCU\Environment`，只更新 live 文件；
+    /// 密钥仅经 cc-switch「打开终端」注入到其自起的终端进程。从别处启动的 CLI 拿不到密钥
+    /// （Codex `env_key` 缺失、Pi 变量未解析，均 fail-closed）。默认关。
+    #[serde(default)]
+    pub env_delivery_strict_mode: bool,
+
     // ===== 本机自动迁移状态 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
@@ -510,6 +517,7 @@ impl Default for AppSettings {
             backup_interval_hours: None,
             backup_retain_count: None,
             preferred_terminal: None,
+            env_delivery_strict_mode: false,
             local_migrations: None,
         }
     }
@@ -704,6 +712,16 @@ where
     save_settings_file(&next)?;
     *guard = next;
     Ok(())
+}
+
+/// B5 严格投递模式是否开启（切换投递与 live 写入侧据此决定是否落 `HKCU\Environment`）。
+pub fn env_delivery_strict_mode_enabled() -> bool {
+    get_settings().env_delivery_strict_mode
+}
+
+/// 置严格投递模式开关。即时生效由命令层负责（开启时同步清理已投递的密钥）。
+pub fn set_env_delivery_strict_mode(enabled: bool) -> Result<(), AppError> {
+    mutate_settings(|settings| settings.env_delivery_strict_mode = enabled)
 }
 
 pub fn is_codex_third_party_history_provider_bucket_migrated() -> bool {

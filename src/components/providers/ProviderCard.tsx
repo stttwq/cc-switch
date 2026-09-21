@@ -6,6 +6,7 @@ import { useTranslation } from "react-i18next";
 import type { Provider } from "@/types";
 import type { AppId } from "@/lib/api";
 import { cn } from "@/lib/utils";
+import { useSettingsQuery } from "@/lib/query";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
@@ -104,6 +105,7 @@ export function ProviderCard({
   isStateChangeProtected,
 }: ProviderCardProps) {
   const { t } = useTranslation();
+  const envStrictMode = useSettingsQuery().data?.envDeliveryStrictMode ?? false;
   const codexOfficialIdentity = resolveCodexOfficialIdentity(appId, provider);
   const manualNote = provider.notes?.trim() || undefined;
 
@@ -215,6 +217,15 @@ export function ProviderCard({
                     {t("provider.keyMissing")}
                   </span>
                 )}
+              {/* B5 严格投递模式：密钥不落 HKCU\Environment，只经 cc-switch「打开终端」注入 */}
+              {envStrictMode && (
+                <span
+                  className="rounded-md bg-rose-500/15 px-1.5 py-0.5 text-xs text-rose-600 dark:text-rose-400"
+                  title={t("provider.strictDeliveryHint")}
+                >
+                  {t("provider.strictDelivery")}
+                </span>
+              )}
               {/* §1.4.5：端点主机名（完整 URL 在 title 里） */}
               {endpointHost && (
                 <span

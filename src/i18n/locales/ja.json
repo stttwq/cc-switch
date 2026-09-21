@@ -158,6 +158,8 @@
     "duplicateLiveIdsLoadFailed": "設定内のプロバイダー識別子を読み込めませんでした。設定を修正してから再度お試しください",
     "keyMissing": "キーが必要",
     "keyMissingHint": "キーは同期・エクスポートされません。このプロバイダーを編集して API キーを再入力してください。",
+    "strictDelivery": "厳格配信",
+    "strictDeliveryHint": "厳格配信モードがオンです：このプロバイダーのキーはユーザー環境変数に書き込まれません。cc-switch の「ターミナルを開く」から起動した CLI のみが取得できます。",
     "endpoint": "エンドポイント"
   },
   "claudeCode": {},
@@ -255,6 +257,10 @@
       "backup": {
         "title": "バックアップと復元",
         "description": "自動バックアップの管理、データベーススナップショットの表示と復元"
+      },
+      "security": {
+        "title": "セキュリティ",
+        "description": "環境変数配信など、このマシン上の資格情報の扱い"
       },
       "cloudSync": {
         "title": "クラウド同期",
@@ -699,6 +705,15 @@
     "unifyCodexHistoryRestoreFailed": "公式セッション履歴の復元に失敗しました。もう一度お試しください",
     "unifyCodexHistoryRestoreNothing": "現在の Codex ディレクトリに復元可能な移行バックアップはありません",
     "unifyCodexHistoryRestoreSkippedToggleOn": "統一セッション履歴が再度有効化されたため、復元をスキップしました",
+    "envDelivery": {
+      "title": "環境変数配信",
+      "description": "プロバイダーを切り替えると、アクティブなプロバイダーのキーがユーザー環境変数（HKCU\\Environment）に書き込まれ、このマシンのコマンドラインツールが読み取れるようになります。",
+      "strictMode": "厳格配信モード",
+      "strictModeHint": "オンにするとキーをユーザー環境変数に書き込まず、cc-switch の「ターミナルを開く」経由でのみ注入します。",
+      "strictModeActive": "オン中：他の場所から起動した claude / codex / pi はキーを読み取れず、資格情報不足でエラーになります。cc-switch の「ターミナルを開く」から起動してください。スイッチをオフにすると通常の配信に戻ります。",
+      "enabledToast": "厳格配信モードをオンにし、配信済みのキーをユーザー環境変数から回収しました",
+      "disabledToast": "厳格配信モードをオフにし、次回プロバイダー切り替え時に通常の配信を再開します"
+    },
     "syncEncryption": {
       "title": "エンドツーエンド同期暗号化",
       "description": "同期ペイロードはこの端末で暗号化され、同じパスフレーズを入力した別の端末でのみ復号されます。WebDAV/S3 サーバーには暗号文のみが届きます。",

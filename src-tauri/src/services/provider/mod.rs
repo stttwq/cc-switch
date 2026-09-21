@@ -841,6 +841,10 @@ impl ProviderService {
         app_type: &AppType,
         provider: &Provider,
     ) -> Result<(), AppError> {
+        // 严格模式不写环境变量，冲突预检既无意义也不该挡住切换。
+        if crate::settings::env_delivery_strict_mode_enabled() {
+            return Ok(());
+        }
         let mut warnings = SwitchResult::default();
         let pending = Self::collect_pending_env(state, app_type, provider, &mut warnings)?;
         Self::reject_if_env_conflicts(state, app_type, &pending)
@@ -892,6 +896,29 @@ impl ProviderService {
         } else {
             managed.vars_for_app(app_type.as_str())
         };
+
+        // B5 严格投递模式（方案 2.4.7）：绝不把密钥写进 `HKCU\Environment`。切换时把该应用
+        // 此前投递过的变量一并收回（开启时命令层已做一次全量清理，这里是切换侧的安全网），
+        // 只保留调用方的 live 文件更新；密钥改由「打开终端」经 `Command::env` 注入到其自起
+        // 的终端进程。刻意不 collect/write pending。
+        if crate::settings::env_delivery_strict_mode_enabled() {
+            for var_name in &old_vars {
+                if let Err(e) = sink.remove(var_name) {
+                    log::warn!("严格模式收回环境变量 {var_name} 失败: {e}");
+                    result
+                        .warnings
+                        .push(format!("env_cleanup_failed:{var_name}"));
+                }
+                managed.unregister(var_name);
+            }
+            managed.save(&state.db)?;
+            if !old_vars.is_empty() {
+                if let Err(e) = sink.broadcast() {
+                    log::warn!("严格模式收回环境变量后广播失败: {e}");
+                }
+            }
+            return Ok(());
+        }
 
         let pending = Self::collect_pending_env(state, app_type, provider, result)?;
         Self::reject_if_env_conflicts(state, app_type, &pending)?;
@@ -964,10 +991,33 @@ impl ProviderService {
         Ok(())
     }
 
+    /// B5：开启严格投递模式时把已投递到 `HKCU\Environment` 的所有受管变量全部收回并清空登记，
+    /// 让开关即时生效（不必等下一次切换）。按登记的名字逐条 remove，不枚举注册表（keyring 式
+    /// 枚举有越界风险），因此只清理 cc-switch 自己投递过的变量，不碰用户自设的同名变量之外的东西。
+    pub(crate) fn purge_all_env_delivery(state: &AppState) -> Result<(), AppError> {
+        use crate::env_delivery::ManagedEnvVars;
+
+        let sink = state.env_sink.as_ref();
+        let mut managed = ManagedEnvVars::load(&state.db)?;
+        let names: Vec<String> = managed.entries.keys().cloned().collect();
+        for name in &names {
+            if let Err(e) = sink.remove(name) {
+                log::warn!("严格模式清理环境变量 {name} 失败: {e}");
+            }
+        }
+        managed.entries.clear();
+        managed.save(&state.db)?;
+        if !names.is_empty() {
+            if let Err(e) = sink.broadcast() {
+                log::warn!("严格模式清理环境变量后广播失败: {e}");
+            }
+        }
+        Ok(())
+    }
+
     /// §5.4：live 写入失败后撤销刚投递的变量（含登记），避免半态。
     fn undo_env_delivery(state: &AppState, app_type: &AppType, provider: &Provider) {
         use crate::env_delivery::ManagedEnvVars;
-
         let sink = state.env_sink.clone();
         let mut managed = match ManagedEnvVars::load(&state.db) {
             Ok(managed) => managed,
