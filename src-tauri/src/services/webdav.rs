@@ -351,7 +351,33 @@ pub async fn head_etag(url: &str, auth: &WebDavAuth) -> Result<Option<String>, A
         .map(|s| s.to_string()))
 }
 
-// ─── Internal helpers ────────────────────────────────────────
+/// DELETE a remote WebDAV resource. Idempotent: 404 / 2xx both count as success
+/// (reset_remote 清远端用，文件可能已不存在)。
+pub async fn delete_url(url: &str, auth: &WebDavAuth) -> Result<(), AppError> {
+    let client = http_client::get();
+    let resp = apply_auth(
+        client
+            .request(Method::DELETE, url)
+            .timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS)),
+        auth,
+    )
+    .send()
+    .await
+    .map_err(|e| {
+        webdav_transport_error(
+            "webdav.delete_failed",
+            "DELETE 请求",
+            "DELETE request",
+            url,
+            &e,
+        )
+    })?;
+
+    if resp.status() == StatusCode::NOT_FOUND || resp.status().is_success() {
+        return Ok(());
+    }
+    Err(webdav_status_error("DELETE", resp.status(), url))
+}
 
 /// PROPFIND Depth=0 to check if a remote resource exists.
 async fn propfind_exists(

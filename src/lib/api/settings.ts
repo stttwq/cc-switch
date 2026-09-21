@@ -230,6 +230,22 @@ export const settingsApi = {
     return await invoke("sync_e2e_get_status");
   },
 
+  async syncE2eResetRemote(
+    transport: "webdav" | "s3",
+    confirmPassphrase: string,
+  ): Promise<{ reset: boolean }> {
+    return await invoke("sync_e2e_reset_remote", {
+      transport,
+      confirmPassphrase,
+    });
+  },
+
+  async syncE2eDeleteLegacyRemote(
+    transport: "webdav" | "s3",
+  ): Promise<{ deleted: boolean }> {
+    return await invoke("sync_e2e_delete_legacy_remote", { transport });
+  },
+
   async syncCurrentProvidersLive(): Promise<void> {
     const result = (await invoke("sync_current_providers_live")) as {
       success?: boolean;

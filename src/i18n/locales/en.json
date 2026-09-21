@@ -713,7 +713,14 @@
       "passphraseRequiredWarning": "You must set a sync passphrase before enabling encryption. Remember it: forgetting it makes remote data unrecoverable.",
       "enabledToast": "End-to-end encryption enabled — upload once to create the encrypted snapshot",
       "disabledToast": "End-to-end encryption disabled",
-      "migrateHint": "After enabling, click Upload to write an encrypted (v3) snapshot. All devices must enter the same passphrase before they can sync again."
+      "migrateHint": "After enabling, click Upload to write an encrypted (v3) snapshot. All devices must enter the same passphrase before they can sync again.",
+      "resetRemote": "Disable & clear encrypted remote",
+      "deleteLegacy": "Delete legacy plaintext snapshot",
+      "resetNeedsPassphrase": "Type your current sync passphrase in the box above to confirm disabling",
+      "resetConfirm": "This deletes the encrypted snapshot on {{transport}} remote and disables encryption there. Local data is kept. Continue?",
+      "resetDone": "Encrypted remote cleared and encryption disabled",
+      "deleteLegacyConfirm": "Delete the old unencrypted (v2) snapshot on the remote? Do this only after you've uploaded an encrypted snapshot.",
+      "deleteLegacyDone": "Legacy plaintext snapshot deleted from the remote"
     }
   },
   "apps": {

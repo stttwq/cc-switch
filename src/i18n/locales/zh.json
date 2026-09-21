@@ -713,7 +713,14 @@
       "passphraseRequiredWarning": "启用加密前必须先设置同步口令。请牢记：忘记口令会使远端数据不可恢复。",
       "enabledToast": "已启用端到端加密——请点上传生成加密快照",
       "disabledToast": "已关闭端到端加密",
-      "migrateHint": "启用后点上传会写入加密（v3）快照。所有设备需输入同一口令才能再次同步。"
+      "migrateHint": "启用后点上传会写入加密（v3）快照。所有设备需输入同一口令才能再次同步。",
+      "resetRemote": "停用并清空远端加密快照",
+      "deleteLegacy": "删除远端旧版明文快照",
+      "resetNeedsPassphrase": "请在上方口令框输入当前同步口令以确认停用",
+      "resetConfirm": "这将删除 {{transport}} 远端的加密快照并在该端停用加密；本地数据保留。继续？",
+      "resetDone": "已清空远端加密快照并停用加密",
+      "deleteLegacyConfirm": "删除远端上旧的未加密（v2）快照？请仅在已上传加密快照后执行。",
+      "deleteLegacyDone": "已从远端删除旧版明文快照"
     }
   },
   "apps": {

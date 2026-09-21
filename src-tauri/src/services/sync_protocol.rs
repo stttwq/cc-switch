@@ -437,8 +437,8 @@ pub(crate) fn e2e_build_upload(
     let snapshot = build_local_snapshot(db)?;
 
     let remote_outer = remote_manifest_bytes.and_then(|bytes| parse_e2e_outer_manifest(bytes).ok());
-    let remote_seq = remote_outer.as_ref().map(|o| o.seq).unwrap_or(0);
-    let seq = last_uploaded_seq.max(remote_seq) + 1;
+    let remote_seq = remote_outer.as_ref().map(|o| o.seq);
+    let seq = crate::services::sync_e2e::next_seq(last_uploaded_seq, remote_seq);
     let kdf = remote_outer
         .map(|o| o.kdf)
         .unwrap_or_else(crate::services::sync_e2e::new_kdf_params);

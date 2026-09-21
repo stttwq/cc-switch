@@ -13,8 +13,8 @@ use crate::error::AppError;
 use crate::secrets::sync_secrets::restore_webdav_password;
 use crate::secrets::SecretStore;
 use crate::services::webdav::{
-    auth_from_credentials, build_remote_url, ensure_remote_directories, get_bytes, head_etag,
-    path_segments, put_bytes, put_bytes_with_precondition, test_connection, WebDavAuth,
+    auth_from_credentials, build_remote_url, delete_url, ensure_remote_directories, get_bytes,
+    head_etag, path_segments, put_bytes, put_bytes_with_precondition, test_connection, WebDavAuth,
 };
 use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncStatus};
 
@@ -396,6 +396,58 @@ async fn fetch_remote_info_e2e(
         "remotePath": remote_dir_display(settings, RemoteLayout::E2e),
     });
     Ok(Some(payload))
+}
+
+// ─── Remote reset (E2E-6 停用/迁移) ──────────────────────────
+
+/// 删除某布局下的远端三件套（幂等，缺文件按成功）。
+async fn delete_remote_layout(
+    settings: &WebDavSyncSettings,
+    auth: &WebDavAuth,
+    layout: RemoteLayout,
+    names: &[&str],
+) -> Result<(), AppError> {
+    for name in names {
+        let url = remote_file_url(settings, layout, name)?;
+        delete_url(&url, auth).await?;
+    }
+    Ok(())
+}
+
+/// 停用端到端加密：删除远端 v3 三件套（口令确认由命令层做）。
+pub async fn reset_remote_e2e(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &WebDavSyncSettings,
+) -> Result<(), AppError> {
+    settings.validate()?;
+    let auth = auth_for(secrets, settings, None).await?;
+    use crate::services::sync_e2e::{DB_SQL_ENC, SKILLS_ZIP_ENC};
+    delete_remote_layout(
+        settings,
+        &auth,
+        RemoteLayout::E2e,
+        &[DB_SQL_ENC, SKILLS_ZIP_ENC, REMOTE_MANIFEST],
+    )
+    .await
+}
+
+/// 迁移后清理：删除远端旧版 v2 明文快照（current + legacy 两布局），不需要口令。
+pub async fn delete_legacy_remote(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &WebDavSyncSettings,
+) -> Result<(), AppError> {
+    settings.validate()?;
+    let auth = auth_for(secrets, settings, None).await?;
+    for layout in [RemoteLayout::Current, RemoteLayout::Legacy] {
+        delete_remote_layout(
+            settings,
+            &auth,
+            layout,
+            &[REMOTE_DB_SQL, REMOTE_SKILLS_ZIP, REMOTE_MANIFEST],
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 // ─── Sync status persistence ─────────────────────────────────

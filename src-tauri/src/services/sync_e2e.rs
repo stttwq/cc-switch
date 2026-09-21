@@ -441,6 +441,13 @@ pub(crate) fn detect_seq_regression(
     }
 }
 
+/// 上传序号（方案 2.4.4）：`max(本机已上传, 远端现有) + 1`。两台设备都读到同一远端
+/// seq 时会算出相同候选值，真正串行化由条件写（If-Match/412）裁决——落败方收到冲突、
+/// 重新下载后再传，序号严格不回退。
+pub(crate) fn next_seq(last_uploaded: u64, remote_seq: Option<u64>) -> u64 {
+    last_uploaded.max(remote_seq.unwrap_or(0)) + 1
+}
+
 /// 解密单个 artifact：先核对密文大小/哈希（外层 manifest），再用 DEK + AAD 解密，
 /// 最后核对明文哈希（内层 manifest）。`enc_name`/`plain_name` 由调用方指定，
 /// 拿 A 快照的 blob 配 B 快照的 manifest 会在 AAD 或哈希处失败。
@@ -635,6 +642,20 @@ mod tests {
         assert_eq!(detect_seq_regression(1, 0, false), None, "从未应用过不应拦");
         assert_eq!(detect_seq_regression(9, 9, false), None);
         assert_eq!(detect_seq_regression(10, 9, false), None);
+    }
+
+    #[test]
+    fn next_seq_is_monotonic_and_respects_remote() {
+        // 首次上传：无远端、本机没传过 → 1
+        assert_eq!(next_seq(0, None), 1);
+        // 本机已传到 5，远端也是 5 → 6
+        assert_eq!(next_seq(5, Some(5)), 6);
+        // 别的设备已把远端推到 9，本机 last_uploaded 仍 5 → 取远端 9+1=10（不回退）
+        assert_eq!(next_seq(5, Some(9)), 10);
+        // 本机领先远端（离线攒了几次）→ 以本机为准 +1
+        assert_eq!(next_seq(12, Some(9)), 13);
+        // 两设备同读远端 seq=7：候选都是 8，谁的条件写先成功谁占，另一个收 412 重下
+        assert_eq!(next_seq(0, Some(7)), next_seq(3, Some(7)));
     }
 
     #[test]

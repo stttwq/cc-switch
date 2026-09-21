@@ -82,6 +82,50 @@ export function SyncEncryptionSection() {
     }
   };
 
+  // 停用并清空远端 v3：用口令框里当前输入的口令做确认（fail-closed）。
+  const resetRemote = async (transport: Transport) => {
+    if (!passphrase) {
+      toast.error(t("settings.syncEncryption.resetNeedsPassphrase"));
+      return;
+    }
+    if (
+      !window.confirm(
+        t("settings.syncEncryption.resetConfirm", {
+          transport: t(`settings.syncEncryption.${transport}`),
+        }),
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await settingsApi.syncE2eResetRemote(transport, passphrase);
+      setPassphrase("");
+      toast.success(t("settings.syncEncryption.resetDone"));
+      await refresh();
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // 迁移后清理远端旧版 v2 明文快照（删的是明文遗留，不需口令）。
+  const deleteLegacy = async (transport: Transport) => {
+    if (!window.confirm(t("settings.syncEncryption.deleteLegacyConfirm"))) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await settingsApi.syncE2eDeleteLegacyRemote(transport);
+      toast.success(t("settings.syncEncryption.deleteLegacyDone"));
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const rows: Array<{
     transport: Transport;
     label: string;
@@ -145,7 +189,7 @@ export function SyncEncryptionSection() {
         </p>
       </div>
 
-      {/* 两传输各自的加密开关 + 允许不安全连接 */}
+      {/* 两传输各自的加密开关 + 允许不安全连接 + 停用/清理操作 */}
       {rows.map((row) => (
         <div
           key={row.transport}
@@ -156,6 +200,26 @@ export function SyncEncryptionSection() {
             <p className="text-xs text-muted-foreground">
               {t("settings.syncEncryption.allowInsecure")}
             </p>
+            <div className="mt-2 flex items-center gap-2">
+              {row.on && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => resetRemote(row.transport)}
+                >
+                  {t("settings.syncEncryption.resetRemote")}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={() => deleteLegacy(row.transport)}
+              >
+                {t("settings.syncEncryption.deleteLegacy")}
+              </Button>
+            </div>
           </div>
           <div className="flex items-center gap-4">
             <label className="flex items-center gap-2 text-xs text-muted-foreground">

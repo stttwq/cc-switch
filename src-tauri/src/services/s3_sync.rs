@@ -312,6 +312,33 @@ async fn get_enc_object(creds: &S3Credentials, key: &str, name: &str) -> Result<
     Ok(bytes)
 }
 
+/// 停用端到端加密：删除远端 v3 三件套（口令确认由命令层做）。
+pub async fn reset_remote_e2e(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &S3SyncSettings,
+) -> Result<(), AppError> {
+    settings.validate()?;
+    let creds = creds_for(secrets, settings, None).await?;
+    use crate::services::sync_e2e::{DB_SQL_ENC, SKILLS_ZIP_ENC};
+    for name in [DB_SQL_ENC, SKILLS_ZIP_ENC, REMOTE_MANIFEST] {
+        s3::delete_object(&creds, &s3_key_e2e(settings, name)).await?;
+    }
+    Ok(())
+}
+
+/// 迁移后清理：删除远端旧版 v2 明文快照，不需要口令。
+pub async fn delete_legacy_remote(
+    secrets: &Arc<dyn SecretStore>,
+    settings: &S3SyncSettings,
+) -> Result<(), AppError> {
+    settings.validate()?;
+    let creds = creds_for(secrets, settings, None).await?;
+    for name in [REMOTE_DB_SQL, REMOTE_SKILLS_ZIP, REMOTE_MANIFEST] {
+        s3::delete_object(&creds, &s3_key(settings, name)).await?;
+    }
+    Ok(())
+}
+
 /// Fetch remote manifest info without downloading artifacts.
 pub async fn fetch_remote_info(
     secrets: &Arc<dyn SecretStore>,

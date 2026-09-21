@@ -1111,6 +1111,8 @@ pub fn run() {
             commands::s3_sync_save_settings,
             commands::sync_e2e_set_passphrase,
             commands::sync_e2e_set_enabled,
+            commands::sync_e2e_reset_remote,
+            commands::sync_e2e_delete_legacy_remote,
             commands::sync_e2e_get_status,
             commands::s3_sync_fetch_remote_info,
             commands::open_zip_file_dialog,

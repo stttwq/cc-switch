@@ -121,6 +121,21 @@ Commands that accept a filesystem path are enumerated below with where the value
 | `open_external` | `url` | 后端用 `url::Url::parse` 校验，仅放行 `http`/`https`；调用方传完整 URL |
 | 配置导入/导出 | 目标文件路径 | 由系统文件对话框在 Rust 侧产生，路径不经前端往返 |
 
+## Sync Encryption / 同步加密（端到端）
+
+When end-to-end sync encryption is enabled, the WebDAV / S3 server — and anyone who reads it (CDN, bucket operator, a compromised host) — sees only ciphertext. The payload is encrypted on this device and decrypted only on another device that knows the passphrase.
+
+启用端到端同步加密后，WebDAV / S3 服务器及其的一切读取方（CDN、存储桶运维、被入侵的主机）只能看到密文。载荷在本机加密，只在持有口令的另一台设备上解密。
+
+- **Construction / 构造**: passphrase → **Argon2id** (m=64 MiB, t=3, p=1, 16-byte random salt) → KEK; a fresh random 32-byte DEK per upload encrypts `db.sql.enc` and `skills.zip.enc` with **XChaCha20-Poly1305**; the DEK is wrapped by the KEK and stored in the manifest. Each artifact's AAD binds `format‖version‖snapshotId‖artifactName‖seq`, and the device name / timestamps live inside an encrypted inner manifest — so a blob cannot be swapped between snapshots and the plaintext outer `manifest.json` carries no user data. 口令经 Argon2id 派生 KEK；每次上传随机生成 DEK 以 XChaCha20-Poly1305 加密两个 blob，DEK 由 KEK 封装。AAD 绑定快照与序号，设备名/时间在加密的内层 manifest 内，明文外层不含任何用户数据。
+- **The passphrase never leaves the device / 口令永不出本机**: it is stored only in the Windows Credential Manager (`cc-switch/v1/app/sync/passphrase`) and is **never uploaded**. It is what makes zero trust against the server hold. 口令只存于 Windows 凭据管理器，**绝不上上传**。
+- **Forgetting the passphrase is unrecoverable / 忘记口令不可恢复**: there is no backdoor and no server-side reset. Losing the passphrase means the encrypted remote snapshot cannot be decrypted by anyone, including the maintainer. 无后门、无服务端重置。忘记口令意味着远端加密快照对任何人（含维护者）都不可解密。
+- **API keys are NOT part of the encrypted payload / API Key 不随加密载荷同步**: consistent with the no-key-on-the-server model, keys stay in each device's Credential Manager; a restored device shows every provider as "needs key". 密钥仍各机各存，还原后的设备每个供应商都提示"需要密钥"。
+- **Integrity, tamper and rollback / 完整性、防篡改与防回滚**: a wrong passphrase and a tampered byte produce the *same* error (indistinguishable by design). Monotonic `seq` makes a server that replays an older snapshot detectable and blocked by default. 口令错与改一字节产生同一错误（刻意不区分）；`seq` 单调递增使服务器重放旧快照可被检测并默认拦截。
+- **Transport / 传输**: `http://` endpoints are rejected by default; plaintext http is allowed only for `localhost` / loopback / RFC1918 private hosts **and** an explicit "allow insecure connection" opt-in. HTTPS is always required for public endpoints. 公网 http 一律拒绝；仅本机/回环/RFC1918 私网且显式勾选"允许不安全连接"才放行 http。
+- **Conditional write is best effort / 条件写尽力而为**: WebDAV uses `If-Match`/`If-None-Match` (412 → conflict). Some servers ignore these headers, degrading to an unconditional PUT — data is never lost, but concurrent-overwrite protection is not guaranteed on such servers. S3 falls back to a pre-upload HEAD ETag comparison, which is not atomic. WebDAV 用 If-Match/If-None-Match（412→冲突）；部分服务器忽略该头则退化为无条件 PUT（不丢数据，但并发保护不保证）。S3 降级为上传前 HEAD 比较，非原子。
+- **Local DB is intentionally NOT encrypted / 本地数据库刻意不加密**: the SQLite file already contains no keys; encrypting it would require the Credential Manager to be available on every launch for marginal benefit. BitLocker + DPAPI cover the device-loss case. 库内已无密钥；加密它收益极低且会让凭据管理器不可用时应用瘫痪。设备丢失场景由 BitLocker + DPAPI 覆盖。
+
 ## Distribution and Signature / 分发与签名
 
 Releases ship an unsigned Windows `.msi`. Because there is no Authenticode certificate (an OV/EV cert or Azure Trusted Signing is not economical for a personal fork), Windows SmartScreen will show an "unknown publisher" warning on first run. To let users verify origin and integrity anyway, each release publishes `SHA256SUMS` alongside a **minisign** signature (`.minisig`); the maintainer's public key is pinned in this file's repository and in the README. Users should download the MSI, verify the SHA-256 and the minisign signature, and only then run it. The **build, release and signing pipeline** is in the scope above.

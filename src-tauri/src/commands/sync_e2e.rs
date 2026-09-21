@@ -1,9 +1,9 @@
 #![allow(non_snake_case)]
 
-//! 端到端加密的口令管理与状态查询命令（方案 2.4.2 / 附录 A）。
+//! 端到端加密的口令管理、状态查询与远端重置命令（方案 2.4.2 / 2.4.6 / 附录 A）。
 //!
-//! 口令只写进 Windows 凭据管理器，永不上传。`reset_remote`（删远端 + 换口令重传）
-//! 属 E2E-4/6 的联网流程，这里只提供设口令与读状态两个纯本机命令。
+//! 口令只写进 Windows 凭据管理器，永不上传。`reset_remote` 需重输口令确认，删远端
+//! v3 并停用；`delete_legacy_remote` 删迁移后遗留的 v2 明文快照（不需口令）。
 
 use serde_json::{json, Value};
 use tauri::State;
@@ -117,4 +117,105 @@ pub async fn sync_e2e_set_enabled(
         }
     };
     Ok(json!({ "e2eEnabled": changed.0, "allowInsecure": changed.1 }))
+}
+
+/// 停用端到端加密并清空远端 v3 快照（方案 2.4.6）。需重输口令确认（fail-closed：
+/// 口令不符拒删）。删除成功后把 `e2e_enabled` 置假、清设备级序号。不提供降级上传。
+#[tauri::command]
+pub async fn sync_e2e_reset_remote(
+    state: State<'_, AppState>,
+    transport: String,
+    confirm_passphrase: String,
+) -> Result<Value, String> {
+    let stored = restore_sync_passphrase(&state.secrets)
+        .await
+        .map_err(|e| e.to_string())?;
+    let stored = stored.ok_or_else(|| {
+        AppError::localized(
+            "sync.e2e.passphrase_required",
+            "尚未设置同步口令",
+            "Sync passphrase is not set",
+        )
+        .to_string()
+    })?;
+    if stored.as_str() != confirm_passphrase {
+        return Err(AppError::localized(
+            "sync.e2e.reset_passphrase_mismatch",
+            "口令不正确，已取消停用",
+            "Passphrase mismatch; disable cancelled",
+        )
+        .to_string());
+    }
+
+    match transport.as_str() {
+        "webdav" => {
+            let settings = settings::get_webdav_sync_settings()
+                .ok_or_else(|| "WebDAV 同步未配置".to_string())?;
+            crate::services::webdav_sync::reset_remote_e2e(&state.secrets, &settings)
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(mut s) = settings::get_webdav_sync_settings() {
+                s.e2e_enabled = false;
+                s.status.last_applied_seq = None;
+                s.status.last_uploaded_seq = None;
+                settings::set_webdav_sync_settings(Some(s)).map_err(|e| e.to_string())?;
+            }
+        }
+        "s3" => {
+            let settings =
+                settings::get_s3_sync_settings().ok_or_else(|| "S3 同步未配置".to_string())?;
+            crate::services::s3_sync::reset_remote_e2e(&state.secrets, &settings)
+                .await
+                .map_err(|e| e.to_string())?;
+            if let Some(mut s) = settings::get_s3_sync_settings() {
+                s.e2e_enabled = false;
+                s.status.last_applied_seq = None;
+                s.status.last_uploaded_seq = None;
+                settings::set_s3_sync_settings(Some(s)).map_err(|e| e.to_string())?;
+            }
+        }
+        other => {
+            return Err(AppError::localized(
+                "sync.e2e.transport_unknown",
+                format!("未知的同步传输类型: {other}"),
+                format!("Unknown sync transport: {other}"),
+            )
+            .to_string())
+        }
+    }
+    state.sync_kek.invalidate();
+    Ok(json!({ "reset": true }))
+}
+
+/// 迁移后清理：删除远端旧版 v2 明文快照（方案 2.4.6）。不需口令（删的是明文遗留）。
+#[tauri::command]
+pub async fn sync_e2e_delete_legacy_remote(
+    state: State<'_, AppState>,
+    transport: String,
+) -> Result<Value, String> {
+    match transport.as_str() {
+        "webdav" => {
+            let settings = settings::get_webdav_sync_settings()
+                .ok_or_else(|| "WebDAV 同步未配置".to_string())?;
+            crate::services::webdav_sync::delete_legacy_remote(&state.secrets, &settings)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        "s3" => {
+            let settings =
+                settings::get_s3_sync_settings().ok_or_else(|| "S3 同步未配置".to_string())?;
+            crate::services::s3_sync::delete_legacy_remote(&state.secrets, &settings)
+                .await
+                .map_err(|e| e.to_string())?;
+        }
+        other => {
+            return Err(AppError::localized(
+                "sync.e2e.transport_unknown",
+                format!("未知的同步传输类型: {other}"),
+                format!("Unknown sync transport: {other}"),
+            )
+            .to_string())
+        }
+    }
+    Ok(json!({ "deleted": true }))
 }
