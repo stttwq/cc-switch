@@ -20,11 +20,39 @@ const LOG_TAIL_BYTES: u64 = 64 * 1024;
 /// 诊断包最多附带的日志行数。
 const MAX_LOG_LINES: usize = 50;
 
-/// 对日志逐行做已知密钥脱敏（纯函数，便于单测：给含密钥样本 → 断言输出不含明文密钥）。
+/// 把行内所有 `http(s)://…` 的 host 与路径打码，只保留协议（诊断包可能贴到公开 issue，
+/// 同步端点 WebDAV/S3 的地址会暴露账户目录；供应商 API 主机同样隐去）。到下一个空白为止。
+fn mask_urls(line: &str) -> String {
+    let mut out = String::with_capacity(line.len());
+    let mut rest = line;
+    while let Some(idx) = rest.find("http") {
+        out.push_str(&rest[..idx]);
+        let after = &rest[idx..];
+        let scheme_len = if after.starts_with("https://") {
+            8
+        } else if after.starts_with("http://") {
+            7
+        } else {
+            // 形如 "httpfoo" 的普通词，原样保留 4 个字符后继续。
+            out.push_str("http");
+            rest = &after[4..];
+            continue;
+        };
+        let url_body = &after[scheme_len..];
+        let url_end = url_body.find(char::is_whitespace).unwrap_or(url_body.len());
+        out.push_str(&after[..scheme_len]);
+        out.push_str("[已脱敏]");
+        rest = &after[scheme_len + url_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
+/// 对日志逐行做已知密钥脱敏 + URL 打码（纯函数，便于单测）。
 fn redact_log(lines: &[String], known_secrets: &[String]) -> Vec<String> {
     lines
         .iter()
-        .map(|line| crate::redact_known_secrets_strict(line, known_secrets))
+        .map(|line| mask_urls(&crate::redact_known_secrets_strict(line, known_secrets)))
         .collect()
 }
 
@@ -160,6 +188,20 @@ mod tests {
         assert!(joined.contains("[REDACTED]"), "命中密钥应替换为占位符");
         // 非敏感行原样保留。
         assert!(joined.contains("nothing sensitive here"));
+    }
+
+    #[test]
+    fn mask_urls_hides_host_and_path() {
+        let line = "[WebDAV] MKCOL ok: https://dav.jianguoyun.com/dav/ccs/v3/default/ done";
+        let out = mask_urls(line);
+        assert!(
+            !out.contains("jianguoyun") && !out.contains("/dav/ccs"),
+            "URL host/路径必须打码: {out}"
+        );
+        assert!(out.contains("https://[已脱敏]"), "应保留协议: {out}");
+        assert!(out.contains("done"), "URL 之后的文本原样保留: {out}");
+        // 无 URL 的行原样返回；"http" 出现在非协议词里不误伤。
+        assert_eq!(mask_urls("protocol httpfoo bar"), "protocol httpfoo bar");
     }
 
     #[test]
