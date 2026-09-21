@@ -1,6 +1,7 @@
 #![allow(non_snake_case)]
 
 mod config;
+mod diagnostics;
 mod env;
 mod global_proxy;
 mod import_export;
@@ -23,6 +24,7 @@ mod sync_e2e;
 mod webdav_sync;
 
 pub use config::*;
+pub use diagnostics::*;
 pub use env::*;
 pub use global_proxy::*;
 pub use import_export::*;

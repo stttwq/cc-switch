@@ -40,6 +40,14 @@ export const settingsApi = {
     return await invoke("get_settings");
   },
 
+  /**
+   * 生成诊断信息纯文本（版本/schema/迁移标记/计数/严格模式/crash.log + 脱敏日志尾）。
+   * 后端已确保不含明文密钥、供应商名或完整 Base URL，前端直接复制到剪贴板。
+   */
+  async getDiagnosticsBundle(): Promise<string> {
+    return await invoke("get_diagnostics_bundle");
+  },
+
   async save(settings: Settings): Promise<boolean> {
     return await invoke("save_settings", { settings });
   },

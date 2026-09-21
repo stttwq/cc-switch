@@ -714,6 +714,11 @@
       "enabledToast": "Strict delivery mode enabled; delivered keys were removed from user environment variables",
       "disabledToast": "Strict delivery mode disabled; normal delivery resumes on the next provider switch"
     },
+    "diagnostics": {
+      "copy": "Copy diagnostics",
+      "copied": "Diagnostics copied to clipboard",
+      "hint": "Copy version, database schema, migration markers and recent (redacted) logs — never keys — to the clipboard for bug reports"
+    },
     "syncEncryption": {
       "title": "End-to-end sync encryption",
       "description": "Sync payloads are encrypted on this device and decrypted only on another device with the same passphrase; the WebDAV/S3 server only ever sees ciphertext.",

@@ -1039,6 +1039,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::set_env_delivery_strict_mode,
+            commands::get_diagnostics_bundle,
             commands::has_codex_unify_history_backup,
             commands::restore_codex_unified_history,
             commands::get_log_config,

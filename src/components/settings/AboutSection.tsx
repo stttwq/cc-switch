@@ -182,6 +182,20 @@ export function AboutSection() {
   );
   const [showInstallCommands, setShowInstallCommands] = useState(false);
 
+  const [copyingDiagnostics, setCopyingDiagnostics] = useState(false);
+  const handleCopyDiagnostics = useCallback(async () => {
+    setCopyingDiagnostics(true);
+    try {
+      const text = await settingsApi.getDiagnosticsBundle();
+      await navigator.clipboard.writeText(text);
+      toast.success(t("settings.diagnostics.copied"));
+    } catch (error) {
+      toast.error(extractErrorMessage(error));
+    } finally {
+      setCopyingDiagnostics(false);
+    }
+  }, [t]);
+
   const [wslShellByTool, setWslShellByTool] = useState<
     Record<string, WslShellPreference>
   >({});
@@ -811,6 +825,22 @@ export function AboutSection() {
             >
               <ExternalLink className="h-3.5 w-3.5" />
               {t("settings.releaseNotes")}
+            </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleCopyDiagnostics}
+              disabled={copyingDiagnostics}
+              className="h-8 gap-1.5 text-xs"
+              title={t("settings.diagnostics.hint")}
+            >
+              {copyingDiagnostics ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Stethoscope className="h-3.5 w-3.5" />
+              )}
+              {t("settings.diagnostics.copy")}
             </Button>
           </div>
         </div>
