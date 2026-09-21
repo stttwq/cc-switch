@@ -1688,7 +1688,7 @@
     "deleteBackups": "Delete all backups",
     "gotIt": "Got it",
     "codexLogin": "Discarded the Codex OAuth login state of {{numProviders}} provider(s) — sign in again with `codex login`.",
-    "liveFailures": "{{count}} live configuration(s) could not be rewritten (usually the file is held by a running CLI):",
+    "liveFailures": "{{count}} live configuration(s) could not be rewritten:",
     "retry": "Retry on next launch",
     "cleanupOrphans": "Clean up orphan credentials",
     "cleanupOrphansHint": "Only removes credential entries whose provider no longer exists in the database.",
@@ -1696,9 +1696,14 @@
     "warningsTitle": "Migration notes (fields only, no values):",
     "warnGlobalProxyUrlInvalidated": "The saved outbound proxy URL contained a username/password and was discarded entirely. Re-enter it under Settings → Global Proxy, without credentials.",
     "warnGeminiNativeApiFormat": "Providers that used the Gemini generateContent upstream format were reset to OpenAI Chat Completions; format conversion no longer ships, so please verify their endpoints.",
-    "livePendingHint": "{{count}} live configuration(s) failed to rewrite (file usually locked or read-only)",
+    "livePendingHint": "{{count}} live configuration(s) have not been rewritten yet:",
     "livePendingRetry": "Retry now",
     "liveRetryDone": "Live configurations rewritten",
-    "liveRetryStillFailing": "Some live configurations still failed; close the program holding the file and retry"
+    "liveRetryStillFailing": "Some live configurations still failed; close the program holding the file and retry",
+    "liveFail": {
+      "env_conflict": "{{target}}: an environment variable conflicts with an external program; its value was not overwritten",
+      "file_locked": "{{target}}: the target file is locked or read-only and could not be written",
+      "other": "{{target}}: live configuration rewrite failed"
+    }
   }
 }

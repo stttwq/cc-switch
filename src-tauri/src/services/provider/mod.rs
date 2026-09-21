@@ -44,6 +44,20 @@ pub fn reapply_pi_live(state: &AppState) -> Result<usize, AppError> {
 /// 抽成独立函数是为了可测：冷启动验收需要走完 §6.2 → §6.3 → §6.4 才能断言
 /// "整个 home 0 明文命中"。
 pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, AppError> {
+    /// 把一次 live 重写失败归类成稳定原因码，供前端本地化展示——
+    /// 不再把 `原子替换失败: <临时文件> -> <目标>: 拒绝访问 (os error 5)` 这种
+    /// 含临时路径的原始串直接甩给用户（2.0.1 遗留）。
+    fn classify(e: &AppError) -> &'static str {
+        let s = e.to_string();
+        if s.contains("ENV_CONFLICT") {
+            "env_conflict"
+        } else if s.contains("原子替换失败") || s.contains("拒绝访问") || s.contains("os error 5") {
+            "file_locked"
+        } else {
+            "other"
+        }
+    }
+
     let mut failures: Vec<String> = Vec::new();
 
     // 缺陷 D-4：回滚到旧版再升级时，注册表里还留着上一轮投递的变量，而恢复出来的旧库
@@ -56,13 +70,13 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
                 Ok(_) => log::info!("✓ live reapply {}", app_type.as_str()),
                 Err(e) => {
                     log::warn!("✗ live reapply {} failed: {e}", app_type.as_str());
-                    failures.push(format!("{}: {e}", app_type.as_str()));
+                    failures.push(format!("{}|{}", app_type.as_str(), classify(&e)));
                 }
             },
             Ok(None) => {}
             Err(e) => {
                 log::warn!("✗ live reapply 读取当前供应商失败: {e}");
-                failures.push(format!("读取当前供应商失败: {e}"));
+                failures.push(format!("settings|{}", classify(&e)));
             }
         }
     }
@@ -71,7 +85,7 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
         Ok(n) => log::info!("✓ live reapply pi ({n} providers)"),
         Err(e) => {
             log::warn!("✗ live reapply pi failed: {e}");
-            failures.push(format!("pi: {e}"));
+            failures.push(format!("pi|{}", classify(&e)));
         }
     }
 

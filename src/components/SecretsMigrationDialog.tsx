@@ -164,9 +164,16 @@ export function SecretsMigrationDialog() {
                   })}
                 </p>
                 <ul className="max-h-24 overflow-auto text-xs break-all list-disc pl-5 text-muted-foreground">
-                  {report.live_reapply_failures.map((f) => (
-                    <li key={f}>{f}</li>
-                  ))}
+                  {report.live_reapply_failures.map((f) => {
+                    const [target, code] = f.split("|");
+                    return (
+                      <li key={f}>
+                        {t(`secretsMigration.liveFail.${code || "other"}`, {
+                          target,
+                        })}
+                      </li>
+                    );
+                  })}
                 </ul>
               </div>
             )}

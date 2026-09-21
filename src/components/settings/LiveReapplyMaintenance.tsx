@@ -66,11 +66,14 @@ export function LiveReapplyMaintenance() {
         </Button>
       </div>
       <ul className="mt-2 space-y-1 text-xs text-muted-foreground">
-        {status.failures.map((failure) => (
-          <li key={failure} className="break-all">
-            {failure}
-          </li>
-        ))}
+        {status.failures.map((failure) => {
+          const [target, code] = failure.split("|");
+          return (
+            <li key={failure}>
+              {t(`secretsMigration.liveFail.${code || "other"}`, { target })}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

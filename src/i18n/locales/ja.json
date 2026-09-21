@@ -1688,7 +1688,7 @@
     "deleteBackups": "すべてのバックアップを削除",
     "gotIt": "了解",
     "codexLogin": "{{numProviders}} 件のプロバイダーの Codex OAuth ログイン状態を破棄しました。`codex login` で再ログインしてください。",
-    "liveFailures": "{{count}} 件の live 設定を書き換えできませんでした（実行中の CLI がファイルをロックしている可能性があります）：",
+    "liveFailures": "{{count}} 件の live 設定を書き換えできませんでした：",
     "retry": "次回起動時に再試行",
     "cleanupOrphans": "クリーンアップ",
     "cleanupOrphansHint": "DB に存在しないプロバイダーの資格情報エントリのみ削除します。",
@@ -1696,9 +1696,14 @@
     "warningsTitle": "移行時の注意点（フィールドのみ、値は含みません）：",
     "warnGlobalProxyUrlInvalidated": "保存されていた外向きプロキシ URL にユーザー名/パスワードが含まれていたため、安全ポリシーにより削除しました。「設定 → グローバルプロキシ」で認証情報なしで再入力してください。",
     "warnGeminiNativeApiFormat": "Gemini generateContent 上流フォーマットを使っていたサプライヤーは OpenAI Chat Completions に変更されました。プロトコル変換は削除されたため、エンドポイントをご確認ください。",
-    "livePendingHint": "live 設定の書き換えが {{count}} 件未完了です（通常はファイルが使用中または読み取り専用です）",
+    "livePendingHint": "live 設定の書き換えが {{count}} 件未完了です。原因：",
     "livePendingRetry": "今すぐ再試行",
     "liveRetryDone": "live 設定の書き換えが完了しました",
-    "liveRetryStillFailing": "書き換えに失敗した live 設定があります。ファイルを使用中のプログラムを閉じて再試行してください"
+    "liveRetryStillFailing": "書き換えに失敗した live 設定があります。ファイルを使用中のプログラムを閉じて再試行してください",
+    "liveFail": {
+      "env_conflict": "{{target}}：環境変数が外部プログラムと競合し、相手の値を上書きしませんでした",
+      "file_locked": "{{target}}：対象ファイルが使用中または読み取り専用で書き込めません",
+      "other": "{{target}}：live 設定の書き換えに失敗しました"
+    }
   }
 }

@@ -1688,7 +1688,7 @@
     "deleteBackups": "全部刪除備份",
     "gotIt": "知道了",
     "codexLogin": "已丟棄 {{numProviders}} 個供應商的 Codex OAuth 登入態，請改用 `codex login` 重新登入。",
-    "liveFailures": "有 {{count}} 個 live 設定未能重寫（通常是檔案被執行中的 CLI 佔用）：",
+    "liveFailures": "有 {{count}} 個 live 設定未能重寫：",
     "retry": "下次啟動時重試",
     "cleanupOrphans": "清理孤兒憑證",
     "cleanupOrphansHint": "只刪除 DB 中已不存在的供應商所對應的憑證條目。",
@@ -1696,9 +1696,14 @@
     "warningsTitle": "遷移提示（僅列欄位，不含值）：",
     "warnGlobalProxyUrlInvalidated": "原先儲存的全局出站代理位址含使用者名稱/密碼，已依安全策略整條作廢，請在「設定 → 全域代理」中重新填寫（不要再帶認證資訊）。",
     "warnGeminiNativeApiFormat": "原使用 Gemini generateContent 上游格式的供應商已改為 OpenAI Chat Completions（協定轉換已隨本地路由移除），請自行確認其端點是否可用。",
-    "livePendingHint": "有 {{count}} 個 live 設定未完成重寫（通常是檔案被佔用或唯讀）",
+    "livePendingHint": "有 {{count}} 個 live 設定未完成重寫，原因如下：",
     "livePendingRetry": "立即重試",
     "liveRetryDone": "live 設定已補完",
-    "liveRetryStillFailing": "仍有 live 設定未能重寫，請關閉佔用該檔案的程式後再試"
+    "liveRetryStillFailing": "仍有 live 設定未能重寫，請關閉佔用該檔案的程式後再試",
+    "liveFail": {
+      "env_conflict": "{{target}}：環境變數與外部程式衝突，未覆蓋對方設定的值",
+      "file_locked": "{{target}}：目標檔案被佔用或唯讀，暫時寫不進去",
+      "other": "{{target}}：live 設定重寫失敗"
+    }
   }
 }
