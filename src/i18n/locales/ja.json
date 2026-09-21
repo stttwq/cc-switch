@@ -242,7 +242,7 @@
     "advanced": {
       "configDir": {
         "title": "設定ディレクトリ",
-        "description": "Claude、Codex、Gemini の設定保存パスを管理"
+        "description": "Claude Code、Codex、Pi の設定保存パスを管理"
       },
       "globalProxy": {
         "title": "グローバル送信プロキシ",
@@ -1050,7 +1050,7 @@
     "anthropicModel": "メインモデル",
     "anthropicSmallFastModel": "高速モデル",
     "apiFormat": "上流フォーマット",
-    "apiFormatHint": "プロバイダーがネイティブで話す wire API（Anthropic Messages / Chat Completions / Responses / Gemini generateContent）を選択します。CC Switch はモデルカタログとフィールド形の選択にのみ使い、リクエスト/レスポンスの形式変換は行いません。",
+    "apiFormatHint": "プロバイダーがネイティブで話す wire API（Anthropic Messages / Chat Completions / Responses）を選択します。CC Switch はモデルカタログとフィールド形の選択にのみ使い、リクエスト/レスポンスの形式変換は行いません。",
     "fullUrlLabel": "フル URL",
     "fullUrlEnabled": "フル URL モード",
     "fullUrlDisabled": "フル URL として設定",

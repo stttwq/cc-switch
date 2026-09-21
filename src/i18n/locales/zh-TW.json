@@ -242,7 +242,7 @@
     "advanced": {
       "configDir": {
         "title": "設定檔目錄",
-        "description": "管理 Claude、Codex 和 Gemini 的設定儲存路徑"
+        "description": "管理 Claude Code、Codex 和 Pi 的設定儲存路徑"
       },
       "globalProxy": {
         "title": "全域出站代理伺服器",
@@ -1050,7 +1050,7 @@
     "anthropicModel": "主模型",
     "anthropicSmallFastModel": "快速模型",
     "apiFormat": "上游格式",
-    "apiFormatHint": "選擇供應商原生的 wire API 類型（Anthropic Messages / Chat Completions / Responses / Gemini generateContent）。CC Switch 僅用它決定模型目錄與欄位形態，不做請求/響應格式轉換。",
+    "apiFormatHint": "選擇供應商原生的 wire API 類型（Anthropic Messages / Chat Completions / Responses）。CC Switch 僅用它決定模型目錄與欄位形態，不做請求/響應格式轉換。",
     "fullUrlLabel": "完整 URL",
     "fullUrlEnabled": "完整 URL 模式",
     "fullUrlDisabled": "標記為完整 URL",

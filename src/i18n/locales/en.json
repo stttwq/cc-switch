@@ -242,7 +242,7 @@
     "advanced": {
       "configDir": {
         "title": "Configuration Directory",
-        "description": "Manage storage paths for Claude, Codex and Gemini configurations"
+        "description": "Manage storage paths for Claude Code, Codex and Pi configurations"
       },
       "globalProxy": {
         "title": "Global Outbound Proxy",
@@ -1050,7 +1050,7 @@
     "anthropicModel": "Main Model",
     "anthropicSmallFastModel": "Fast Model",
     "apiFormat": "Upstream Format",
-    "apiFormatHint": "Pick the wire API your provider speaks natively (Anthropic Messages / Chat Completions / Responses / Gemini generateContent). CC Switch uses it only to choose the model catalog and field shapes — it never converts request or response formats.",
+    "apiFormatHint": "Pick the wire API your provider speaks natively (Anthropic Messages / Chat Completions / Responses). CC Switch uses it only to choose the model catalog and field shapes — it never converts request or response formats.",
     "fullUrlLabel": "Full URL",
     "fullUrlEnabled": "Full URL Mode",
     "fullUrlDisabled": "Mark as Full URL",
