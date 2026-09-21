@@ -4,6 +4,7 @@ import type {
   WebDavSyncSettings,
   S3SyncSettings,
   RemoteSnapshotInfo,
+  SyncE2eStatus,
 } from "@/types";
 import type { AppId } from "./types";
 
@@ -28,6 +29,10 @@ export interface CodexUnifyHistoryRestoreResult {
 
 export interface WebDavSyncResult {
   status: string;
+  /** E2E 下载命中序号回滚时带上远端/本机序号，前端据此弹「仍然应用」。 */
+  remoteSeq?: number;
+  lastApplied?: number;
+  seq?: number;
 }
 
 export const settingsApi = {
@@ -139,8 +144,10 @@ export const settingsApi = {
     return await invoke("webdav_sync_upload");
   },
 
-  async webdavSyncDownload(): Promise<WebDavSyncResult> {
-    return await invoke("webdav_sync_download");
+  async webdavSyncDownload(allowRollback?: boolean): Promise<WebDavSyncResult> {
+    return await invoke("webdav_sync_download", {
+      ...(allowRollback === undefined ? {} : { allowRollback }),
+    });
   },
 
   async webdavSyncSaveSettings(
@@ -177,8 +184,10 @@ export const settingsApi = {
     return await invoke("s3_sync_upload");
   },
 
-  async s3SyncDownload(): Promise<WebDavSyncResult> {
-    return await invoke("s3_sync_download");
+  async s3SyncDownload(allowRollback?: boolean): Promise<WebDavSyncResult> {
+    return await invoke("s3_sync_download", {
+      ...(allowRollback === undefined ? {} : { allowRollback }),
+    });
   },
 
   async s3SyncSaveSettings(
@@ -195,6 +204,30 @@ export const settingsApi = {
 
   async s3SyncFetchRemoteInfo(): Promise<RemoteSnapshotInfo | { empty: true }> {
     return await invoke("s3_sync_fetch_remote_info");
+  },
+
+  // ===== 端到端同步加密 (E2E) =====
+
+  async syncE2eSetPassphrase(
+    passphrase: string,
+  ): Promise<{ stored: boolean; cleared: boolean }> {
+    return await invoke("sync_e2e_set_passphrase", { passphrase });
+  },
+
+  async syncE2eSetEnabled(
+    transport: "webdav" | "s3",
+    enabled: boolean,
+    allowInsecure?: boolean,
+  ): Promise<{ e2eEnabled: boolean; allowInsecure: boolean }> {
+    return await invoke("sync_e2e_set_enabled", {
+      transport,
+      enabled,
+      ...(allowInsecure === undefined ? {} : { allowInsecure }),
+    });
+  },
+
+  async syncE2eGetStatus(): Promise<SyncE2eStatus> {
+    return await invoke("sync_e2e_get_status");
   },
 
   async syncCurrentProvidersLive(): Promise<void> {

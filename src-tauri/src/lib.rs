@@ -1,3 +1,4 @@
+mod acl;
 mod app_config;
 mod app_store;
 mod auto_launch;
@@ -442,6 +443,30 @@ pub fn run() {
                     }
                 }
             };
+
+            // T-4（2.1 方案 4.2.4）：启动时 PRAGMA quick_check。失败则给"从最近备份
+            // 恢复 / 退出"；恢复走离线文件顶替（损坏主库留证为 cc-switch.corrupt-*.db），
+            // 完成后退出重启。不启用 WAL 的理由见 Database::init 的 busy_timeout 注释。
+            if let Err(e) = db.startup_quick_check() {
+                log::error!("启动完整性检查（quick_check）失败: {e}");
+                if show_db_quick_check_failed_dialog(app.handle(), &e.to_string()) {
+                    restore_db_from_latest_backup_at_startup(app.handle());
+                }
+                log::info!("启动完整性检查未通过，退出程序");
+                std::process::exit(1);
+            }
+
+            // S-10（方案 4.2.3 / D2）：配置目录此时已存在，首次启动把 DACL 收紧为
+            // 当前用户 + SYSTEM + Administrators。幂等（标记文件），失败只 warn 不阻断。
+            acl::ensure_config_dir_acl_tightened(&crate::config::get_app_config_dir());
+
+            // E2E-5 升级豁免：http 端点默认拒会打断存量用户，首次启动把升级前就配好
+            // 的 http 远端预置 allow_insecure=true。必须在自动同步 worker 启动前跑。
+            match crate::settings::grandfather_existing_insecure_http() {
+                Ok(true) => log::info!("已为升级前配置的 http 同步远端豁免不安全连接"),
+                Ok(false) => {}
+                Err(e) => log::warn!("http 升级豁免迁移失败: {e}"),
+            }
 
             // 数据库可用后立即应用持久化日志级别，避免后续服务初始化
             // 继续使用启动阶段的 Info 回退。损坏配置显式 fail-closed 到 Info。
@@ -1084,6 +1109,9 @@ pub fn run() {
             commands::s3_sync_upload,
             commands::s3_sync_download,
             commands::s3_sync_save_settings,
+            commands::sync_e2e_set_passphrase,
+            commands::sync_e2e_set_enabled,
+            commands::sync_e2e_get_status,
             commands::s3_sync_fetch_remote_info,
             commands::open_zip_file_dialog,
             commands::create_db_backup,
@@ -1441,7 +1469,93 @@ fn show_database_init_error_dialog(
         .blocking_show()
 }
 
-/// 显示凭据管理器自检失败对话框（施工方案 §6.6）。
+/// T-4：quick_check 失败对话框。返回 true = 用户选择"从最近备份恢复"，false = 退出。
+fn show_db_quick_check_failed_dialog(app: &tauri::AppHandle, error: &str) -> bool {
+    let (title, message, ok_text, cancel_text) = if is_chinese_locale() {
+        (
+            "数据库完整性检查失败",
+            format!(
+                "启动时 quick_check 未通过：\n\n{error}\n\n\
+                「从最近备份恢复」会把当前数据库改名为 cc-switch.corrupt-*.db 留证，\
+                用 backups 目录里最近的完好备份顶替，然后需要重新启动应用。\n\
+                若所有备份都不可用，应用会原样退出，不会丢任何文件。"
+            ),
+            "从最近备份恢复",
+            "退出",
+        )
+    } else {
+        (
+            "Database Integrity Check Failed",
+            format!(
+                "The startup quick_check did not pass:\n\n{error}\n\n\
+                'Restore from latest backup' renames the current database to \
+                cc-switch.corrupt-*.db, replaces it with the newest intact backup in \
+                the backups directory, and requires an app restart.\n\
+                If no backup is usable the app exits without touching any file."
+            ),
+            "Restore from latest backup",
+            "Exit",
+        )
+    };
+
+    app.dialog()
+        .message(&message)
+        .title(title)
+        .kind(MessageDialogKind::Error)
+        .buttons(MessageDialogButtons::OkCancelCustom(
+            ok_text.to_string(),
+            cancel_text.to_string(),
+        ))
+        .blocking_show()
+}
+
+/// T-4：从最近备份逐个尝试离线恢复。成功返回 true（调用方退出，重启后生效）。
+fn restore_db_from_latest_backup_at_startup(app: &tauri::AppHandle) -> bool {
+    let backups = match crate::database::Database::list_backups() {
+        Ok(list) => list,
+        Err(e) => {
+            log::error!("枚举数据库备份失败: {e}");
+            return false;
+        }
+    };
+    for entry in &backups {
+        match crate::database::Database::restore_main_db_file_from_backup(&entry.filename) {
+            Ok(path) => {
+                log::info!("已从备份 {} 恢复主库文件", entry.filename);
+                let (title, msg) = if is_chinese_locale() {
+                    (
+                        "已恢复",
+                        format!(
+                            "已从备份 {} 恢复数据库：\n{}\n\n点「确定」退出后请重新启动应用。",
+                            entry.filename,
+                            path.display()
+                        ),
+                    )
+                } else {
+                    (
+                        "Restored",
+                        format!(
+                            "Database restored from backup {}:\n{}\n\nPress OK to quit, then start the app again.",
+                            entry.filename,
+                            path.display()
+                        ),
+                    )
+                };
+                app.dialog()
+                    .message(&msg)
+                    .title(title)
+                    .kind(MessageDialogKind::Info)
+                    .buttons(MessageDialogButtons::Ok)
+                    .blocking_show();
+                return true;
+            }
+            Err(e) => {
+                log::warn!("备份 {} 恢复失败，尝试下一个: {e}", entry.filename);
+            }
+        }
+    }
+    false
+}
 /// 返回 true 表示用户选择重试，false 表示用户选择退出。
 /// 刻意不提供「跳过」：跳过等于退回明文存储，违反 fail-closed 原则。
 fn show_secrets_probe_error_dialog(app: &tauri::AppHandle, error: &str) -> bool {

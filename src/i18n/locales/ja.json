@@ -423,7 +423,8 @@
         "warning": "リモートの既存同期データが上書きされます",
         "legacyNotice": "旧レイアウトのリモートデータを検出しました。今回のアップロードは新しい v2/db-v6 パスに書き込み、旧パスは上書きしません。",
         "confirm": "アップロードを実行"
-      }
+      },
+      "rollbackConfirm": "リモートスナップショット（#{{remoteSeq}}）は本機で既に適用済み（#{{lastApplied}}）より古く、サーバーが巻き戻された可能性があります。それでも適用して本機データを上書きしますか？"
     },
     "syncType": {
       "label": "同期方式",
@@ -524,7 +525,8 @@
         "createdAt": "アップロード日時",
         "warning": "この S3 パスにある既存の同期データが上書きされます",
         "confirm": "アップロードを実行"
-      }
+      },
+      "rollbackConfirm": "リモートスナップショット（#{{remoteSeq}}）は本機で既に適用済み（#{{lastApplied}}）より古く、サーバーが巻き戻された可能性があります。それでも適用して本機データを上書きしますか？"
     },
     "autoReload": "データを更新しました",
     "languageOptionChinese": "简体中文",
@@ -696,7 +698,23 @@
     "unifyCodexHistoryRestoreCompleted": "バックアップから公式セッション履歴を復元しました（セッションファイル {{files}} 件、インデックス {{rows}} 行）",
     "unifyCodexHistoryRestoreFailed": "公式セッション履歴の復元に失敗しました。もう一度お試しください",
     "unifyCodexHistoryRestoreNothing": "現在の Codex ディレクトリに復元可能な移行バックアップはありません",
-    "unifyCodexHistoryRestoreSkippedToggleOn": "統一セッション履歴が再度有効化されたため、復元をスキップしました"
+    "unifyCodexHistoryRestoreSkippedToggleOn": "統一セッション履歴が再度有効化されたため、復元をスキップしました",
+    "syncEncryption": {
+      "title": "エンドツーエンド同期暗号化",
+      "description": "同期ペイロードはこの端末で暗号化され、同じパスフレーズを入力した別の端末でのみ復号されます。WebDAV/S3 サーバーには暗号文のみが届きます。",
+      "webdav": "WebDAV 同期を暗号化",
+      "s3": "S3 同期を暗号化",
+      "allowInsecure": "安全でない接続を許可（localhost / プライベートネットワークの http のみ）",
+      "savePassphrase": "パスフレーズを保存",
+      "passphraseSaved": "同期パスフレーズを保存しました",
+      "passphrasePlaceholder": "同期パスフレーズを設定",
+      "passphraseUpdatePlaceholder": "設定済み — 変更する場合は新しいものを入力",
+      "passphraseSetWarning": "パスフレーズはこの端末の資格情報マネージャーにのみ保存され、アップロードされません。忘れるとリモートデータを復旧できません。",
+      "passphraseRequiredWarning": "暗号化を有効にする前に同期パスフレーズを設定してください。忘れるとリモートデータは復旧できません。",
+      "enabledToast": "エンドツーエンド暗号化を有効にしました — アップロードして暗号化スナップショットを作成してください",
+      "disabledToast": "エンドツーエンド暗号化を無効にしました",
+      "migrateHint": "有効後にアップロードすると暗号化（v3）スナップショットが作成されます。すべての端末で同じパスフレーズを入力するまで同期できません。"
+    }
   },
   "apps": {
     "claude": "Claude",

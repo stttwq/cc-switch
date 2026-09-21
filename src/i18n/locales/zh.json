@@ -423,7 +423,8 @@
         "warning": "将覆盖云端已有的同步数据",
         "legacyNotice": "检测到旧版云端路径数据。本次上传将写入新路径 v2/db-v6，不会覆盖旧路径。",
         "confirm": "确认上传"
-      }
+      },
+      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？"
     },
     "syncType": {
       "label": "同步方式",
@@ -524,7 +525,8 @@
         "createdAt": "上传时间",
         "warning": "将覆盖该 S3 路径下已有的同步数据",
         "confirm": "确认上传"
-      }
+      },
+      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？"
     },
     "autoReload": "数据已刷新",
     "languageOptionChinese": "简体中文",
@@ -696,7 +698,23 @@
     "unifyCodexHistoryRestoreCompleted": "已按备份还原官方会话历史（{{files}} 个会话文件、{{rows}} 条索引记录）",
     "unifyCodexHistoryRestoreFailed": "还原官方会话历史失败，请重试",
     "unifyCodexHistoryRestoreNothing": "当前 Codex 目录没有可恢复的迁移备份",
-    "unifyCodexHistoryRestoreSkippedToggleOn": "统一会话历史开关已重新开启，已跳过还原"
+    "unifyCodexHistoryRestoreSkippedToggleOn": "统一会话历史开关已重新开启，已跳过还原",
+    "syncEncryption": {
+      "title": "端到端同步加密",
+      "description": "同步载荷在本机加密、只在用同一口令的另一台机器解密；WebDAV/S3 服务器只能看到密文。",
+      "webdav": "启用 WebDAV 同步加密",
+      "s3": "启用 S3 同步加密",
+      "allowInsecure": "允许不安全连接（仅限本机/私网的 http 明文）",
+      "savePassphrase": "保存口令",
+      "passphraseSaved": "同步口令已保存",
+      "passphrasePlaceholder": "设置同步口令",
+      "passphraseUpdatePlaceholder": "已设置口令——输入新的以更改",
+      "passphraseSetWarning": "口令只存在本机的凭据管理器里、永不上传。忘记口令将无法恢复远端数据。",
+      "passphraseRequiredWarning": "启用加密前必须先设置同步口令。请牢记：忘记口令会使远端数据不可恢复。",
+      "enabledToast": "已启用端到端加密——请点上传生成加密快照",
+      "disabledToast": "已关闭端到端加密",
+      "migrateHint": "启用后点上传会写入加密（v3）快照。所有设备需输入同一口令才能再次同步。"
+    }
   },
   "apps": {
     "claude": "Claude",

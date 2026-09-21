@@ -19,6 +19,7 @@ mod sync_support;
 
 mod lightweight;
 mod s3_sync;
+mod sync_e2e;
 mod webdav_sync;
 
 pub use config::*;
@@ -39,4 +40,5 @@ pub use skill::*;
 
 pub use lightweight::*;
 pub use s3_sync::*;
+pub use sync_e2e::*;
 pub use webdav_sync::*;

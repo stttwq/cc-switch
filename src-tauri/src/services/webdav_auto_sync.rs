@@ -107,11 +107,14 @@ async fn run_auto_sync_upload(
         None => return Ok(()),
     };
 
-    let secrets = crate::store::get_app_state(app)?.secrets.clone();
+    let state = crate::store::get_app_state(app)?;
+    let secrets = state.secrets.clone();
+    let kek_cache = state.sync_kek.clone();
     let result = webdav_sync_service::run_with_sync_lock(webdav_sync_service::upload(
         db,
         &secrets,
         &mut sync_settings,
+        &kek_cache,
     ))
     .await;
     match result {

@@ -119,6 +119,9 @@ export interface WebDavSyncStatus {
   lastRemoteEtag?: string | null;
   lastLocalManifestHash?: string | null;
   lastRemoteManifestHash?: string | null;
+  // 端到端加密的设备级序号（方案 2.4.4）
+  lastAppliedSeq?: number | null;
+  lastUploadedSeq?: number | null;
 }
 
 // WebDAV 同步配置
@@ -131,6 +134,8 @@ export interface WebDavSyncSettings {
   username?: string;
   remoteRoot?: string;
   profile?: string;
+  e2eEnabled?: boolean;
+  allowInsecure?: boolean;
   status?: WebDavSyncStatus;
 }
 
@@ -144,7 +149,23 @@ export interface S3SyncSettings {
   endpoint?: string;
   remoteRoot?: string;
   profile?: string;
+  e2eEnabled?: boolean;
+  allowInsecure?: boolean;
   status?: WebDavSyncStatus;
+}
+
+// 端到端加密状态（sync_e2e_get_status）
+export interface SyncE2eTransportStatus {
+  e2eEnabled: boolean;
+  allowInsecure: boolean;
+  lastAppliedSeq?: number | null;
+  lastUploadedSeq?: number | null;
+}
+
+export interface SyncE2eStatus {
+  passphraseSet: boolean;
+  webdav: SyncE2eTransportStatus;
+  s3: SyncE2eTransportStatus;
 }
 
 export type RemoteSnapshotLayout = "current" | "legacy";

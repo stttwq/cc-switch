@@ -110,19 +110,29 @@ pub async fn webdav_test_connection(
 pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
     let secrets = state.secrets.clone();
+    let kek_cache = state.sync_kek.clone();
     let mut settings = require_enabled_webdav_settings()?;
 
-    let result =
-        run_with_webdav_lock(webdav_sync_service::upload(&db, &secrets, &mut settings)).await;
+    let result = run_with_webdav_lock(webdav_sync_service::upload(
+        &db,
+        &secrets,
+        &mut settings,
+        &kek_cache,
+    ))
+    .await;
     map_sync_result(result, |error| {
         persist_sync_error(&mut settings, error, "manual")
     })
 }
 
 #[tauri::command]
-pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn webdav_sync_download(
+    state: State<'_, AppState>,
+    allow_rollback: Option<bool>,
+) -> Result<Value, String> {
     let db = state.db.clone();
     let secrets = state.secrets.clone();
+    let kek_cache = state.sync_kek.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_webdav_settings()?;
 
@@ -130,7 +140,13 @@ pub async fn webdav_sync_download(state: State<'_, AppState>) -> Result<Value, S
     // operation. Otherwise another WebDAV/S3 restore can start after the DB
     // apply but before this snapshot has finished projecting its live files.
     let sync_result = run_download_with_webdav_lock(
-        webdav_sync_service::download(&db, &secrets, &mut settings),
+        webdav_sync_service::download(
+            &db,
+            &secrets,
+            &mut settings,
+            &kek_cache,
+            allow_rollback.unwrap_or(false),
+        ),
         |result| async move {
             let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
                 // 远端遗留快照可能含明文密钥：先 scrub（extract→凭据管理器→回写剥离），
@@ -175,6 +191,10 @@ async fn save_webdav_settings(
     // Preserve server-owned fields that the frontend does not manage
     if let Some(existing_settings) = existing {
         sync_settings.status = existing_settings.status;
+        // e2e_enabled / allow_insecure 是设备级、由高级设置里的"端到端加密"区单独管理，
+        // 基础连接表单不携带 → 保留现值，否则每次"保存连接"都会把它们悄悄清零。
+        sync_settings.e2e_enabled = existing_settings.e2e_enabled;
+        sync_settings.allow_insecure = existing_settings.allow_insecure;
     }
 
     sync_settings.normalize();

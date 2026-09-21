@@ -638,7 +638,27 @@ export function WebdavSyncSection({
     closeDialog();
     setActionState("downloading");
     try {
-      await settingsApi.webdavSyncDownload();
+      const result = await settingsApi.webdavSyncDownload();
+      if (result.status === "rollbackConflict") {
+        // 远端比本机已应用的更旧（疑似服务器回滚）：让用户显式决定是否仍然应用。
+        setActionState("idle");
+        const proceed = window.confirm(
+          t("settings.webdavSync.rollbackConfirm", {
+            remoteSeq: result.remoteSeq ?? "?",
+            lastApplied: result.lastApplied ?? "?",
+          }),
+        );
+        if (proceed) {
+          setActionState("downloading");
+          const forced = await settingsApi.webdavSyncDownload(true);
+          if (forced.status !== "rollbackConflict") {
+            toast.success(t("settings.webdavSync.downloadSuccess"));
+            await queryClient.invalidateQueries();
+          }
+        }
+        setActionState("idle");
+        return;
+      }
       toast.success(t("settings.webdavSync.downloadSuccess"));
       await queryClient.invalidateQueries();
     } catch (error) {
@@ -861,7 +881,26 @@ export function WebdavSyncSection({
     closeS3Dialog();
     setS3ActionState("downloading");
     try {
-      await settingsApi.s3SyncDownload();
+      const result = await settingsApi.s3SyncDownload();
+      if (result.status === "rollbackConflict") {
+        setS3ActionState("idle");
+        const proceed = window.confirm(
+          t("settings.s3Sync.rollbackConfirm", {
+            remoteSeq: result.remoteSeq ?? "?",
+            lastApplied: result.lastApplied ?? "?",
+          }),
+        );
+        if (proceed) {
+          setS3ActionState("downloading");
+          const forced = await settingsApi.s3SyncDownload(true);
+          if (forced.status !== "rollbackConflict") {
+            toast.success(t("settings.s3Sync.downloadSuccess"));
+            await queryClient.invalidateQueries();
+          }
+        }
+        setS3ActionState("idle");
+        return;
+      }
       toast.success(t("settings.s3Sync.downloadSuccess"));
       await queryClient.invalidateQueries();
     } catch (error) {

@@ -141,27 +141,34 @@ impl Database {
 
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, &[])
+        self.import_sql_string_inner(sql_raw, &[], None)
     }
 
     /// Import SQL generated for sync, then restore local-only tables from the
     /// current live database before replacing it.
+    ///
+    /// T-5（2.1 方案 2.4.5）：同步快照应用前必须先有一份可回退的 DB 文件备份。
+    /// 该备份就在这里生成——替换主库之前、持主连接锁下的同一时间点，命名
+    /// `pre-sync-restore_<ts>.db` 并纳入 `backup_retain_count` 轮换；apply 侧的
+    /// skills 回滚另有临时目录副本兜底，故不再另打一份以免重复占用保留位。
     pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES)
+        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES, Some("pre-sync-restore"))
     }
 
     fn import_sql_string_inner(
         &self,
         sql_raw: &str,
         preserve_tables: &[&str],
+        backup_prefix: Option<&str>,
     ) -> Result<String, AppError> {
-        self.import_sql_string_inner_with_hook(sql_raw, preserve_tables, || Ok(()))
+        self.import_sql_string_inner_with_hook(sql_raw, preserve_tables, backup_prefix, || Ok(()))
     }
 
     fn import_sql_string_inner_with_hook<F>(
         &self,
         sql_raw: &str,
         preserve_tables: &[&str],
+        backup_prefix: Option<&str>,
         on_staging_ready: F,
     ) -> Result<String, AppError>
     where
@@ -218,8 +225,12 @@ impl Database {
         // device-local rows can miss writes that arrived during staging.
         let backup_path = {
             let mut main_conn = lock_conn!(self.conn);
-            let backup_path =
-                Self::backup_database_file_from_conn(&backup_file_guard, &main_conn, &[], None)?;
+            let backup_path = Self::backup_database_file_from_conn(
+                &backup_file_guard,
+                &main_conn,
+                &[],
+                backup_prefix,
+            )?;
             if !preserve_tables.is_empty() {
                 Self::restore_tables(&main_conn, &temp_conn, preserve_tables)?;
             }
@@ -627,7 +638,7 @@ impl Database {
         Ok(())
     }
 
-    fn validate_sqlite_integrity(conn: &Connection) -> Result<(), AppError> {
+    pub(crate) fn validate_sqlite_integrity(conn: &Connection) -> Result<(), AppError> {
         let mut stmt = conn
             .prepare("PRAGMA quick_check;")
             .map_err(|e| AppError::Database(format!("检查数据库完整性失败: {e}")))?;
@@ -1156,6 +1167,60 @@ impl Database {
         fs::remove_file(&backup_path).map_err(|e| AppError::io(&backup_path, e))?;
         log::info!("Deleted backup: {filename}");
         Ok(())
+    }
+
+    /// T-4（2.1 方案 4.2.4）：启动 quick_check 失败后的离线恢复——把损坏主库改名为
+    /// `cc-switch.corrupt-<ts>.db` 留证，再把指定备份文件原子顶替为主库。
+    ///
+    /// 不走 `restore_from_backup`：那条路径要对"将被替换的当前主库"再打一份安全快照，
+    /// 而此处主库已判定损坏，不能再依赖它可备份。恢复后需重启应用生效。
+    pub(crate) fn restore_main_db_file_from_backup(filename: &str) -> Result<PathBuf, AppError> {
+        if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+            return Err(AppError::InvalidInput(
+                "Invalid backup filename".to_string(),
+            ));
+        }
+
+        let _backup_file_guard = lock_backup_file_operations()?;
+        let config_dir = get_app_config_dir();
+        let db_path = config_dir.join("cc-switch.db");
+        let backup_path = config_dir.join("backups").join(filename);
+        if !backup_path.is_file() {
+            return Err(AppError::InvalidInput(format!(
+                "Backup file not found: {filename}"
+            )));
+        }
+
+        // 损坏主库改名留证；失败则整体中止，绝不出现"没有主库也没有新主库"的窗口。
+        let corrupt_path = if db_path.exists() {
+            let timestamp = Local::now().format("%Y%m%d_%H%M%S");
+            let corrupt = config_dir.join(format!("cc-switch.corrupt-{timestamp}.db"));
+            fs::rename(&db_path, &corrupt).map_err(|e| AppError::io(&db_path, e))?;
+            log::warn!("启动完整性检查失败，损坏主库已留证为 {}", corrupt.display());
+            Some(corrupt)
+        } else {
+            None
+        };
+
+        let staging = config_dir.join("cc-switch.db.restoring");
+        match fs::copy(&backup_path, &staging).and_then(|_| fs::rename(&staging, &db_path)) {
+            Ok(()) => {
+                log::info!("已从备份 {filename} 恢复主库文件，等待重启生效");
+                Ok(db_path)
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&staging);
+                if let Some(corrupt) = corrupt_path {
+                    if let Err(undo_err) = fs::rename(&corrupt, &db_path) {
+                        log::error!(
+                            "恢复失败且回退损坏主库也失败: {undo_err}；文件保留在 {}",
+                            corrupt.display()
+                        );
+                    }
+                }
+                Err(AppError::io(&db_path, e))
+            }
+        }
     }
 }
 
@@ -2329,7 +2394,10 @@ mod tests {
         }
 
         let safety_id = local_db.import_sql_string_for_sync(&remote_sql)?;
-        assert!(!safety_id.is_empty());
+        assert!(
+            safety_id.starts_with("pre-sync-restore_"),
+            "sync import safety backup must use the pre-sync-restore prefix, got: {safety_id}"
+        );
 
         {
             let conn = crate::database::lock_conn!(local_db.conn);
@@ -2595,6 +2663,71 @@ mod tests {
             "failed staging must not create a safety backup"
         );
         Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn startup_file_restore_swaps_backup_and_keeps_corrupt_evidence() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let db = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(db.conn);
+            conn.execute("DELETE FROM providers", [])?;
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('backup-provider', 'claude', 'Backup Provider', '{}', '{}')",
+                [],
+            )?;
+        }
+        let backup_path = db
+            .backup_database_file()?
+            .expect("backup before corruption");
+        let filename = backup_path
+            .file_name()
+            .expect("backup filename")
+            .to_string_lossy()
+            .into_owned();
+
+        // 模拟"主库已损坏"：当前连接仍在但磁盘文件是垃圾，只能走离线文件顶替。
+        let config_dir = crate::config::get_app_config_dir();
+        drop(db);
+        let db_file = config_dir.join("cc-switch.db");
+        std::fs::write(&db_file, b"definitely not a sqlite database")
+            .map_err(|e| AppError::io(&db_file, e))?;
+
+        Database::restore_main_db_file_from_backup(&filename)?;
+
+        let restored =
+            Connection::open_with_flags(&db_file, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        let provider: String = restored
+            .query_row("SELECT id FROM providers", [], |row| row.get(0))
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        assert_eq!(provider, "backup-provider");
+
+        let evidences: Vec<_> = std::fs::read_dir(&config_dir)
+            .map_err(|e| AppError::io(&config_dir, e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("cc-switch.corrupt-")
+            })
+            .collect();
+        assert_eq!(
+            evidences.len(),
+            1,
+            "corrupt main DB must be kept as exactly one evidence file"
+        );
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn startup_file_restore_rejects_traversal_and_missing_files() {
+        let _test_home = TestHomeGuard::new();
+        assert!(Database::restore_main_db_file_from_backup("../evil.db").is_err());
+        assert!(Database::restore_main_db_file_from_backup("no-such.db").is_err());
     }
 
     #[test]

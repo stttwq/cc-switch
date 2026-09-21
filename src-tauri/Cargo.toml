@@ -61,6 +61,10 @@ sys-locale = "0.3"
 keyring = { version = "3", default-features = false, features = ["windows-native"] }
 zeroize = "1"
 async-trait = "0.1"
+# 2.1 方案 P3：同步端到端加密（附录 B；nonce/salt/DEK 随机数用 rand_core，不另引 rand）
+chacha20poly1305 = "0.10"
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["getrandom"] }
 
 [target.'cfg(windows)'.dependencies]
 tauri-plugin-single-instance = "2"

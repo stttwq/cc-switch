@@ -228,19 +228,45 @@ pub async fn put_bytes(
     bytes: Vec<u8>,
     content_type: &str,
 ) -> Result<(), AppError> {
-    let client = http_client::get();
-    let resp = apply_auth(
-        client
-            .put(url)
-            .header("Content-Type", content_type)
-            .body(bytes)
-            .timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS)),
-        auth,
-    )
-    .send()
-    .await
-    .map_err(|e| webdav_transport_error("webdav.put_failed", "PUT 请求", "PUT request", url, &e))?;
+    put_bytes_with_precondition(url, auth, bytes, content_type, None, false).await
+}
 
+/// 条件写 PUT（E2E-4，方案 2.4.4）。`if_match` 带上次 ETag 做乐观并发；
+/// `if_none_match_star` = 首次创建（远端已存在则 412）。返回 412 时给专门错误。
+///
+/// 尽力而为：部分 WebDAV 服务（含个别坚果云版本）会忽略 `If-Match`/`If-None-Match`，
+/// 此时退化为无条件 PUT——不会丢数据，只是失去并发保护；只有真正回 412 才判冲突。
+pub async fn put_bytes_with_precondition(
+    url: &str,
+    auth: &WebDavAuth,
+    bytes: Vec<u8>,
+    content_type: &str,
+    if_match: Option<&str>,
+    if_none_match_star: bool,
+) -> Result<(), AppError> {
+    let client = http_client::get();
+    let mut req = client
+        .put(url)
+        .header("Content-Type", content_type)
+        .body(bytes)
+        .timeout(Duration::from_secs(TRANSFER_TIMEOUT_SECS));
+    if let Some(etag) = if_match {
+        req = req.header("If-Match", etag);
+    }
+    if if_none_match_star {
+        req = req.header("If-None-Match", "*");
+    }
+    let resp = apply_auth(req, auth).send().await.map_err(|e| {
+        webdav_transport_error("webdav.put_failed", "PUT 请求", "PUT request", url, &e)
+    })?;
+
+    if resp.status() == StatusCode::PRECONDITION_FAILED {
+        return Err(AppError::localized(
+            "sync.e2e.remote_changed",
+            "远端已被其他设备更新，请先下载最新快照再上传",
+            "The remote was updated by another device; download the latest snapshot before uploading",
+        ));
+    }
     if resp.status().is_success() {
         return Ok(());
     }

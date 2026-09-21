@@ -423,7 +423,8 @@
         "warning": "將覆寫雲端已有的同步資料",
         "legacyNotice": "檢測到舊版雲端路徑資料。本次上傳將寫入新路徑 v2/db-v6，不會覆寫舊路徑。",
         "confirm": "確認上傳"
-      }
+      },
+      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？"
     },
     "syncType": {
       "label": "同步方式",
@@ -524,7 +525,8 @@
         "createdAt": "上傳時間",
         "warning": "將覆寫該 S3 路徑下已有的同步資料",
         "confirm": "確認上傳"
-      }
+      },
+      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？"
     },
     "autoReload": "資料已重新整理",
     "languageOptionChinese": "简体中文",
@@ -696,7 +698,23 @@
     "unifyCodexHistoryRestoreCompleted": "已按備份還原官方會話歷史（{{files}} 個會話檔案、{{rows}} 條索引記錄）",
     "unifyCodexHistoryRestoreFailed": "還原官方會話歷史失敗，請重試",
     "unifyCodexHistoryRestoreNothing": "目前 Codex 目錄沒有可恢復的遷移備份",
-    "unifyCodexHistoryRestoreSkippedToggleOn": "統一會話歷史開關已重新開啟，已跳過還原"
+    "unifyCodexHistoryRestoreSkippedToggleOn": "統一會話歷史開關已重新開啟，已跳過還原",
+    "syncEncryption": {
+      "title": "端到端同步加密",
+      "description": "同步載荷在本機加密、只在用同一密碼的另一台機器解密；WebDAV/S3 伺服器只能看到密文。",
+      "webdav": "啟用 WebDAV 同步加密",
+      "s3": "啟用 S3 同步加密",
+      "allowInsecure": "允許不安全連線（僅限本機/私網的 http 明文）",
+      "savePassphrase": "儲存密碼",
+      "passphraseSaved": "同步密碼已儲存",
+      "passphrasePlaceholder": "設定同步密碼",
+      "passphraseUpdatePlaceholder": "已設定密碼——輸入新的以變更",
+      "passphraseSetWarning": "密碼只存在本機的憑據管理器裡、永不上傳。忘記密碼將無法恢復遠端資料。",
+      "passphraseRequiredWarning": "啟用加密前必須先設定同步密碼。請牢記：忘記密碼会使遠端資料不可恢復。",
+      "enabledToast": "已啟用端到端加密——請點上傳產生加密快照",
+      "disabledToast": "已關閉端到端加密",
+      "migrateHint": "啟用後點上傳會寫入加密（v3）快照。所有裝置需輸入同一密碼才能再次同步。"
+    }
   },
   "apps": {
     "claude": "Claude",

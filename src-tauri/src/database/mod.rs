@@ -103,6 +103,13 @@ impl Database {
         // 启用外键约束
         conn.execute("PRAGMA foreign_keys = ON;", [])
             .map_err(|e| AppError::Database(e.to_string()))?;
+        // T-4（2.1 方案 4.2.4）：并发写冲突时等锁而不是立刻报错。
+        // 刻意不启用 WAL：README 承诺配置目录可放 Dropbox / OneDrive / NAS，
+        // 并有 WSL2 UNC 路径契约测试；WAL 在网络文件系统与云同步目录上会损坏，
+        // `-wal` / `-shm` 副文件也会被同步工具搬来搬去。回滚日志模式是该部署场景下
+        // 的正确选择，busy_timeout 用来吸收同场景下偶发的跨进程锁竞争。
+        conn.busy_timeout(std::time::Duration::from_millis(5000))
+            .map_err(|e| AppError::Database(format!("设置 busy_timeout 失败: {e}")))?;
         if !db_exists {
             // For a brand-new database, configure incremental auto-vacuum
             // before creating any tables so no rebuild is needed later.
@@ -157,6 +164,13 @@ impl Database {
         }
 
         Ok(db)
+    }
+
+    /// T-4（2.1 方案 4.2.4）：启动时对主库跑一次 `PRAGMA quick_check`。
+    /// 失败时调用方应走数据库错误对话框并提供"从最近备份恢复"。
+    pub fn startup_quick_check(&self) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        Self::validate_sqlite_integrity(&conn)
     }
 
     /// 如果存在 `secrets_migration_pending` 标志，用启动流程 probe 过的 store 执行凭据迁移。

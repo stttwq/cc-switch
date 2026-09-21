@@ -423,7 +423,8 @@
         "warning": "This will overwrite existing sync data on the remote server",
         "legacyNotice": "Legacy remote data was detected. This upload will write to the new v2/db-v6 path and will not overwrite the legacy path.",
         "confirm": "Confirm Upload"
-      }
+      },
+      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?"
     },
     "syncType": {
       "label": "Sync Type",
@@ -524,7 +525,8 @@
         "createdAt": "Uploaded at",
         "warning": "This will overwrite existing sync data at the S3 path",
         "confirm": "Confirm Upload"
-      }
+      },
+      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?"
     },
     "autoReload": "Data refreshed",
     "languageOptionChinese": "简体中文",
@@ -696,7 +698,23 @@
     "unifyCodexHistoryRestoreCompleted": "Official session history restored from backup ({{files}} session files, {{rows}} index rows)",
     "unifyCodexHistoryRestoreFailed": "Failed to restore official session history, please try again",
     "unifyCodexHistoryRestoreNothing": "No restorable migration backup for the current Codex directory",
-    "unifyCodexHistoryRestoreSkippedToggleOn": "Unified session history was re-enabled; restore skipped"
+    "unifyCodexHistoryRestoreSkippedToggleOn": "Unified session history was re-enabled; restore skipped",
+    "syncEncryption": {
+      "title": "End-to-end sync encryption",
+      "description": "Sync payloads are encrypted on this device and decrypted only on another device with the same passphrase; the WebDAV/S3 server only ever sees ciphertext.",
+      "webdav": "Encrypt WebDAV sync",
+      "s3": "Encrypt S3 sync",
+      "allowInsecure": "Allow insecure connection (plaintext http to localhost / private network only)",
+      "savePassphrase": "Save passphrase",
+      "passphraseSaved": "Sync passphrase saved",
+      "passphrasePlaceholder": "Set a sync passphrase",
+      "passphraseUpdatePlaceholder": "Passphrase set — type a new one to change it",
+      "passphraseSetWarning": "Passphrase is stored only in this device's Credential Manager and never uploaded. If you forget it, remote data cannot be recovered.",
+      "passphraseRequiredWarning": "You must set a sync passphrase before enabling encryption. Remember it: forgetting it makes remote data unrecoverable.",
+      "enabledToast": "End-to-end encryption enabled — upload once to create the encrypted snapshot",
+      "disabledToast": "End-to-end encryption disabled",
+      "migrateHint": "After enabling, click Upload to write an encrypted (v3) snapshot. All devices must enter the same passphrase before they can sync again."
+    }
   },
   "apps": {
     "claude": "Claude",

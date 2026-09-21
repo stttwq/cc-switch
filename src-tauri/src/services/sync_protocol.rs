@@ -130,6 +130,8 @@ pub(crate) struct LocalSnapshot {
 pub(crate) enum RemoteLayout {
     Current,
     Legacy,
+    /// E2E v3 布局：`{root}/v3/{profile}/`，无 `db-v*` 子目录（方案 2.4.3）。
+    E2e,
 }
 
 impl RemoteLayout {
@@ -137,6 +139,7 @@ impl RemoteLayout {
         match self {
             Self::Current => "current",
             Self::Legacy => "legacy",
+            Self::E2e => "e2e",
         }
     }
 }
@@ -387,6 +390,277 @@ pub(crate) fn apply_snapshot(
     Ok(())
 }
 
+// ─── End-to-end encryption orchestration (E2E-3) ─────────────
+
+// 传输层不感知加密：upload/download 各自把远端 v3 三件套（manifest.json +
+// `db.sql.enc` + `skills.zip.enc`）搬到这里的 seal/open 编排上。KEK 由 `cache`
+// 按盐派生并缓存（方案 2.4.2），口令只在本机、永不上传。
+
+/// 上传前算好的 v3 载荷。
+pub(crate) struct E2eUpload {
+    pub manifest_bytes: Vec<u8>,
+    pub manifest_hash: String,
+    pub db_sql_enc: Vec<u8>,
+    pub skills_zip_enc: Vec<u8>,
+    pub seq: u64,
+}
+
+/// 本机 E2E 已开启却读到 v2 明文布局——拒绝降级（方案 2.4.3）。
+pub(crate) fn e2e_downgrade_blocked_error() -> AppError {
+    localized(
+        "sync.e2e.v2_rejected",
+        "远端是未加密的旧版（v2）快照，而本机已启用同步加密；请先在另一台设备或本页用「迁移远端」把它升级为加密快照",
+        "The remote holds an unencrypted legacy (v2) snapshot while this device has sync encryption enabled; migrate the remote to encrypted first",
+    )
+}
+
+/// 上传时发现远端已被其他设备改动（WebDAV 412 / S3 尽力而为 HEAD 比较）——方案 2.4.4。
+pub(crate) fn e2e_remote_changed_error() -> AppError {
+    localized(
+        "sync.e2e.remote_changed",
+        "远端已被其他设备更新，请先下载最新快照再上传",
+        "The remote was updated by another device; download the latest snapshot before uploading",
+    )
+}
+
+/// 由本机明文快照 + 远端（可选）现有 manifest 生成 v3 密文载荷。
+///
+/// `remote_manifest_bytes` = 远端已存在的 v3 外层 manifest 字节（首次上传传 `None`）。
+/// `seq = max(last_uploaded_seq, 远端 seq) + 1`；盐沿用远端（保持口令稳定），无远端才新生成。
+pub(crate) fn e2e_build_upload(
+    db: &crate::database::Database,
+    cache: &crate::store::SyncKekCache,
+    passphrase: &str,
+    remote_manifest_bytes: Option<&[u8]>,
+    last_uploaded_seq: u64,
+) -> Result<E2eUpload, AppError> {
+    let snapshot = build_local_snapshot(db)?;
+
+    let remote_outer = remote_manifest_bytes.and_then(|bytes| parse_e2e_outer_manifest(bytes).ok());
+    let remote_seq = remote_outer.as_ref().map(|o| o.seq).unwrap_or(0);
+    let seq = last_uploaded_seq.max(remote_seq) + 1;
+    let kdf = remote_outer
+        .map(|o| o.kdf)
+        .unwrap_or_else(crate::services::sync_e2e::new_kdf_params);
+
+    let kek = cache.get_or_derive(passphrase, &kdf)?;
+    let inputs = crate::services::sync_e2e::SealInputs {
+        db_sql: &snapshot.db_sql,
+        skills_zip: &snapshot.skills_zip,
+        device_name: detect_system_device_name().unwrap_or_else(|| "Unknown Device".to_string()),
+        created_at: Utc::now().to_rfc3339(),
+        seq,
+        db_compat_version: DB_COMPAT_VERSION,
+        kdf: Some(kdf),
+    };
+    let sealed = crate::services::sync_e2e::seal_with_kek(&inputs, &kek)?;
+    Ok(E2eUpload {
+        manifest_bytes: sealed.manifest_bytes,
+        manifest_hash: sealed.manifest_hash,
+        db_sql_enc: sealed.db_sql_enc,
+        skills_zip_enc: sealed.skills_zip_enc,
+        seq,
+    })
+}
+
+/// 下载后按固定顺序解开 v3 载荷并做序号回滚检测，返回明文 db.sql/skills.zip 与新序号。
+/// 任何一步失败都在 `apply_snapshot` 之前返回 `Err`，本地库不动（方案 2.4.5）。
+pub(crate) fn e2e_open_download(
+    cache: &crate::store::SyncKekCache,
+    passphrase: &str,
+    outer_bytes: &[u8],
+    db_sql_enc: &[u8],
+    skills_zip_enc: &[u8],
+    last_applied_seq: u64,
+    allow_rollback: bool,
+) -> Result<E2eDownload, AppError> {
+    use crate::services::sync_e2e as e2e;
+    let outer = parse_e2e_outer_manifest(outer_bytes)?;
+    // 回滚检测在解密之前：`seq` 在外层明文 manifest 里，无需口令即可比对。
+    if let Some((remote_seq, last_applied)) =
+        e2e::detect_seq_regression(outer.seq, last_applied_seq, allow_rollback)
+    {
+        return Ok(E2eDownload::RollbackConflict {
+            remote_seq,
+            last_applied,
+        });
+    }
+    let kek = cache.get_or_derive(passphrase, &outer.kdf)?;
+    let opened = e2e::open_manifest_with_kek(outer, &kek)?;
+    let db_sql = e2e::open_artifact(&opened, e2e::DB_SQL_ENC, REMOTE_DB_SQL, db_sql_enc)?;
+    let skills_zip = e2e::open_artifact(
+        &opened,
+        e2e::SKILLS_ZIP_ENC,
+        REMOTE_SKILLS_ZIP,
+        skills_zip_enc,
+    )?;
+    Ok(E2eDownload::Applied {
+        db_sql,
+        skills_zip,
+        seq: opened.outer.seq,
+    })
+}
+
+/// `e2e_open_download` 的结果：正常可应用，或检测到远端回滚需用户显式放行。
+pub(crate) enum E2eDownload {
+    Applied {
+        db_sql: Vec<u8>,
+        skills_zip: Vec<u8>,
+        seq: u64,
+    },
+    RollbackConflict {
+        remote_seq: u64,
+        last_applied: u64,
+    },
+}
+
+/// 复用 sync_e2e 的解析，但把错误透传出来供 `Option` 场景使用。
+fn parse_e2e_outer_manifest(
+    bytes: &[u8],
+) -> Result<crate::services::sync_e2e::OuterManifest, AppError> {
+    crate::services::sync_e2e::parse_outer_manifest(bytes)
+}
+
+/// 供 fetch_remote_info 用的 v3 摘要（方案 2.4.3）。
+pub(crate) struct E2eRemoteInfo {
+    pub device_name: Option<String>,
+    pub created_at: Option<String>,
+    pub snapshot_id: String,
+    pub db_compat_version: u32,
+    pub seq: u64,
+    pub compatible: bool,
+}
+
+/// 解析 v3 外层 manifest：兼容判定只依赖明文；口令可用时顺带解出设备名/时间做预览，
+/// 解不出（未设/错口令）也照常返回摘要——下载预览不该被口令挡住。
+pub(crate) async fn e2e_describe_remote(
+    secrets: &std::sync::Arc<dyn crate::secrets::SecretStore>,
+    outer_bytes: &[u8],
+) -> E2eRemoteInfo {
+    let outer = match parse_e2e_outer_manifest(outer_bytes) {
+        Ok(o) => o,
+        Err(_) => {
+            return E2eRemoteInfo {
+                device_name: None,
+                created_at: None,
+                snapshot_id: String::new(),
+                db_compat_version: 0,
+                seq: 0,
+                compatible: false,
+            }
+        }
+    };
+    let compatible = outer.db_compat_version == DB_COMPAT_VERSION;
+    let (device_name, created_at) =
+        match crate::secrets::sync_secrets::restore_sync_passphrase(secrets).await {
+            Ok(Some(passphrase)) => {
+                match crate::services::sync_e2e::derive_kek(&passphrase, &outer.kdf) {
+                    Ok(kek) => {
+                        match crate::services::sync_e2e::open_manifest_with_kek(outer.clone(), &kek)
+                        {
+                            Ok(opened) => (
+                                Some(opened.inner.device_name),
+                                Some(opened.inner.created_at),
+                            ),
+                            Err(_) => (None, None),
+                        }
+                    }
+                    Err(_) => (None, None),
+                }
+            }
+            _ => (None, None),
+        };
+    E2eRemoteInfo {
+        device_name,
+        created_at,
+        snapshot_id: outer.snapshot_id,
+        db_compat_version: outer.db_compat_version,
+        seq: outer.seq,
+        compatible,
+    }
+}
+
+/// 读取本机同步口令；未设置时给出可操作错误（口令永不上上传，方案 2.4.2）。
+/// 两个传输层共用。
+pub(crate) async fn require_sync_passphrase(
+    secrets: &std::sync::Arc<dyn crate::secrets::SecretStore>,
+) -> Result<zeroize::Zeroizing<String>, AppError> {
+    crate::secrets::sync_secrets::restore_sync_passphrase(secrets)
+        .await?
+        .ok_or_else(|| {
+            localized(
+                "sync.e2e.passphrase_required",
+                "尚未设置同步口令，请在设置的同步加密区设置口令",
+                "Sync passphrase is not set; configure it in the sync encryption settings",
+            )
+        })
+}
+
+// ─── Transport security (E2E-5) ──────────────────────────────
+
+/// 判断 URL 主机是否是本机/私网（localhost、回环 IP、RFC1918、IPv6 回环/唯一本地）。
+/// 空串或无法解析按"非私网"处理（交给上层据此拒绝 http）。
+fn host_is_local_or_private(url_str: &str) -> bool {
+    let Ok(u) = url::Url::parse(url_str.trim()) else {
+        return false;
+    };
+    let Some(host) = u.host_str() else {
+        return false;
+    };
+    if host == "localhost" || host.ends_with(".localhost") {
+        return true;
+    }
+    match host.parse::<std::net::IpAddr>() {
+        Ok(ip) => match ip {
+            std::net::IpAddr::V4(v4) => v4.is_loopback() || v4.is_private() || v4.is_link_local(),
+            std::net::IpAddr::V6(v6) => v6.is_loopback() || v6_unique_local(v6),
+        },
+        // 域名（如 `nas.local`）无法在本地判定是否私网：按非私网处理。
+        Err(_) => false,
+    }
+}
+
+fn v6_unique_local(v6: std::net::Ipv6Addr) -> bool {
+    // fc00::/7 唯一本地地址
+    (v6.segments()[0] & 0xfe00) == 0xfc00
+}
+
+/// `http://` 端点默认拒绝，除非主机是本机/私网**且**用户勾选"允许不安全连接"
+/// （方案 2.4.5）。`https://` 始终放行；空端点（如 S3 走 AWS 默认 https）放行。
+pub(crate) fn ensure_transport_endpoint_secure(
+    url_str: &str,
+    allow_insecure: bool,
+) -> Result<(), AppError> {
+    let trimmed = url_str.trim();
+    if trimmed.is_empty() {
+        return Ok(());
+    }
+    let Ok(u) = url::Url::parse(trimmed) else {
+        return Ok(()); // 更基础的格式校验由各传输的 parse 负责
+    };
+    if u.scheme() != "http" {
+        return Ok(());
+    }
+    let private = host_is_local_or_private(trimmed);
+    if private && allow_insecure {
+        return Ok(());
+    }
+    let (key, zh, en) = if private {
+        (
+            "sync.insecure.local_needs_consent",
+            "本机/私网的 http 明文地址需先在设置里勾选「允许不安全连接」",
+            "Plaintext http to a local/private host requires enabling 'Allow insecure connection'",
+        )
+    } else {
+        (
+            "sync.insecure.public_http_forbidden",
+            "明文密码会经 http 过线，公网地址必须使用 https",
+            "Passwords would cross the wire in plaintext over http; public endpoints must use https",
+        )
+    };
+    Err(localized(key, zh, en))
+}
+
 // ─── Utilities ───────────────────────────────────────────────
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
@@ -480,6 +754,24 @@ mod tests {
         assert!(s3_lock.try_lock().is_err());
         drop(guard);
         assert!(s3_lock.try_lock().is_ok());
+    }
+
+    #[test]
+    fn endpoint_security_gates_http_by_host_and_consent() {
+        // https 恒放行
+        assert!(ensure_transport_endpoint_secure("https://dav.example.com/dav", false).is_ok());
+        // 空 endpoint（S3 走 AWS 默认 https）放行
+        assert!(ensure_transport_endpoint_secure("", false).is_ok());
+        // 公网 http：即使勾选也拒（明文密码过线）
+        assert!(ensure_transport_endpoint_secure("http://dav.example.com/dav", true).is_err());
+        // 私网/本机 http：未勾选拒，勾选放行
+        assert!(ensure_transport_endpoint_secure("http://192.168.1.10/dav", false).is_err());
+        assert!(ensure_transport_endpoint_secure("http://192.168.1.10/dav", true).is_ok());
+        assert!(ensure_transport_endpoint_secure("http://127.0.0.1:8080/dav", true).is_ok());
+        assert!(ensure_transport_endpoint_secure("http://localhost:8080/dav", false).is_err());
+        assert!(ensure_transport_endpoint_secure("http://localhost:8080/dav", true).is_ok());
+        // 域名形式的内网（nas.local）无法本地判定 → 视作公网 http，拒
+        assert!(ensure_transport_endpoint_secure("http://nas.local/dav", true).is_err());
     }
 
     fn artifact(sha256: &str, size: u64) -> ArtifactMeta {
@@ -741,5 +1033,115 @@ mod tests {
             size: data.len() as u64,
         };
         assert!(verify_artifact(data, "test.bin", &meta).is_ok());
+    }
+
+    #[test]
+    fn e2e_open_download_roundtrip_and_seq_regression() {
+        use crate::services::sync_e2e as e2e;
+        use crate::store::SyncKekCache;
+
+        let db_sql = b"BEGIN;INSERT INTO providers VALUES('a');COMMIT;";
+        let skills = b"PK\x03\x04zip";
+        let sealed = e2e::seal(
+            &e2e::SealInputs {
+                db_sql,
+                skills_zip: skills,
+                device_name: "DEV".to_string(),
+                created_at: "2026-09-21T00:00:00Z".to_string(),
+                seq: 5,
+                db_compat_version: DB_COMPAT_VERSION,
+                kdf: Some(e2e::new_kdf_params()),
+            },
+            "pw",
+        )
+        .expect("seal");
+
+        let cache = SyncKekCache::default();
+        let opened = e2e_open_download(
+            &cache,
+            "pw",
+            &sealed.manifest_bytes,
+            &sealed.db_sql_enc,
+            &sealed.skills_zip_enc,
+            0,
+            false,
+        )
+        .expect("open download");
+        let (out_db, out_skills, seq) = match opened {
+            E2eDownload::Applied {
+                db_sql,
+                skills_zip,
+                seq,
+            } => (db_sql, skills_zip, seq),
+            E2eDownload::RollbackConflict { .. } => {
+                panic!("fresh device must not see rollback conflict")
+            }
+        };
+        assert_eq!(out_db, db_sql);
+        assert_eq!(out_skills, skills);
+        assert_eq!(seq, 5);
+
+        // 本机已应用 seq=9 > 远端 5 → 返回回滚冲突（默认拒绝），库不动。
+        let conflict = e2e_open_download(
+            &cache,
+            "pw",
+            &sealed.manifest_bytes,
+            &sealed.db_sql_enc,
+            &sealed.skills_zip_enc,
+            9,
+            false,
+        )
+        .expect("regression is a conflict, not an error");
+        match conflict {
+            E2eDownload::RollbackConflict {
+                remote_seq,
+                last_applied,
+            } => {
+                assert_eq!((remote_seq, last_applied), (5, 9));
+            }
+            E2eDownload::Applied { .. } => panic!("seq regression must be blocked"),
+        }
+        // 用户显式接受回滚 → 放行；且第二次命中 KEK 缓存（不重跑 Argon2）
+        let allowed = e2e_open_download(
+            &cache,
+            "pw",
+            &sealed.manifest_bytes,
+            &sealed.db_sql_enc,
+            &sealed.skills_zip_enc,
+            9,
+            true,
+        )
+        .expect("allow_rollback passes");
+        assert!(matches!(allowed, E2eDownload::Applied { .. }));
+    }
+
+    #[test]
+    fn e2e_open_download_rejects_wrong_passphrase() {
+        use crate::services::sync_e2e as e2e;
+        use crate::store::SyncKekCache;
+        let sealed = e2e::seal(
+            &e2e::SealInputs {
+                db_sql: b"db",
+                skills_zip: b"zip",
+                device_name: "D".to_string(),
+                created_at: "2026-09-21T00:00:00Z".to_string(),
+                seq: 1,
+                db_compat_version: DB_COMPAT_VERSION,
+                kdf: Some(e2e::new_kdf_params()),
+            },
+            "right-pw",
+        )
+        .expect("seal");
+        let cache = SyncKekCache::default();
+        assert!(e2e_open_download(
+            &cache,
+            "wrong-pw",
+            &sealed.manifest_bytes,
+            &sealed.db_sql_enc,
+            &sealed.skills_zip_enc,
+            0,
+            false,
+        )
+        .is_err());
     }
 }

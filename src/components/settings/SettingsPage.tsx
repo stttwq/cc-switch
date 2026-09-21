@@ -50,6 +50,7 @@ import { CodexAuthSettings } from "@/components/settings/CodexAuthSettings";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
 import { BackupListSection } from "@/components/settings/BackupListSection";
 import { WebdavSyncSection } from "@/components/settings/WebdavSyncSection";
+import { SyncEncryptionSection } from "@/components/settings/SyncEncryptionSection";
 import { AboutSection } from "@/components/settings/AboutSection";
 import { LogConfigPanel } from "@/components/settings/LogConfigPanel";
 import { useInstalledSkills } from "@/hooks/useSkills";
@@ -415,6 +416,7 @@ export function SettingsPage({
                             settings={settings}
                             onAutoSave={handleAutoSave}
                           />
+                          <SyncEncryptionSection />
                         </AccordionContent>
                       </AccordionItem>
 

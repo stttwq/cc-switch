@@ -13,6 +13,7 @@ pub mod s3_auto_sync;
 pub mod s3_sync;
 pub mod skill;
 pub mod switch_lock;
+pub(crate) mod sync_e2e;
 pub mod sync_protocol;
 pub mod webdav;
 pub mod webdav_auto_sync;

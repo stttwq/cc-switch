@@ -90,3 +90,35 @@ pub async fn restore_s3_credentials(
         .await?;
     Ok((access_key_id, secret_access_key))
 }
+
+// ─── 同步口令（端到端加密，方案 2.4.2） ──────────────────────
+
+/// 同步口令与 WebDAV / S3 登录密码无关，永不上上传；条目
+/// `cc-switch/v1/app/sync/passphrase`。三态语义同 `extract_webdav_password`：
+/// `None`=不动，`Some("")`=删除，`Some(v)`=写入。返回是否真的写入了值。
+pub async fn extract_sync_passphrase(
+    store: &Arc<dyn SecretStore>,
+    passphrase: Option<&str>,
+) -> Result<bool, AppError> {
+    let Some(passphrase) = passphrase else {
+        return Ok(false);
+    };
+    if passphrase.starts_with("literal:") {
+        return Ok(false);
+    }
+    let target = SecretTarget::app("sync", "passphrase");
+    if passphrase.is_empty() {
+        store.delete(&target).await?;
+        return Ok(false);
+    }
+    store.store(&target, passphrase).await?;
+    Ok(true)
+}
+
+/// 读回同步口令（KEK 派生用）。
+pub async fn restore_sync_passphrase(
+    store: &Arc<dyn SecretStore>,
+) -> Result<Option<zeroize::Zeroizing<String>>, AppError> {
+    let target = SecretTarget::app("sync", "passphrase");
+    store.retrieve(&target).await
+}

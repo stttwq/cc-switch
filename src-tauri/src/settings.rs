@@ -108,6 +108,12 @@ pub struct WebDavSyncStatus {
     pub last_local_manifest_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_remote_manifest_hash: Option<String>,
+    /// E2E（方案 2.4.4）：本机已应用的远端快照序号，用于回滚检测。设备级、不随库同步。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_applied_seq: Option<u64>,
+    /// E2E：本机最后一次成功上传的序号，用于计算 `max(本地, 远端) + 1`。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_uploaded_seq: Option<u64>,
 }
 
 fn default_remote_root() -> String {
@@ -134,6 +140,13 @@ pub struct WebDavSyncSettings {
     pub remote_root: String,
     #[serde(default = "default_profile")]
     pub profile: String,
+    /// E2E（方案 2.4.6 + B1）：是否对该远端启用端到端加密。默认关，
+    /// 已有 v2 明文远端的用户须手动迁移；新远端的"默认开启"在启用流程里处理。
+    #[serde(default)]
+    pub e2e_enabled: bool,
+    /// E2E（方案 2.4.5）：允许 http / 私网非加密传输的显式豁免，默认拒。
+    #[serde(default)]
+    pub allow_insecure: bool,
     #[serde(default)]
     pub status: WebDavSyncStatus,
 }
@@ -147,6 +160,8 @@ impl Default for WebDavSyncSettings {
             username: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
+            e2e_enabled: false,
+            allow_insecure: false,
             status: WebDavSyncStatus::default(),
         }
     }
@@ -168,6 +183,11 @@ impl WebDavSyncSettings {
                 "WebDAV username is required.",
             ));
         }
+        // E2E-5（方案 2.4.5）：http 明文默认拒，除非本机/私网且已勾选允许不安全连接。
+        crate::services::sync_protocol::ensure_transport_endpoint_secure(
+            &self.base_url,
+            self.allow_insecure,
+        )?;
         Ok(())
     }
 
@@ -211,6 +231,12 @@ pub struct S3SyncSettings {
     pub remote_root: String,
     #[serde(default = "default_profile")]
     pub profile: String,
+    /// E2E：见 `WebDavSyncSettings::e2e_enabled`（两个传输各自独立的设备级开关）。
+    #[serde(default)]
+    pub e2e_enabled: bool,
+    /// E2E：见 `WebDavSyncSettings::allow_insecure`。
+    #[serde(default)]
+    pub allow_insecure: bool,
     #[serde(default)]
     pub status: WebDavSyncStatus,
 }
@@ -225,6 +251,8 @@ impl Default for S3SyncSettings {
             endpoint: String::new(),
             remote_root: default_remote_root(),
             profile: default_profile(),
+            e2e_enabled: false,
+            allow_insecure: false,
             status: WebDavSyncStatus::default(),
         }
     }
@@ -248,6 +276,11 @@ impl S3SyncSettings {
         }
         // Note: access_key_id and secret_access_key validation removed
         // as they are now stored in SecretStore, not in this struct
+        // E2E-5（方案 2.4.5）：自定义 endpoint 走 http 同样默认拒（空 endpoint = AWS 默认 https）。
+        crate::services::sync_protocol::ensure_transport_endpoint_secure(
+            &self.endpoint,
+            self.allow_insecure,
+        )?;
         Ok(())
     }
 
@@ -286,6 +319,11 @@ pub struct LocalMigrations {
     /// 这样重新开启能把"关闭期间"落入 openai 桶的官方会话补迁进来。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub codex_official_history_unify_v1: Option<CodexOfficialHistoryUnifyMigration>,
+    /// E2E-5 升级豁免：本版本起 http 端点默认拒绝。升级前就已配置 http 远端的存量用户
+    /// 一次性预置 `allow_insecure=true`，避免同步被悄悄打断。置真后不再重复执行，
+    /// 用户之后手动取消勾选也不会被再次豁免。
+    #[serde(default)]
+    pub http_insecure_grandfathered_v1: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -986,6 +1024,51 @@ pub fn update_s3_sync_status(status: WebDavSyncStatus) -> Result<(), AppError> {
             s3.status = status;
         }
     })
+}
+
+/// E2E-5 升级豁免（一次性）：本版本起 http 端点默认拒。为避免悄悄打断存量用户，
+/// 升级后首次启动时，把**升级前就已配置**的 http WebDAV/S3 远端的 `allow_insecure`
+/// 预置为 `true`。之后置真不再执行（用户手动取消勾选也不会被重新豁免）。
+/// 返回是否真的改动了某条（供调用方记日志）。
+pub fn grandfather_existing_insecure_http() -> Result<bool, AppError> {
+    if get_settings()
+        .local_migrations
+        .as_ref()
+        .map(|m| m.http_insecure_grandfathered_v1)
+        .unwrap_or(false)
+    {
+        return Ok(false);
+    }
+    let mut changed = false;
+    mutate_settings(|current| {
+        if let Some(w) = current.webdav_sync.as_mut() {
+            if w.base_url
+                .trim_start()
+                .to_lowercase()
+                .starts_with("http://")
+                && !w.allow_insecure
+            {
+                w.allow_insecure = true;
+                changed = true;
+            }
+        }
+        if let Some(s) = current.s3_sync.as_mut() {
+            if s.endpoint
+                .trim_start()
+                .to_lowercase()
+                .starts_with("http://")
+                && !s.allow_insecure
+            {
+                s.allow_insecure = true;
+                changed = true;
+            }
+        }
+        current
+            .local_migrations
+            .get_or_insert_with(Default::default)
+            .http_insecure_grandfathered_v1 = true;
+    })?;
+    Ok(changed)
 }
 
 #[cfg(test)]
