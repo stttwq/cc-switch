@@ -27,6 +27,7 @@ pub struct TrayTexts {
     pub quit: &'static str,
     pub projects_label: &'static str,
     pub no_project_label: &'static str,
+    pub strict_mode_label: &'static str,
 }
 
 /// 将系统区域标识映射为托盘支持的语言码。
@@ -75,6 +76,7 @@ impl TrayTexts {
                 quit: "Quit",
                 projects_label: "Projects",
                 no_project_label: "No project",
+                strict_mode_label: "Strict delivery: open terminals from CC Switch",
             },
             "ja" => Self {
                 show_main: "メインウィンドウを開く",
@@ -84,6 +86,7 @@ impl TrayTexts {
                 quit: "終了",
                 projects_label: "プロジェクト",
                 no_project_label: "プロジェクトを使用しない",
+                strict_mode_label: "厳格配信：CC Switch からターミナルを開く",
             },
             "zh-TW" => Self {
                 show_main: "開啟主介面",
@@ -93,6 +96,7 @@ impl TrayTexts {
                 quit: "退出",
                 projects_label: "專案",
                 no_project_label: "不使用專案",
+                strict_mode_label: "嚴格投遞：請從本程式開啟終端機",
             },
             _ => Self {
                 show_main: "打开主界面",
@@ -102,6 +106,7 @@ impl TrayTexts {
                 quit: "退出",
                 projects_label: "项目",
                 no_project_label: "不使用项目",
+                strict_mode_label: "严格投递：请从本程序打开终端",
             },
         }
     }
@@ -317,6 +322,20 @@ pub fn create_tray_menu(
         .item(&show_main_item)
         .item(&open_website_item)
         .separator();
+
+    // B5 严格投递模式：菜单顶部给一条禁用的提示项，提醒用户密钥不落环境变量、
+    // 只能从 cc-switch 打开终端启动 CLI（否则从别处启动的 CLI 读不到凭据）。
+    if app_settings.env_delivery_strict_mode {
+        let strict_item = MenuItem::with_id(
+            app,
+            "strict_mode_info",
+            tray_texts.strict_mode_label,
+            false,
+            None::<&str>,
+        )
+        .map_err(|e| AppError::Message(format!("创建严格模式提示失败: {e}")))?;
+        menu_builder = menu_builder.item(&strict_item).separator();
+    }
 
     // 每个应用类型折叠为子菜单，避免供应商过多时菜单过长
     for section in TRAY_SECTIONS.iter() {

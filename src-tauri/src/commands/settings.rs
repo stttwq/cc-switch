@@ -104,6 +104,7 @@ pub async fn save_settings(
 /// `envDeliveryStrictMode` 字段回传前端。
 #[tauri::command]
 pub async fn set_env_delivery_strict_mode(
+    app: tauri::AppHandle,
     state: tauri::State<'_, crate::store::AppState>,
     enabled: bool,
 ) -> Result<bool, String> {
@@ -112,6 +113,8 @@ pub async fn set_env_delivery_strict_mode(
         crate::services::provider::ProviderService::purge_all_env_delivery(state.inner())
             .map_err(|e| e.to_string())?;
     }
+    // 让托盘的严格模式提示项即时出现/消失。
+    crate::tray::refresh_tray_menu(&app);
     Ok(enabled)
 }
 
