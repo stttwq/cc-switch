@@ -841,8 +841,8 @@ impl ProviderService {
         app_type: &AppType,
         provider: &Provider,
     ) -> Result<(), AppError> {
-        // 严格模式不写环境变量，冲突预检既无意义也不该挡住切换。
-        if crate::settings::env_delivery_strict_mode_enabled() {
+        // 严格模式（P2 起逐 app 判定）不写环境变量，冲突预检既无意义也不该挡住切换。
+        if crate::settings::strict_for(app_type) {
             return Ok(());
         }
         let mut warnings = SwitchResult::default();
@@ -897,11 +897,11 @@ impl ProviderService {
             managed.vars_for_app(app_type.as_str())
         };
 
-        // B5 严格投递模式（方案 2.4.7）：绝不把密钥写进 `HKCU\Environment`。切换时把该应用
-        // 此前投递过的变量一并收回（开启时命令层已做一次全量清理，这里是切换侧的安全网），
-        // 只保留调用方的 live 文件更新；密钥改由「打开终端」经 `Command::env` 注入到其自起
+        // B5/P2 严格投递模式（逐 app 判定）：绝不把该应用密钥写进 `HKCU\Environment`。切换时把
+        // 该应用此前投递过的变量一并收回（开关侧已按需清理，这里是切换侧的安全网），
+        // 只保留调用方的 live 文件更新；密钥改由「打开终端」或 `ccs env` 注入到其自起
         // 的终端进程。刻意不 collect/write pending。
-        if crate::settings::env_delivery_strict_mode_enabled() {
+        if crate::settings::strict_for(app_type) {
             for var_name in &old_vars {
                 if let Err(e) = sink.remove(var_name) {
                     log::warn!("严格模式收回环境变量 {var_name} 失败: {e}");
@@ -1006,6 +1006,38 @@ impl ProviderService {
             }
         }
         managed.entries.clear();
+        managed.save(&state.db)?;
+        if !names.is_empty() {
+            if let Err(e) = sink.broadcast() {
+                log::warn!("严格模式清理环境变量后广播失败: {e}");
+            }
+        }
+        Ok(())
+    }
+
+    /// 2.2 方案 P2：只收回指定 app 集合的已投递变量（分级清理粒度跟分级走）。
+    /// 不误伤仍宽松的其他 app 变量。Pi 按 app 圈定 = 收回该 app 下全部 Pi 变量（additive
+    /// 场景由 P1 的 `ccs env pi <id>` 提供 per-provider 精确清理，这里是全局/按-app 开关侧）。
+    pub fn purge_env_delivery_for_apps(
+        state: &AppState,
+        apps: &[String],
+    ) -> Result<(), AppError> {
+        use crate::env_delivery::ManagedEnvVars;
+
+        let sink = state.env_sink.as_ref();
+        let mut managed = ManagedEnvVars::load(&state.db)?;
+        let names: Vec<String> = managed
+            .entries
+            .iter()
+            .filter(|(_, entry)| apps.iter().any(|a| a == &entry.app))
+            .map(|(name, _)| name.clone())
+            .collect();
+        for name in &names {
+            if let Err(e) = sink.remove(name) {
+                log::warn!("严格模式清理环境变量 {name} 失败: {e}");
+            }
+            managed.unregister(name);
+        }
         managed.save(&state.db)?;
         if !names.is_empty() {
             if let Err(e) = sink.broadcast() {

@@ -140,6 +140,7 @@
     "duplicate": "複製",
     "sortUpdateFailed": "並び順の更新に失敗しました",
     "openTerminal": "ターミナルを開く",
+    "runCli": "{{cli}} を実行",
     "terminalOpened": "ターミナルを開きました",
     "terminalOpenFailed": "ターミナルを開けませんでした",
     "name": "プロバイダー名",
@@ -707,12 +708,26 @@
     "unifyCodexHistoryRestoreSkippedToggleOn": "統一セッション履歴が再度有効化されたため、復元をスキップしました",
     "envDelivery": {
       "title": "環境変数配信",
-      "description": "プロバイダーを切り替えると、アクティブなプロバイダーのキーがユーザー環境変数（HKCU\\Environment）に書き込まれ、このマシンのコマンドラインツールが読み取れるようになります。",
+      "description": "厳格モード：オンにするとプロバイダーのキーをユーザー環境変数（HKCU\\Environment）に書き込まず、「ターミナルを開く」またはコマンドライン経由で注入します。厳格でないアプリは通常の配信を維持します。",
       "strictMode": "厳格配信モード",
-      "strictModeHint": "オンにするとキーをユーザー環境変数に書き込まず、cc-switch の「ターミナルを開く」経由でのみ注入します。",
-      "strictModeActive": "オン中：他の場所から起動した claude / codex / pi はキーを読み取れず、資格情報不足でエラーになります。cc-switch の「ターミナルを開く」から起動してください。スイッチをオフにすると通常の配信に戻ります。",
-      "enabledToast": "厳格配信モードをオンにし、配信済みのキーをユーザー環境変数から回収しました",
-      "disabledToast": "厳格配信モードをオフにし、次回プロバイダー切り替え時に通常の配信を再開します"
+      "strictModeHint": "オンにするとキーをユーザー環境変数に書き込まず、cc-switch の「ターミナルを開く」または ccs env 経由でのみ注入します。",
+      "strictModeActive": "厳格対象のアプリでは、他の場所から起動した claude / codex / pi はキーを読み取れず、資格情報不足でエラーになります。cc-switch の「ターミナルを開く」から起動するか、下の「アクティベーションコマンドをコピー」で自分のシェルで ccs env を使ってください。",
+      "enabledToast": "グローバル厳格配信モードをオンにし、配信済みのキーをユーザー環境変数から回収しました",
+      "disabledToast": "厳格配信モードをオフにし、次回プロバイダー切り替え時に通常の配信を再開します",
+      "modeLabel": "厳格配信の範囲",
+      "mode": {
+        "off": "オフ",
+        "perApp": "アプリ別",
+        "global": "グローバル"
+      },
+      "app": {
+        "claude": "Claude",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "copyCommand": "アクティベーションコマンドをコピー",
+      "copyCommandHint": "ccs env を自分のシェルに組み込みます（絶対パス付きの一時スニペットを生成。システム PATH は変更しません）。",
+      "copiedToast": "アクティベーションコマンドをクリップボードにコピーしました"
     },
     "diagnostics": {
       "copy": "診断情報をコピー",

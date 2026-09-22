@@ -26,6 +26,65 @@ pub fn get_app_config_dir_override() -> Option<PathBuf> {
     override_cache().read().ok()?.clone()
 }
 
+/// 应用标识（与 `tauri.conf.json` 的 `identifier` 保持一致）。
+/// Tauri store 插件把 `app_paths.json` 放在 `%APPDATA%\<identifier>\` 下，
+/// 该位置固定、不受 app_config_dir override 影响，因此 CLI shim 可据此定位。
+const APP_IDENTIFIER: &str = "com.ccswitch.desktop";
+
+/// CLI（无 AppHandle）用：直接把解析出的 override 写入本进程缓存。
+/// shim 每次启动都须重新解析文件后再调用，且必须发生在任何 DB 打开/路径读取之前。
+pub(crate) fn set_override_for_cli(value: Option<PathBuf>) {
+    update_cached_override(value);
+}
+
+/// 从 `app_paths.json` 的 JSON 文本解析 override（纯函数，便于单测）。
+/// 语义与 `read_override_from_store` 保持一致：空串/类型不符/目录不存在 → `None`。
+pub(crate) fn parse_app_paths_override(json_str: &str) -> Option<PathBuf> {
+    let value: Value = serde_json::from_str(json_str).ok()?;
+    let path_str = value.get(STORE_KEY_APP_CONFIG_DIR)?.as_str()?.trim();
+    if path_str.is_empty() {
+        return None;
+    }
+    let path = resolve_path(path_str);
+    if !path.exists() {
+        log::warn!("app_paths.json 中配置的 app_config_dir 不存在: {path:?}，回落默认路径");
+        return None;
+    }
+    Some(path)
+}
+
+/// Tauri store 文件 `app_paths.json` 的默认物理位置（Windows: `%APPDATA%\<identifier>\`）。
+fn default_app_paths_store_file() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        let appdata = std::env::var("APPDATA").ok()?;
+        return Some(PathBuf::from(appdata).join(APP_IDENTIFIER).join("app_paths.json"));
+    }
+    #[cfg(not(windows))]
+    {
+        let config = dirs::config_dir()?;
+        Some(config.join(APP_IDENTIFIER).join("app_paths.json"))
+    }
+}
+
+/// CLI 建库前调用：读取默认 store 文件解析 override 并注入缓存。
+/// 文件缺失/解析失败 → 保持 `None`（回落默认 `~/.cc-switch`），不报错。
+pub(crate) fn load_override_for_cli() {
+    let Some(file) = default_app_paths_store_file() else {
+        return;
+    };
+    match std::fs::read_to_string(&file) {
+        Ok(text) => {
+            let value = parse_app_paths_override(&text);
+            if value.is_some() {
+                log::info!("CLI 已从 {file:?} 解析 app_config_dir override: {value:?}");
+            }
+            set_override_for_cli(value);
+        }
+        Err(_) => set_override_for_cli(None),
+    }
+}
+
 fn read_override_from_store(app: &tauri::AppHandle) -> Option<PathBuf> {
     let store = match app.store_builder("app_paths.json").build() {
         Ok(store) => store,
@@ -132,4 +191,39 @@ pub fn migrate_app_config_dir_from_settings(app: &tauri::AppHandle) -> Result<()
 
     let _ = refresh_app_config_dir_override(app);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_override_returns_existing_dir() {
+        let dir = std::env::temp_dir().join("ccs-override-parse-case");
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let raw = dir.to_string_lossy().replace('\\', "\\\\");
+        let json = format!(r#"{{"{STORE_KEY_APP_CONFIG_DIR}":"{raw}"}}"#);
+        let parsed = parse_app_paths_override(&json);
+        assert_eq!(parsed.as_deref(), Some(dir.as_path()));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_override_none_for_missing_empty_or_bad() {
+        // 空串
+        assert_eq!(
+            parse_app_paths_override(&format!(r#"{{"{STORE_KEY_APP_CONFIG_DIR}":""}}"#)),
+            None
+        );
+        // 不存在的目录
+        assert_eq!(
+            parse_app_paths_override(
+                r#"{"app_config_dir_override":"Z:\\definitely\\does\\not\\exist\\ccs-xyz"}"#
+            ),
+            None
+        );
+        // 非法 JSON / 缺键
+        assert_eq!(parse_app_paths_override("not json"), None);
+        assert_eq!(parse_app_paths_override("{}"), None);
+    }
 }

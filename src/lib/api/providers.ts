@@ -129,4 +129,18 @@ export const providersApi = {
       cwd,
     });
   },
+
+  /** P3「运行 X」：设好凭据后按 app 直接起对应 CLI（区别于「打开终端」的交互式 shell）。 */
+  async runProviderCli(
+    providerId: string,
+    appId: AppId,
+    options?: OpenTerminalOptions,
+  ): Promise<boolean> {
+    const { cwd } = options ?? {};
+    return await invoke("run_provider_cli", {
+      providerId,
+      app: appId,
+      cwd,
+    });
+  },
 };

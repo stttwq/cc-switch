@@ -140,6 +140,7 @@
     "duplicate": "Duplicate",
     "sortUpdateFailed": "Failed to update sort order",
     "openTerminal": "Open Terminal",
+    "runCli": "Run {{cli}}",
     "terminalOpened": "Terminal opened",
     "terminalOpenFailed": "Failed to open terminal",
     "name": "Provider Name",
@@ -707,12 +708,26 @@
     "unifyCodexHistoryRestoreSkippedToggleOn": "Unified session history was re-enabled; restore skipped",
     "envDelivery": {
       "title": "Environment variable delivery",
-      "description": "When switching providers, the active provider's key is written to user environment variables (HKCU\\Environment) so command-line tools on this machine can read it.",
+      "description": "Strict mode: when on, a provider's key is not written to user environment variables (HKCU\\Environment); it is injected via \"Open Terminal\" or the command line instead. Non-strict apps keep normal delivery.",
       "strictMode": "Strict delivery mode",
-      "strictModeHint": "When on, keys are no longer written to user environment variables and are injected only via cc-switch's \"Open Terminal\".",
-      "strictModeActive": "On: CLIs launched elsewhere (claude / codex / pi) will not find the key and will fail for missing credentials. You must launch them from cc-switch's \"Open Terminal\". Turning the switch off restores normal delivery.",
-      "enabledToast": "Strict delivery mode enabled; delivered keys were removed from user environment variables",
-      "disabledToast": "Strict delivery mode disabled; normal delivery resumes on the next provider switch"
+      "strictModeHint": "When on, keys are no longer written to user environment variables and are injected only via cc-switch's \"Open Terminal\" or ccs env.",
+      "strictModeActive": "For strict apps, CLIs launched elsewhere (claude / codex / pi) will not find the key and will fail for missing credentials. Launch them from cc-switch's \"Open Terminal\", or use the \"Copy activation command\" below to activate via ccs env in your own shell.",
+      "enabledToast": "Global strict delivery mode enabled; delivered keys were removed from user environment variables",
+      "disabledToast": "Strict delivery mode disabled; normal delivery resumes on the next provider switch",
+      "modeLabel": "Strict delivery scope",
+      "mode": {
+        "off": "Off",
+        "perApp": "Per app",
+        "global": "Global"
+      },
+      "app": {
+        "claude": "Claude",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "copyCommand": "Copy activation command",
+      "copyCommandHint": "Wire ccs env into your own shell (generates a one-time snippet with an absolute path; does not modify the system PATH).",
+      "copiedToast": "Activation command copied to clipboard"
     },
     "diagnostics": {
       "copy": "Copy diagnostics",

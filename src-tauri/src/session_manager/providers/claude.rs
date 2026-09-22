@@ -248,7 +248,10 @@ fn parse_session(path: &Path) -> Option<SessionMeta> {
         created_at,
         last_active_at,
         source_path: Some(path.to_string_lossy().to_string()),
-        resume_command: Some(format!("claude --resume {session_id}")),
+        resume_command: Some(format!(
+            "{} --resume {session_id}",
+            crate::commands::cli_command_for(&crate::app_config::AppType::Claude)
+        )),
     })
 }
 

@@ -2906,17 +2906,34 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
     }
 }
 
-/// 打开指定提供商的终端
-///
-/// 根据提供商配置的环境变量启动一个带有该提供商特定设置的终端
-/// 无需检查是否为当前激活的提供商，任何提供商都可以打开终端
-#[allow(non_snake_case)]
+/// 「打开终端」：设好该供应商凭据环境后，落入带环境的交互式 shell（不自动跑 CLI）。
 #[tauri::command]
 pub fn open_provider_terminal(
     state: State<'_, crate::store::AppState>,
     app: String,
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
+) -> Result<bool, String> {
+    launch_provider_terminal(state, app, providerId, cwd, false)
+}
+
+/// 「运行 X」：设好凭据后，按 app 直接起对应 CLI（claude/codex/pi）。P3 新增入口。
+#[tauri::command]
+pub fn run_provider_cli(
+    state: State<'_, crate::store::AppState>,
+    app: String,
+    #[allow(non_snake_case)] providerId: String,
+    cwd: Option<String>,
+) -> Result<bool, String> {
+    launch_provider_terminal(state, app, providerId, cwd, true)
+}
+
+fn launch_provider_terminal(
+    state: State<'_, crate::store::AppState>,
+    app: String,
+    provider_id: String,
+    cwd: Option<String>,
+    run_cli: bool,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     let launch_cwd = resolve_launch_cwd(cwd)?;
@@ -2926,8 +2943,8 @@ pub fn open_provider_terminal(
         .map_err(|e| format!("获取提供商列表失败: {e}"))?;
 
     let provider = providers
-        .get(&providerId)
-        .ok_or_else(|| format!("提供商 {providerId} 不存在"))?;
+        .get(&provider_id)
+        .ok_or_else(|| format!("提供商 {provider_id} 不存在"))?;
 
     // 从配置提取非敏感 env（settings_config 已剥离密钥），再从凭据管理器
     // 取该供应商自己的密钥/BaseUrl 覆盖（§5.3.4：非当前供应商也要拿到正确 key）。
@@ -2938,7 +2955,7 @@ pub fn open_provider_terminal(
         ProviderService::provider_env_pairs(state.inner(), &app_type, provider, &mut warnings)
             .map_err(|e| format!("读取供应商凭据失败: {e}"))?;
     for warning in warnings {
-        log::warn!("open_provider_terminal 凭据投递告警: {warning}");
+        log::warn!("launch_provider_terminal 凭据投递告警: {warning}");
     }
     for (name, value) in pairs {
         let value = value.to_string();
@@ -2949,7 +2966,7 @@ pub fn open_provider_terminal(
     }
 
     // 根据平台启动终端，密钥只经进程环境注入，不写任何文件
-    launch_terminal_with_env(env_vars, launch_cwd.as_deref())
+    launch_terminal_with_env(env_vars, launch_cwd.as_deref(), &app_type, run_cli)
         .map_err(|e| format!("启动终端失败: {e}"))?;
 
     Ok(true)
@@ -3023,21 +3040,54 @@ fn resolve_launch_cwd(cwd: Option<String>) -> Result<Option<PathBuf>, String> {
 }
 
 /// 启动终端：密钥只进进程环境，不写 %TEMP% JSON。
+/// `run_cli=true`（「运行 X」）在设好环境后直接起该 app 对应 CLI；
+/// `run_cli=false`（「打开终端」）落入带环境的交互式 shell，不自动跑 CLI。
 fn launch_terminal_with_env(
     env_vars: Vec<(String, String)>,
     cwd: Option<&Path>,
+    app_type: &AppType,
+    run_cli: bool,
 ) -> Result<(), String> {
     #[cfg(target_os = "windows")]
     {
-        launch_windows_terminal(&env_vars, cwd)?;
+        launch_windows_terminal(&env_vars, cwd, app_type, run_cli)?;
         Ok(())
     }
 
     #[cfg(not(target_os = "windows"))]
     {
-        let _ = (env_vars, cwd);
+        let _ = (env_vars, cwd, run_cli);
+        let _ = app_type;
         Err("当前阶段仅支持 Windows 环境变量启动".to_string())
     }
+}
+
+/// 按 app 选 CLI 可执行命令名。`resume_command` 与「打开终端/运行 X」共用，避免命令名散落漂移。
+pub(crate) fn cli_command_for(app: &AppType) -> &'static str {
+    match app {
+        AppType::Claude => "claude",
+        AppType::Codex => "codex",
+        AppType::Pi => "pi",
+    }
+}
+
+/// 生成交互式终端批处理内容（纯函数，便于单测）。只含 cd/(可选)启动 CLI/(可选)自删，
+/// **绝不含任何环境变量值**——密钥始终由 `Command::env` 注入进程环境，不落 bat。
+///
+/// `self_delete=false`（交互式「打开终端」，外层是 `cmd /K`）：不能自删——`cmd /K` 跑完
+/// 最后一行会回头续读该 bat，文件被 `del` 掉就报"找不到批处理文件"。残留改由下次启动清理。
+/// `self_delete=true`（「运行 X」，CLI 阻塞到退出）：末尾自删可靠。
+fn terminal_bat_content(cwd_command: &str, cli_line: &str, self_delete: bool) -> String {
+    let mut s = String::from("@echo off\n");
+    s.push_str(cwd_command);
+    if !cli_line.is_empty() {
+        s.push_str(cli_line);
+        s.push('\n');
+    }
+    if self_delete {
+        s.push_str("del \"%~f0\" >nul 2>&1\n");
+    }
+    s
 }
 
 /// Windows: 根据用户首选终端启动
@@ -3045,18 +3095,33 @@ fn launch_terminal_with_env(
 fn launch_windows_terminal(
     env_vars: &[(String, String)],
     cwd: Option<&Path>,
+    app_type: &AppType,
+    run_cli: bool,
 ) -> Result<(), String> {
     let preferred = crate::settings::get_preferred_terminal();
     let terminal = preferred.as_deref().unwrap_or("cmd");
     let temp_dir = std::env::temp_dir();
-    let bat_file = temp_dir.join(format!("cc_switch_claude_{}.bat", std::process::id()));
+    let bat_file = temp_dir.join(format!("cc_switch_term_{}.bat", std::process::id()));
+    // 先清掉上一次留下的终端 bat（交互式那条不自删，靠这里回收），失败忽略（可能被占用）。
+    if let Ok(entries) = std::fs::read_dir(&temp_dir) {
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with("cc_switch_term_") && name.ends_with(".bat") {
+                let _ = std::fs::remove_file(entry.path());
+            }
+        }
+    }
     let cwd_command = build_windows_cwd_command(cwd);
-    // 批处理文件只负责切目录 + 启动 CLI + 自删，绝不写入任何环境变量值，
+    // 批处理只负责切目录 (+启动 CLI)(+自删)，绝不写入任何环境变量值，
     // 密钥改由下方 Command::env 注入到 cmd 进程，经 `start` 传递给终端子进程。
-    let content = format!(
-        "@echo off\n{cwd_command}claude\ndel \"%~f0\" >nul 2>&1\n",
-        cwd_command = cwd_command,
-    );
+    let cli_line = if run_cli {
+        format!("{}\n", cli_command_for(app_type))
+    } else {
+        String::new()
+    };
+    // 交互式（run_cli=false）不自删：外层 cmd /K 会续读该 bat，自删会触发"找不到批处理文件"。
+    let content = terminal_bat_content(&cwd_command, cli_line.trim_end(), run_cli);
 
     std::fs::write(&bat_file, &content).map_err(|e| format!("写入批处理文件失败: {e}"))?;
 
@@ -3091,8 +3156,9 @@ fn launch_windows_terminal(
     result
 }
 
-#[cfg_attr(windows, allow(dead_code))]
-fn shell_single_quote(value: &str) -> String {
+/// POSIX 单引号转义：包裹为 `'...'`，内部单引号用 `'"'"'` 拼接。
+/// 2.2 方案 P1 起被 `cli` 模块复用（bash `export`），故 `pub(crate)` 且不再 Windows dead_code。
+pub(crate) fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
@@ -3185,6 +3251,32 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn cli_command_for_maps_each_app() {
+        assert_eq!(cli_command_for(&AppType::Claude), "claude");
+        assert_eq!(cli_command_for(&AppType::Codex), "codex");
+        assert_eq!(cli_command_for(&AppType::Pi), "pi");
+    }
+
+    #[test]
+    fn terminal_bat_content_interactive_has_no_cli_and_no_selfdelete() {
+        // 打开终端（run_cli=false / self_delete=false）：不跑 CLI、也不自删
+        // （外层 cmd /K 会续读该 bat，自删会报"找不到批处理文件"）。
+        let content = terminal_bat_content("", "", false);
+        assert!(content.contains("@echo off"));
+        assert!(!content.contains("del \"%~f0\""), "交互式不得自删");
+        assert!(!content.contains("claude"));
+        assert!(!content.contains("codex"));
+    }
+
+    #[test]
+    fn terminal_bat_content_run_cli_uses_app_command_and_selfdeletes() {
+        let cli = cli_command_for(&AppType::Codex);
+        let content = terminal_bat_content("cd /d \"C:\\x\"\r\n", cli, true);
+        assert!(content.contains("\ncodex\n"), "应按 app 起对应 CLI: {content}");
+        assert!(content.contains("del \"%~f0\""), "运行 X 末尾自删");
+    }
 
     /// 探测 helper 正常路径：spawn（含 pre_exec setsid）能启动、输出能捕获。
     /// `/bin/echo --version` 在 macOS/Linux 均即刻成功退出。

@@ -325,7 +325,9 @@ pub fn create_tray_menu(
 
     // B5 严格投递模式：菜单顶部给一条禁用的提示项，提醒用户密钥不落环境变量、
     // 只能从 cc-switch 打开终端启动 CLI（否则从别处启动的 CLI 读不到凭据）。
-    if app_settings.env_delivery_strict_mode {
+    // B5/P2 严格投递模式（分级后聚合判定，不能只读裸 bool，否则"仅按应用"档会漏报）：
+    // 只要任一 app 严格就在菜单顶部给一条禁用提示项。
+    if crate::settings::env_delivery_strict_mode_enabled() {
         let strict_item = MenuItem::with_id(
             app,
             "strict_mode_info",

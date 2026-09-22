@@ -263,6 +263,8 @@ export interface Settings {
   // ===== 环境变量投递（B5 严格模式）=====
   // 开启后切换供应商不把密钥写入 HKCU\Environment，密钥仅经 cc-switch「打开终端」注入。
   envDeliveryStrictMode?: boolean;
+  // P2 分级：全局关时，按应用严格的 app 子集（"claude" | "codex" | "pi"）。
+  envDeliveryStrictApps?: string[] | null;
 
   // ===== 本机自动迁移状态 =====
   localMigrations?: {

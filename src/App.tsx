@@ -705,23 +705,29 @@ function App() {
       : message;
   }, [activeApp, confirmAction, piCurrentState?.defaultProviderId, t]);
 
-  const handleOpenTerminal = async (provider: Provider) => {
+  const launchProviderShell = async (provider: Provider, runCli: boolean) => {
     try {
       const selectedDir = await settingsApi.pickDirectory();
       if (!selectedDir) {
         return;
       }
 
-      await providersApi.openTerminal(provider.id, activeApp, {
-        cwd: selectedDir,
-      });
+      if (runCli) {
+        await providersApi.runProviderCli(provider.id, activeApp, {
+          cwd: selectedDir,
+        });
+      } else {
+        await providersApi.openTerminal(provider.id, activeApp, {
+          cwd: selectedDir,
+        });
+      }
       toast.success(
         t("provider.terminalOpened", {
           defaultValue: "终端已打开",
         }),
       );
     } catch (error) {
-      console.error("[App] Failed to open terminal", error);
+      console.error("[App] Failed to launch provider terminal", error);
       const errorMessage = extractErrorMessage(error);
       toast.error(
         t("provider.terminalOpenFailed", {
@@ -730,6 +736,11 @@ function App() {
       );
     }
   };
+
+  const handleOpenTerminal = (provider: Provider) =>
+    launchProviderShell(provider, false);
+
+  const handleRunCli = (provider: Provider) => launchProviderShell(provider, true);
 
   const handleImportSuccess = async () => {
     try {
@@ -894,9 +905,8 @@ function App() {
                       }
                       onDuplicate={handleDuplicateProvider}
                       onOpenWebsite={handleOpenWebsite}
-                      onOpenTerminal={
-                        activeApp === "claude" ? handleOpenTerminal : undefined
-                      }
+                      onOpenTerminal={handleOpenTerminal}
+                      onRunCli={handleRunCli}
                       onCreate={() => setIsAddOpen(true)}
                     />
                   </motion.div>

@@ -118,6 +118,75 @@ pub async fn set_env_delivery_strict_mode(
     Ok(enabled)
 }
 
+/// 2.2 方案 P2：设置"按应用"严格集合（三态里的"按应用"档）。清理粒度跟分级走——
+/// 只收回**新转为严格**的那些 app 的已投递变量，不误伤仍宽松的其他 app。
+#[tauri::command]
+pub async fn set_env_delivery_strict_apps(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, crate::store::AppState>,
+    apps: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let prev = crate::settings::get_settings();
+    let prev_strict: Vec<String> = if prev.env_delivery_strict_mode {
+        ["claude", "codex", "pi"].into_iter().map(String::from).collect()
+    } else {
+        prev.env_delivery_strict_apps.unwrap_or_default()
+    };
+
+    // 归一化后的目标集合（小写、仅合法 app、去重）。
+    let mut target: Vec<String> = apps
+        .into_iter()
+        .map(|a| a.trim().to_lowercase())
+        .filter(|a| matches!(a.as_str(), "claude" | "codex" | "pi"))
+        .collect();
+    target.sort();
+    target.dedup();
+
+    let newly_strict: Vec<String> = target
+        .iter()
+        .filter(|a| !prev_strict.contains(a))
+        .cloned()
+        .collect();
+
+    if !newly_strict.is_empty() {
+        crate::services::provider::ProviderService::purge_env_delivery_for_apps(
+            state.inner(),
+            &newly_strict,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    crate::settings::set_env_delivery_strict_apps(target.clone()).map_err(|e| e.to_string())?;
+    crate::tray::refresh_tray_menu(&app);
+    Ok(target)
+}
+
+/// 2.2 方案 P1：生成"复制激活命令"一次性片段，把 `ccs` shim 接入用户自己的 shell。
+///
+/// 不改 PATH（开放点①）——用当前安装目录里的 `ccs.exe` 绝对路径拼出对应 shell 的
+/// 包装函数/用法，用户显式自愿接入。`shell` 取 powershell|cmd|bash。
+#[tauri::command]
+pub async fn get_shim_activation_snippet(shell: String) -> Result<String, String> {
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("CC Switch 安装目录"));
+    let shim = exe_dir.join("ccs.exe").to_string_lossy().to_string();
+    let snippet = match shell.trim().to_lowercase().as_str() {
+        "bash" => format!(
+            "# 加入 ~/.bashrc（Git Bash）\nccs-use() {{ eval \"$( '{shim}' env \"$1\" --shell bash)\"; }}\n"
+        ),
+        "cmd" => format!(
+            ":: cmd 无 eval 管道，best-effort 用法（可存为 .bat 或直接在 cmd 里执行）：\n\
+             for /f \"delims=\" %i in ('\"{shim}\" env claude --shell cmd') do @%i\n"
+        ),
+        _ => format!(
+            "# 加入 $PROFILE（PowerShell）\nfunction ccs-use($app) {{ & '{shim}' env $app --shell powershell | Invoke-Expression }}\n"
+        ),
+    };
+    Ok(snippet)
+}
+
 #[derive(serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CodexUnifyHistoryRestoreResult {

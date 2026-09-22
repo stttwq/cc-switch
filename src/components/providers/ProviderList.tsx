@@ -41,6 +41,7 @@ interface ProviderListProps {
   onDuplicate: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
   onOpenTerminal?: (provider: Provider) => void;
+  onRunCli?: (provider: Provider) => void;
   onCreate?: () => void;
   isLoading?: boolean;
 }
@@ -56,6 +57,7 @@ export function ProviderList({
   onDuplicate,
   onOpenWebsite,
   onOpenTerminal,
+  onRunCli,
   onCreate,
   isLoading = false,
 }: ProviderListProps) {
@@ -229,6 +231,7 @@ export function ProviderList({
                 onDuplicate={onDuplicate}
                 onOpenWebsite={onOpenWebsite}
                 onOpenTerminal={onOpenTerminal}
+                onRunCli={onRunCli}
                 isRemovalProtected={false}
                 isStateChangeProtected={
                   appId === "pi" && !isPiAuthoritativeStateReady
@@ -333,6 +336,7 @@ interface SortableProviderCardProps {
   onDuplicate: (provider: Provider) => void;
   onOpenWebsite: (url: string) => void;
   onOpenTerminal?: (provider: Provider) => void;
+  onRunCli?: (provider: Provider) => void;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
 }
@@ -349,6 +353,7 @@ function SortableProviderCard({
   onDuplicate,
   onOpenWebsite,
   onOpenTerminal,
+  onRunCli,
   isRemovalProtected,
   isStateChangeProtected,
 }: SortableProviderCardProps) {
@@ -380,6 +385,7 @@ function SortableProviderCard({
         onDuplicate={onDuplicate}
         onOpenWebsite={onOpenWebsite}
         onOpenTerminal={onOpenTerminal}
+        onRunCli={onRunCli}
         dragHandleProps={{
           attributes,
           listeners,

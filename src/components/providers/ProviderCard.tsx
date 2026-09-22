@@ -30,6 +30,7 @@ interface ProviderCardProps {
   onOpenWebsite: (url: string) => void;
   onDuplicate: (provider: Provider) => void;
   onOpenTerminal?: (provider: Provider) => void;
+  onRunCli?: (provider: Provider) => void;
   dragHandleProps?: DragHandleProps;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
@@ -100,12 +101,17 @@ export function ProviderCard({
   onOpenWebsite,
   onDuplicate,
   onOpenTerminal,
+  onRunCli,
   dragHandleProps,
   isRemovalProtected,
   isStateChangeProtected,
 }: ProviderCardProps) {
   const { t } = useTranslation();
-  const envStrictMode = useSettingsQuery().data?.envDeliveryStrictMode ?? false;
+  const settingsData = useSettingsQuery().data;
+  // P2 分级：徽章按该卡片所属 app 的有效严格性显示（全局，或该 app 在按应用列表里）。
+  const envStrictMode =
+    (settingsData?.envDeliveryStrictMode ?? false) ||
+    (settingsData?.envDeliveryStrictApps ?? []).includes(appId);
   const codexOfficialIdentity = resolveCodexOfficialIdentity(appId, provider);
   const manualNote = provider.notes?.trim() || undefined;
 
@@ -283,6 +289,7 @@ export function ProviderCard({
               onOpenTerminal={
                 onOpenTerminal ? () => onOpenTerminal(provider) : undefined
               }
+              onRunCli={onRunCli ? () => onRunCli(provider) : undefined}
               isRemovalProtected={isRemovalProtected}
               isStateChangeProtected={isStateChangeProtected}
             />

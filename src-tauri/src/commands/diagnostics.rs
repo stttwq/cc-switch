@@ -111,10 +111,16 @@ fn build_bundle(
     log_tail: Option<Vec<String>>,
     known_targets: usize,
 ) -> String {
-    let strict = if crate::settings::env_delivery_strict_mode_enabled() {
-        "已开启"
+    // P2 分级：诊断列出严格范围，不能只读裸 bool（仅按应用档会误报未开启）。
+    let strict = if crate::settings::is_global_strict_mode() {
+        "全局严格".to_string()
     } else {
-        "关闭"
+        let apps = crate::settings::strict_apps_for_display();
+        if apps.is_empty() {
+            "关闭".to_string()
+        } else {
+            format!("按应用严格: {}", apps.join(", "))
+        }
     };
     let markers = migration_markers();
     let crash_exists = get_app_config_dir().join("crash.log").exists();

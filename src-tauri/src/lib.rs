@@ -21,6 +21,8 @@ mod prompt;
 mod prompt_files;
 mod provider;
 pub mod secrets;
+/// 2.2 方案 P1：`ccs env <app>` 控制台 shim 的核心逻辑（供 `src/bin/ccs.rs` 调用）。
+pub mod cli;
 mod services;
 mod session_manager;
 mod settings;
@@ -38,7 +40,7 @@ pub use commands::*;
 pub use config::{get_claude_mcp_path, get_claude_settings_path, read_json_file};
 pub use database::{Database, Profile};
 // 环境变量投递的所有权登记与内存 sink：集成测试要据此断言 §5.3.3 的投递与撤销结果。
-pub use env_delivery::{InMemoryEnvSink, ManagedEnvVars};
+pub use env_delivery::{EnvSink, InMemoryEnvSink, ManagedEnvVars};
 pub use error::AppError;
 pub use mcp::{
     import_from_claude, import_from_codex, remove_server_from_claude, remove_server_from_codex,
@@ -1039,6 +1041,8 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::set_env_delivery_strict_mode,
+            commands::set_env_delivery_strict_apps,
+            commands::get_shim_activation_snippet,
             commands::get_diagnostics_bundle,
             commands::has_codex_unify_history_backup,
             commands::restore_codex_unified_history,
@@ -1169,6 +1173,7 @@ pub fn run() {
             commands::probe_tool_installations,
             // Provider terminal
             commands::open_provider_terminal,
+            commands::run_provider_cli,
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,

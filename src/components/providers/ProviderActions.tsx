@@ -24,6 +24,7 @@ interface ProviderActionsProps {
   onDelete: () => void;
   onRemoveFromConfig?: () => void;
   onOpenTerminal?: () => void;
+  onRunCli?: () => void;
   isRemovalProtected?: boolean;
   isStateChangeProtected?: boolean;
 }
@@ -50,6 +51,7 @@ export function ProviderActions({
   onDelete,
   onRemoveFromConfig,
   onOpenTerminal,
+  onRunCli,
   isRemovalProtected = false,
   isStateChangeProtected = false,
 }: ProviderActionsProps) {
@@ -208,6 +210,24 @@ export function ProviderActions({
             )}
           >
             <Terminal className="h-4 w-4" />
+          </Button>
+        )}
+
+        {onRunCli && (
+          <Button
+            size="icon"
+            variant="ghost"
+            onClick={onRunCli}
+            title={t("provider.runCli", {
+              cli: appId ?? "",
+              defaultValue: "运行 {{cli}}",
+            })}
+            className={cn(
+              iconButtonClass,
+              "hover:text-sky-600 dark:hover:text-sky-400",
+            )}
+          >
+            <Play className="h-4 w-4" />
           </Button>
         )}
 

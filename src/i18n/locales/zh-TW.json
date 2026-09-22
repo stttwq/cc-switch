@@ -140,6 +140,7 @@
     "duplicate": "複製",
     "sortUpdateFailed": "排序更新失敗",
     "openTerminal": "開啟終端機",
+    "runCli": "執行 {{cli}}",
     "terminalOpened": "終端機已開啟",
     "terminalOpenFailed": "開啟終端機失敗",
     "name": "供應商名稱",
@@ -707,12 +708,26 @@
     "unifyCodexHistoryRestoreSkippedToggleOn": "統一會話歷史開關已重新開啟，已跳過還原",
     "envDelivery": {
       "title": "環境變數投遞",
-      "description": "切換供應商時，目前供應商的密鑰會寫入使用者環境變數（HKCU\\Environment），供本機命令列工具讀取。",
+      "description": "嚴格模式：開啟後不把供應商密鑰寫入使用者環境變數（HKCU\\Environment），改由「開啟終端機」或命令列注入。非嚴格的應用仍照常寫入。",
       "strictMode": "嚴格投遞模式",
-      "strictModeHint": "開啟後不再把密鑰寫入使用者環境變數，只經 cc-switch「開啟終端機」注入。",
-      "strictModeActive": "已開啟：從別處啟動的 claude / codex / pi 將讀不到密鑰（會因缺少憑證而報錯），必須從 cc-switch 點「開啟終端機」啟動。關閉開關即恢復常規投遞。",
-      "enabledToast": "已開啟嚴格投遞模式，並從使用者環境變數收回已投遞的密鑰",
-      "disabledToast": "已關閉嚴格投遞模式，下次切換供應商時恢復常規投遞"
+      "strictModeHint": "開啟後不再把密鑰寫入使用者環境變數，只經 cc-switch「開啟終端機」或 ccs env 注入。",
+      "strictModeActive": "已開啟嚴格的應用從別處啟動的 claude / codex / pi 將讀不到密鑰（會因缺少憑證而報錯），須從 cc-switch「開啟終端機」啟動，或按下方「複製啟用命令」在自己的 shell 裡用 ccs env 啟用。",
+      "enabledToast": "已開啟全域嚴格投遞模式，並從使用者環境變數收回已投遞的密鑰",
+      "disabledToast": "已關閉嚴格投遞模式，下次切換供應商時恢復常規投遞",
+      "modeLabel": "嚴格投遞範圍",
+      "mode": {
+        "off": "關",
+        "perApp": "按應用",
+        "global": "全域"
+      },
+      "app": {
+        "claude": "Claude",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "copyCommand": "複製啟用命令",
+      "copyCommandHint": "把 ccs env 接入你自己的 shell（產生帶絕對路徑的一次性片段，不修改系統 PATH）。",
+      "copiedToast": "啟用命令已複製到剪貼簿"
     },
     "diagnostics": {
       "copy": "複製診斷資訊",

@@ -140,6 +140,7 @@
     "duplicate": "复制",
     "sortUpdateFailed": "排序更新失败",
     "openTerminal": "打开终端",
+    "runCli": "运行 {{cli}}",
     "terminalOpened": "终端已打开",
     "terminalOpenFailed": "打开终端失败",
     "name": "供应商名称",
@@ -707,12 +708,26 @@
     "unifyCodexHistoryRestoreSkippedToggleOn": "统一会话历史开关已重新开启，已跳过还原",
     "envDelivery": {
       "title": "环境变量投递",
-      "description": "切换供应商时，当前供应商的密钥会写入用户环境变量（HKCU\\Environment），供本机命令行工具读取。",
+      "description": "严格模式：切换供应商时不把密钥写入用户环境变量（HKCU\\Environment），改由「打开终端」或命令行注入。非严格的应用仍照常写入。",
       "strictMode": "严格投递模式",
-      "strictModeHint": "开启后不再把密钥写入用户环境变量，只经 cc-switch「打开终端」注入。",
-      "strictModeActive": "已开启：从别处启动的 claude / codex / pi 将读不到密钥（会因缺少凭据而报错），必须从 cc-switch 点「打开终端」启动。关闭开关即恢复常规投递。",
-      "enabledToast": "已开启严格投递模式，并从用户环境变量收回了已投递的密钥",
-      "disabledToast": "已关闭严格投递模式，下次切换供应商时恢复常规投递"
+      "strictModeHint": "开启后不再把密钥写入用户环境变量，只经 cc-switch「打开终端」或 ccs env 注入。",
+      "strictModeActive": "已开启严格的应用从别处启动的 claude / codex / pi 将读不到密钥（会因缺少凭据而报错），须从 cc-switch「打开终端」启动，或按下方「复制激活命令」在自己的 shell 里用 ccs env 激活。",
+      "enabledToast": "已开启全局严格投递模式，并从用户环境变量收回了已投递的密钥",
+      "disabledToast": "已关闭严格投递模式，下次切换供应商时恢复常规投递",
+      "modeLabel": "严格投递范围",
+      "mode": {
+        "off": "关",
+        "perApp": "按应用",
+        "global": "全局"
+      },
+      "app": {
+        "claude": "Claude",
+        "codex": "Codex",
+        "pi": "Pi"
+      },
+      "copyCommand": "复制激活命令",
+      "copyCommandHint": "把 ccs env 接入你自己的 shell（生成带绝对路径的一次性片段，不修改系统 PATH）。",
+      "copiedToast": "激活命令已复制到剪贴板"
     },
     "diagnostics": {
       "copy": "复制诊断信息",

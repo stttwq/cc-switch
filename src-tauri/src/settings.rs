@@ -456,6 +456,13 @@ pub struct AppSettings {
     #[serde(default)]
     pub env_delivery_strict_mode: bool,
 
+    /// 2.2 方案 P2：严格模式分级——"按应用"时列出的严格 app 集合（`["claude","codex","pi"]` 子集）。
+    /// 叠加字段，不删旧的 `env_delivery_strict_mode`，老 settings.json 缺该字段照常反序列化（默认 None）。
+    /// 不变量：`env_delivery_strict_mode == true`（全局）与 `strict_apps 非空` 不得同时成立，
+    /// 由 `normalize_strict_mode()` 在所有写路径强制。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub env_delivery_strict_apps: Option<Vec<String>>,
+
     // ===== 本机自动迁移状态 =====
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
@@ -518,6 +525,7 @@ impl Default for AppSettings {
             backup_retain_count: None,
             preferred_terminal: None,
             env_delivery_strict_mode: false,
+            env_delivery_strict_apps: None,
             local_migrations: None,
         }
     }
@@ -575,6 +583,50 @@ impl AppSettings {
                 self.s3_sync = None;
             }
         }
+
+        // 三态互斥归一化随路径归一化一起在**全路径必经点**执行。
+        self.normalize_strict_mode();
+    }
+
+    /// 强制严格模式两字段的不变量：`env_delivery_strict_mode == true`（全局）与
+    /// `env_delivery_strict_apps 非空` 不得同时成立。由 `normalize_paths()` 在所有读写
+    /// 路径（load/update/mutate/save）统一调用，杜绝脏状态与前端三态回显歧义。
+    fn normalize_strict_mode(&mut self) {
+        if self.env_delivery_strict_mode {
+            // 全局严格：清空"按应用"列表。
+            self.env_delivery_strict_apps = None;
+            return;
+        }
+        // 非全局：仅保留合法 app 名，去重排序；空则归 None。
+        let cleaned: Vec<String> = self
+            .env_delivery_strict_apps
+            .take()
+            .map(|apps| {
+                let mut set: Vec<String> = apps
+                    .into_iter()
+                    .map(|a| a.trim().to_lowercase())
+                    .filter(|a| matches!(a.as_str(), "claude" | "codex" | "pi"))
+                    .collect();
+                set.sort();
+                set.dedup();
+                set
+            })
+            .unwrap_or_default();
+        self.env_delivery_strict_apps = if cleaned.is_empty() {
+            None
+        } else {
+            Some(cleaned)
+        };
+    }
+
+    /// 某 app 是否严格（纯函数，便于单测）。全局开→全严格；否则查按应用列表。
+    fn is_strict_for(&self, app: &AppType) -> bool {
+        if self.env_delivery_strict_mode {
+            return true;
+        }
+        self.env_delivery_strict_apps
+            .as_deref()
+            .is_some_and(|apps| apps.iter().any(|a| a == app.as_str()))
     }
 
     fn load_from_file() -> Self {
@@ -714,14 +766,50 @@ where
     Ok(())
 }
 
-/// B5 严格投递模式是否开启（切换投递与 live 写入侧据此决定是否落 `HKCU\Environment`）。
+/// 严格投递模式是否**以任何形态**开启（全局，或存在至少一个按应用严格）。
+/// 供诊断包/托盘判断"当前是否存在严格语义"，不可再直接读裸 bool。
 pub fn env_delivery_strict_mode_enabled() -> bool {
+    let s = get_settings();
+    s.env_delivery_strict_mode || s.env_delivery_strict_apps.is_some_and(|a| !a.is_empty())
+}
+
+/// 2.2 方案 P2：某 app 的有效严格性。全局开→所有 app 严格（兼容老语义）；
+/// 否则看该 app 是否在"按应用"列表里。投递/预检/清理按此逐 app 决策。
+pub fn strict_for(app: &AppType) -> bool {
+    get_settings().is_strict_for(app)
+}
+
+/// 当前"按应用"严格列表（已归一化）；全局严格时返回全部 app（供诊断展示）。
+pub fn strict_apps_for_display() -> Vec<String> {
+    let s = get_settings();
+    if s.env_delivery_strict_mode {
+        return ["claude", "codex", "pi"].into_iter().map(String::from).collect();
+    }
+    s.env_delivery_strict_apps.unwrap_or_default()
+}
+
+/// 是否处于"全局严格"档（区别于"按应用"）。
+pub fn is_global_strict_mode() -> bool {
     get_settings().env_delivery_strict_mode
 }
 
-/// 置严格投递模式开关。即时生效由命令层负责（开启时同步清理已投递的密钥）。
+/// 置严格投递模式总开关。true=全局严格；false=完全关闭（同时清空"按应用"列表，
+/// 避免残留导致回显歧义）。与按应用列表的互斥由归一化在写路径强制。
 pub fn set_env_delivery_strict_mode(enabled: bool) -> Result<(), AppError> {
-    mutate_settings(|settings| settings.env_delivery_strict_mode = enabled)
+    mutate_settings(|settings| {
+        settings.env_delivery_strict_mode = enabled;
+        if !enabled {
+            settings.env_delivery_strict_apps = None;
+        }
+    })
+}
+
+/// 置"按应用"严格集合（P2 分级）。写该列表时强制全局 bool=false，由归一化维持互斥。
+pub fn set_env_delivery_strict_apps(apps: Vec<String>) -> Result<(), AppError> {
+    mutate_settings(|settings| {
+        settings.env_delivery_strict_mode = false;
+        settings.env_delivery_strict_apps = Some(apps);
+    })
 }
 
 pub fn is_codex_third_party_history_provider_bucket_migrated() -> bool {
@@ -1100,5 +1188,76 @@ mod tests {
             resolve_override_path(r"~\pi\agent"),
             home.join("pi").join("agent")
         );
+    }
+
+    // ===== P2 严格模式分级：归一化不变量与逐 app 判定 =====
+
+    #[test]
+    fn normalize_global_strict_clears_app_list() {
+        let mut s = AppSettings {
+            env_delivery_strict_mode: true,
+            env_delivery_strict_apps: Some(vec!["claude".into()]),
+            ..AppSettings::default()
+        };
+        s.normalize_strict_mode();
+        assert!(
+            s.env_delivery_strict_apps.is_none(),
+            "全局严格须清空按应用列表"
+        );
+    }
+
+    #[test]
+    fn normalize_per_app_dedupes_lowercases_and_drops_invalid() {
+        let mut s = AppSettings {
+            env_delivery_strict_mode: false,
+            env_delivery_strict_apps: Some(vec![
+                " Claude ".into(),
+                "claude".into(),
+                "gemini".into(),
+                "codex".into(),
+            ]),
+            ..AppSettings::default()
+        };
+        s.normalize_strict_mode();
+        assert_eq!(
+            s.env_delivery_strict_apps,
+            Some(vec!["claude".to_string(), "codex".to_string()]),
+            "去空格/小写/去重/剔除非法 app 名"
+        );
+    }
+
+    #[test]
+    fn normalize_empty_per_app_becomes_none() {
+        let mut s = AppSettings {
+            env_delivery_strict_mode: false,
+            env_delivery_strict_apps: Some(vec![]),
+            ..AppSettings::default()
+        };
+        s.normalize_strict_mode();
+        assert_eq!(s.env_delivery_strict_apps, None, "空列表归 None（关档）");
+    }
+
+    #[test]
+    fn is_strict_for_global_true_covers_every_app() {
+        let s = AppSettings {
+            env_delivery_strict_mode: true,
+            env_delivery_strict_apps: None,
+            ..AppSettings::default()
+        };
+        for app in AppType::all() {
+            assert!(s.is_strict_for(&app), "全局严格：{app:?} 应严格");
+        }
+    }
+
+    #[test]
+    fn is_strict_for_per_app_only_hits_selected() {
+        let s = AppSettings {
+            env_delivery_strict_mode: false,
+            env_delivery_strict_apps: Some(vec!["claude".into()]),
+            ..AppSettings::default()
+        };
+        assert!(s.is_strict_for(&AppType::Claude));
+        assert!(!s.is_strict_for(&AppType::Codex));
+        assert!(!s.is_strict_for(&AppType::Pi));
     }
 }

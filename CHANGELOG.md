@@ -5,6 +5,24 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.0] - Unreleased
+
+Strict-mode ergonomics: activate credentials in your own shell, a tiered strict-delivery switch, and a fixed "Open Terminal" that lands Codex/Pi in a real shell.
+
+### Added
+
+- **`ccs env <app>` shell shim (P1).** A new console sub-binary (`ccs.exe`, built from a dedicated `[[bin]]`, no tauri/single-instance) lets you activate the current provider's credentials inside *your own* PowerShell / cmd / Git Bash: `ccs env claude | iex`, `eval "$(ccs env claude --shell bash)"`. Keys go only into that shell process (same security boundary as the terminal injection — never `HKCU\Environment`, never a file). `--clear` emits only unsets and synchronously deregisters from `managed_env_vars` so re-activation isn't falsely blocked. Credentials reuse `provider_env_pairs`; the shim refuses to migrate a schema that is newer/older than itself and resolves the custom config-dir override from `app_paths.json`. A "Copy activation command" button in Settings emits a one-time absolute-path snippet (does not touch PATH). Stable exit codes: 0 ok, 2 usage, 3 missing key, 4 DB version, 5 store/config unavailable.
+- **Tiered strict-delivery mode (P2).** The global bool becomes three states — Off / Per app / Global — via an additive `env_delivery_strict_apps` list (old `env_delivery_strict_mode` still honored). Delivery/preflight now decide per app (`strict_for`), enabling a mode only reclaims the variables of apps that just turned strict, and the tray hint / diagnostics / provider-card badge now aggregate instead of reading the raw bool. The mutual-exclusion invariant is enforced at the single always-on save path.
+- **"Run X" entry + real interactive shell (P3).** The CLI name is now chosen by app (shared `cli_command_for`), so Codex/Pi launch the correct CLI. "Open Terminal" lands an environment-loaded interactive shell without auto-running a CLI; a new "Run X" action starts the app's CLI directly. The terminal button is no longer Claude-only.
+
+### Changed
+
+- Codex/Pi provider cards now show the "Open Terminal" / "Run X" actions (previously only Claude).
+
+### Notes
+
+- Shipping `ccs.exe` inside the MSI is a packaging step that must be verified against a real per-user installer build (see the plan's open point ①).
+
 ## [2.1.0] - 2026-09-21
 
 End-to-end encrypted cloud sync, a strict credential-delivery mode, one-click diagnostics, and a large Windows-only repo/security hardening pass (on-demand key reveal, IPC input tightening).

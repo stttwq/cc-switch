@@ -327,7 +327,8 @@ fn parse_session(path: &Path) -> Result<SessionMeta, String> {
         last_active_at: summary.last_active_at.or(header.timestamp),
         source_path: Some(source_path.clone()),
         resume_command: Some(format!(
-            "pi --session {}",
+            "{} --session {}",
+            crate::commands::cli_command_for(&crate::app_config::AppType::Pi),
             crate::session_manager::shell_escape(&source_path)
         )),
     })

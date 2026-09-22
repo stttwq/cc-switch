@@ -49,6 +49,7 @@
 - API Key 与 Base URL 只存放在 **Windows 凭据管理器**，不再写入 SQLite 明文
 - 密钥**不参与**导出、同步与备份：在另一台机器还原配置后，每个供应商都会标记「需要密钥」，必须重新输入才能切换（这是设计，不是缺陷）
 - 通过**用户环境变量**（`HKCU\Environment`）投递给 CLI；切换供应商后请重开终端
+- **严格投递模式（可分级）**：可对指定应用或全局选择不写环境变量，密钥只经「打开终端」注入，或在自己的 shell 里用 `ccs env <app>` 激活（明文始终不落注册表）
 - live 配置文件不再含密钥值（Codex/Pi 因 CLI 限制仍会写入当前激活供应商的 Base URL）
 
 ### MCP、Prompts 与 Skills
@@ -78,7 +79,7 @@ CC Switch 支持三个工具：**Claude Code**、**Codex** 和 **Pi**。每个�
 <details>
 <summary><strong>切换供应商后需要重启终端吗？</strong></summary>
 
-需要——CC Switch 通过用户环境变量投递凭据，切换供应商后请重开终端（或重启 CLI 工具）才能生效。从 CC Switch 内置的"打开终端"启动的进程会立即拿到当前值。
+需要——CC Switch 通过用户环境变量投递凭据，切换供应商后请重开终端（或重启 CLI 工具）才能生效。从 CC Switch 内置的"打开终端"启动的进程会立即拿到当前值（Claude / Codex / Pi 均支持）。若开启了严格投递模式（不写环境变量），可在自己的 shell 里用 `ccs env <app> | iex`（PowerShell）或 `eval "$(ccs env <app> --shell bash)"` 激活当前供应商凭据。
 
 </details>
 

@@ -60,6 +60,22 @@ export const settingsApi = {
     return await invoke("set_env_delivery_strict_mode", { enabled });
   },
 
+  /**
+   * P2 分级：设置"按应用"严格集合（三态里的"按应用"档）。后端只收回新转为严格的
+   * app 的已投递变量。返回归一化后实际生效的 app 列表。
+   */
+  async setEnvDeliveryStrictApps(apps: string[]): Promise<string[]> {
+    return await invoke("set_env_delivery_strict_apps", { apps });
+  },
+
+  /**
+   * P1：生成把 `ccs env` shim 接入用户 shell 的一次性片段（绝对路径，不改 PATH）。
+   * shell: "powershell" | "cmd" | "bash"。
+   */
+  async getShimActivationSnippet(shell: string): Promise<string> {
+    return await invoke("get_shim_activation_snippet", { shell });
+  },
+
   /** 是否存在统一 Codex 会话历史的迁移备份（关闭弹窗据此显示"恢复备份"勾选） */
   async hasCodexUnifyHistoryBackup(): Promise<boolean> {
     return await invoke("has_codex_unify_history_backup");

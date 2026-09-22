@@ -1,12 +1,15 @@
 [package]
 name = "cc-switch"
-version = "2.1.0"
+version = "2.2.0"
 description = "The All-in-One Manager for Claude Code, Codex & Pi"
 authors = ["Jason Young"]
 license = "MIT"
 repository = "https://github.com/stttwq/cc-switch"
 edition = "2021"
 rust-version = "1.85.0"
+# 现含两个 bin（GUI 主程序 `cc-switch` + P1 控制台 shim `ccs`）；显式指定默认运行主程序，
+# 否则 `cargo run` / `tauri dev` 会因"无法确定要跑哪个 bin"报错。
+default-run = "cc-switch"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -14,6 +17,13 @@ rust-version = "1.85.0"
 name = "cc_switch_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 doctest = false
+
+# 2.2 方案 P1：控制台 shim 子二进制 `ccs env <app>`。
+# 独立于 GUI 主程序（无 windows_subsystem、有 stdout、不受 single-instance 影响），
+# 仅解析 args + 调 cc_switch_lib::cli + 按退出码 exit。
+[[bin]]
+name = "ccs"
+path = "src/bin/ccs.rs"
 
 [features]
 default = []
@@ -72,6 +82,7 @@ winreg = "0.52"
 windows-sys = { version = "0.61", features = [
     "Win32_Globalization",
     "Win32_Storage_FileSystem",
+    "Win32_System_Console",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }
