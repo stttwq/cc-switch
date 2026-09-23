@@ -1,6 +1,6 @@
 {
   "name": "cc-switch",
-  "version": "2.2.0",
+  "version": "2.2.1",
   "description": "The All-in-One Manager for Claude Code, Codex & Pi",
   "type": "module",
   "scripts": {

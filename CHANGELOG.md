@@ -5,6 +5,12 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.1] - Unreleased
+
+### Added
+
+- **Custom terminal for "Open Terminal" (Windows).** The preferred-terminal dropdown gains a "Custom terminal" option backed by two new settings — an executable path and an argument template. The template's `{bat}` placeholder expands to the launcher batch script; quoting is honored when splitting (`-e cmd /K "{bat}"` passes four arguments, which Pebrel/WezTerm/Alacritty-style variadic `-e` requires). Leaving the template empty defaults to `-e cmd /K "{bat}"`. Launch failure falls back to cmd, and credentials still enter the child process only via the environment.
+
 ## [2.2.0] - Unreleased
 
 Strict-mode ergonomics: activate credentials in your own shell, a tiered strict-delivery switch, and a fixed "Open Terminal" that lands Codex/Pi in a real shell.
