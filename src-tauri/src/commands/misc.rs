@@ -3140,6 +3140,7 @@ fn launch_windows_terminal(
             "Windows Terminal",
             env_vars,
         ),
+        "custom" => run_windows_custom_terminal(&bat_path, env_vars),
         _ => run_windows_start_command(&["cmd", "/K", &bat_path], "cmd", env_vars), // "cmd" or default
     };
 
@@ -3197,6 +3198,65 @@ fn escape_windows_batch_value(value: &str) -> String {
         .replace('(', "^(")
         .replace(')', "^)")
 }
+/// 拆分自定义终端参数模板：空白分隔，双引号内视为整体（引号本身去除）。
+/// 例：`-e "cmd /K {bat}"` → `["-e", "cmd /K <bat路径>"]`。
+#[cfg(target_os = "windows")]
+fn split_custom_terminal_args(line: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur = String::new();
+    let mut in_quotes = false;
+    let mut has_token = false;
+    for ch in line.chars() {
+        match ch {
+            '"' => {
+                in_quotes = !in_quotes;
+                has_token = true;
+            }
+            c if c.is_whitespace() && !in_quotes => {
+                if has_token || !cur.is_empty() {
+                    out.push(std::mem::take(&mut cur));
+                    has_token = false;
+                }
+            }
+            c => {
+                cur.push(c);
+                has_token = true;
+            }
+        }
+    }
+    if has_token || !cur.is_empty() {
+        out.push(cur);
+    }
+    out
+}
+
+/// Windows: 按用户自定义路径 + 参数模板启动终端。
+/// `args_template` 中的 `{bat}` 占位符会被替换为批处理路径；其余参数按空白切分、双引号分组。
+/// 留空时按常见终端惯例默认 `-e cmd /K "{bat}"`（Pebrel/WezTerm/Alacritty 的 `-e` 为可变
+/// 参数，必须把 cmd、/K、bat 逐参传入；合成单串会被整体当成可执行文件名，报 os error 2）。
+/// 凭据只进本进程环境，子进程（终端及其中 shell）继承，不写任何文件。
+#[cfg(target_os = "windows")]
+fn run_windows_custom_terminal(
+    bat_path: &str,
+    env_vars: &[(String, String)],
+) -> Result<(), String> {
+    use std::process::Command;
+
+    let (exe_path, args_template) = crate::settings::get_custom_terminal_config()
+        .ok_or_else(|| "自定义终端未配置可执行路径".to_string())?;
+    let args_line = args_template.replace("{bat}", bat_path);
+    let args = split_custom_terminal_args(&args_line);
+
+    let mut cmd = Command::new(&exe_path);
+    cmd.args(&args).creation_flags(CREATE_NO_WINDOW);
+    for (key, value) in env_vars {
+        cmd.env(key, value);
+    }
+    cmd.spawn()
+        .map_err(|e| format!("启动自定义终端 {exe_path} 失败: {e}"))?;
+    Ok(())
+}
+
 /// Windows: Run a start command with common error handling
 #[cfg(target_os = "windows")]
 fn run_windows_start_command(
@@ -3257,6 +3317,19 @@ mod tests {
         assert_eq!(cli_command_for(&AppType::Claude), "claude");
         assert_eq!(cli_command_for(&AppType::Codex), "codex");
         assert_eq!(cli_command_for(&AppType::Pi), "pi");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn split_custom_terminal_args_handles_quotes_and_bat_substitution() {
+        // 默认模板展开后必须是逐参形式：pebrel -e 不拆单串内的空格。
+        let line = "-e cmd /K \"C:\\temp\\cc_switch_term_1.bat\"";
+        assert_eq!(
+            split_custom_terminal_args(line),
+            vec!["-e", "cmd", "/K", "C:\\temp\\cc_switch_term_1.bat"]
+        );
+        assert_eq!(split_custom_terminal_args(""), Vec::<String>::new());
+        assert_eq!(split_custom_terminal_args("-e foo"), vec!["-e", "foo"]);
     }
 
     #[test]

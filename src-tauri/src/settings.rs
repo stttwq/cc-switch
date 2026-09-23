@@ -448,6 +448,13 @@ pub struct AppSettings {
     /// - Windows: "cmd" | "powershell" | "wt" (Windows Terminal)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub preferred_terminal: Option<String>,
+    /// 自定义终端可执行文件路径（preferred_terminal == "custom" 时生效）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_terminal_custom_path: Option<String>,
+    /// 自定义终端启动参数模板，`{bat}` 占位符会被替换为启动批处理路径。
+    /// 为空时默认 `-e cmd /K "{bat}"`（Pebrel/WezTerm/Alacritty 的 `-e` 均为可变参数，需逐参传递）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_terminal_custom_args: Option<String>,
 
     // ===== 环境变量投递（B5 严格模式，方案 2.4.7）=====
     /// 严格投递模式：开启后切换供应商不再把密钥写入 `HKCU\Environment`，只更新 live 文件；
@@ -524,6 +531,8 @@ impl Default for AppSettings {
             backup_interval_hours: None,
             backup_retain_count: None,
             preferred_terminal: None,
+            preferred_terminal_custom_path: None,
+            preferred_terminal_custom_args: None,
             env_delivery_strict_mode: false,
             env_delivery_strict_apps: None,
             local_migrations: None,
@@ -1085,6 +1094,30 @@ pub fn get_preferred_terminal() -> Option<String> {
         })
         .preferred_terminal
         .clone()
+}
+
+/// 获取自定义终端配置：(可执行路径, 参数模板)。
+/// 仅当 preferred_terminal == "custom" 且路径非空时返回。
+#[cfg(target_os = "windows")]
+pub fn get_custom_terminal_config() -> Option<(String, String)> {
+    let settings = settings_store().read().unwrap_or_else(|e| {
+        log::warn!("设置锁已毒化，使用恢复值: {e}");
+        e.into_inner()
+    });
+    if settings.preferred_terminal.as_deref() != Some("custom") {
+        return None;
+    }
+    let path = settings.preferred_terminal_custom_path.clone()?;
+    let path = path.trim().to_string();
+    if path.is_empty() {
+        return None;
+    }
+    let args = settings
+        .preferred_terminal_custom_args
+        .clone()
+        .filter(|a| !a.trim().is_empty())
+        .unwrap_or_else(|| "-e cmd /K \"{bat}\"".to_string());
+    Some((path, args))
 }
 
 // ===== WebDAV 同步设置管理函数 =====

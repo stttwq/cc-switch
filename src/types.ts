@@ -256,9 +256,13 @@ export interface Settings {
   // ===== 终端设置 =====
   // 首选终端应用（可选，默认使用系统默认终端）
   // macOS: "terminal" | "iterm2" | "warp" | "alacritty" | "kitty" | "ghostty" | "otty" | "wezterm" | "kaku"
-  // Windows: "cmd" | "powershell" | "wt"
+  // Windows: "cmd" | "powershell" | "wt" | "custom"
   // Linux: "gnome-terminal" | "konsole" | "xfce4-terminal" | "alacritty" | "kitty" | "ghostty"
   preferredTerminal?: string;
+  // 自定义终端可执行路径（preferredTerminal === "custom" 时生效，仅 Windows）
+  preferredTerminalCustomPath?: string;
+  // 自定义终端参数模板，{bat} 会被替换为启动批处理路径；默认 "{bat}"
+  preferredTerminalCustomArgs?: string;
 
   // ===== 环境变量投递（B5 严格模式）=====
   // 开启后切换供应商不把密钥写入 HKCU\Environment，密钥仅经 cc-switch「打开终端」注入。

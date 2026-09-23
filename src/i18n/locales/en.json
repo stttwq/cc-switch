@@ -602,7 +602,8 @@
         "windows": {
           "cmd": "Command Prompt",
           "powershell": "PowerShell",
-          "wt": "Windows Terminal"
+          "wt": "Windows Terminal",
+          "custom": "Custom terminal"
         },
         "linux": {
           "gnomeTerminal": "GNOME Terminal",
@@ -612,7 +613,11 @@
           "kitty": "Kitty",
           "ghostty": "Ghostty"
         }
-      }
+      },
+      "customPathLabel": "Executable path",
+      "customPathPlaceholder": "e.g. C:\\Program Files\\Alacritty\\alacritty.exe",
+      "customArgsLabel": "Argument template",
+      "customArgsHint": "{bat} is replaced with the launcher script path; empty defaults to -e cmd /K \"{bat}\" (works for Pebrel/WezTerm/Alacritty)"
     },
     "configDirectoryOverride": "Configuration Directory Override (Advanced)",
     "configDirectoryDescription": "When using Claude Code or Codex in environments like WSL, you can manually specify the configuration directory to the one in WSL to keep provider data consistent with the main environment.",

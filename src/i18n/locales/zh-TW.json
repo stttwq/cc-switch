@@ -602,7 +602,8 @@
         "windows": {
           "cmd": "命令提示字元",
           "powershell": "PowerShell",
-          "wt": "Windows Terminal"
+          "wt": "Windows Terminal",
+          "custom": "自訂終端機"
         },
         "linux": {
           "gnomeTerminal": "GNOME Terminal",
@@ -612,7 +613,11 @@
           "kitty": "Kitty",
           "ghostty": "Ghostty"
         }
-      }
+      },
+      "customPathLabel": "執行檔路徑",
+      "customPathPlaceholder": "例如 C:\\Program Files\\Alacritty\\alacritty.exe",
+      "customArgsLabel": "啟動參數範本",
+      "customArgsHint": "{bat} 會被替換為啟動腳本路徑；留空預設為 -e cmd /K \"{bat}\"（適用於 Pebrel/WezTerm/Alacritty）"
     },
     "configDirectoryOverride": "設定目錄覆寫（進階）",
     "configDirectoryDescription": "在 WSL 等環境使用 Claude Code 或 Codex 的時候，可手動指定為 WSL 裡的設定目錄，供應商資料與主環境保持一致。",

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Select,
@@ -6,6 +7,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Input } from "@/components/ui/input";
 import { isMac, isWindows, isLinux } from "@/lib/platform";
 
 // Terminal options per platform
@@ -28,6 +30,7 @@ const WINDOWS_TERMINALS = [
     labelKey: "settings.terminal.options.windows.powershell",
   },
   { value: "wt", labelKey: "settings.terminal.options.windows.wt" },
+  { value: "custom", labelKey: "settings.terminal.options.windows.custom" },
 ] as const;
 
 const LINUX_TERMINALS = [
@@ -76,16 +79,33 @@ function getDefaultTerminal(): string {
 
 export interface TerminalSettingsProps {
   value?: string;
+  customPath?: string;
+  customArgs?: string;
   onChange: (value: string) => void;
+  onCustomChange: (updates: {
+    preferredTerminalCustomPath?: string;
+    preferredTerminalCustomArgs?: string;
+  }) => void;
 }
 
-export function TerminalSettings({ value, onChange }: TerminalSettingsProps) {
+export function TerminalSettings({
+  value,
+  customPath,
+  customArgs,
+  onChange,
+  onCustomChange,
+}: TerminalSettingsProps) {
   const { t } = useTranslation();
   const terminals = getTerminalOptions();
   const defaultTerminal = getDefaultTerminal();
 
   // Use value or default
   const currentValue = value || defaultTerminal;
+  const isCustom = currentValue === "custom";
+
+  // 输入框本地态：onBlur 才落盘，避免每个按键都触发一次设置保存。
+  const [pathDraft, setPathDraft] = useState(customPath ?? "");
+  const [argsDraft, setArgsDraft] = useState(customArgs ?? "");
 
   return (
     <section className="space-y-2">
@@ -107,6 +127,41 @@ export function TerminalSettings({ value, onChange }: TerminalSettingsProps) {
           ))}
         </SelectContent>
       </Select>
+      {isCustom && (
+        <div className="space-y-2 pt-1">
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              {t("settings.terminal.customPathLabel")}
+            </label>
+            <Input
+              className="w-[360px]"
+              placeholder={t("settings.terminal.customPathPlaceholder")}
+              value={pathDraft}
+              onChange={(e) => setPathDraft(e.target.value)}
+              onBlur={() =>
+                onCustomChange({ preferredTerminalCustomPath: pathDraft })
+              }
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs text-muted-foreground">
+              {t("settings.terminal.customArgsLabel")}
+            </label>
+            <Input
+              className="w-[360px]"
+              placeholder='-e cmd /K "{bat}"'
+              value={argsDraft}
+              onChange={(e) => setArgsDraft(e.target.value)}
+              onBlur={() =>
+                onCustomChange({ preferredTerminalCustomArgs: argsDraft })
+              }
+            />
+            <p className="text-xs text-muted-foreground">
+              {t("settings.terminal.customArgsHint")}
+            </p>
+          </div>
+        </div>
+      )}
       <p className="text-xs text-muted-foreground">
         {t("settings.terminal.fallbackHint")}
       </p>

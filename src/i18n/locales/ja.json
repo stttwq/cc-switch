@@ -602,7 +602,8 @@
         "windows": {
           "cmd": "コマンドプロンプト",
           "powershell": "PowerShell",
-          "wt": "Windows Terminal"
+          "wt": "Windows Terminal",
+          "custom": "カスタムターミナル"
         },
         "linux": {
           "gnomeTerminal": "GNOME Terminal",
@@ -612,7 +613,11 @@
           "kitty": "Kitty",
           "ghostty": "Ghostty"
         }
-      }
+      },
+      "customPathLabel": "実行ファイルのパス",
+      "customPathPlaceholder": "例: C:\\Program Files\\Alacritty\\alacritty.exe",
+      "customArgsLabel": "引数テンプレート",
+      "customArgsHint": "{bat} は起動スクリプトのパスに置き換えられます。空の場合は -e cmd /K \"{bat}\"（Pebrel/WezTerm/Alacritty 向け）"
     },
     "configDirectoryOverride": "設定ディレクトリの上書き（詳細）",
     "configDirectoryDescription": "WSL などで Claude Code や Codex を使う場合、ここで設定ディレクトリを WSL 側に合わせるとデータを揃えられます。",
