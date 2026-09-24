@@ -5,6 +5,12 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.2] - 2026-09-24
+
+### Added
+
+- **Explorer right-click "Open terminal here" (Windows).** An opt-in Settings toggle registers a cascading folder context menu (Claude / Codex / Pi) under the current user's registry — no admin required. Clicking an entry runs that CLI in the clicked folder with the current provider's credentials injected (same boundary as "Open Terminal": env-only, never `HKCU\Environment` or a file), skipping the open-main-window-then-pick-folder flow. A dedicated windowless launcher binary (`ccs-open.exe`, built with `windows_subsystem = "windows"`) avoids the console-window flash, and the entries run the CLI directly instead of just opening a shell. The MSI removes the menu keys on a true uninstall (not on version upgrades) via a conditioned custom action.
+
 ## [2.2.1] - Unreleased
 
 ### Added

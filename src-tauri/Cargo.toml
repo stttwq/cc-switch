@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "2.2.1"
+version = "2.2.2"
 description = "The All-in-One Manager for Claude Code, Codex & Pi"
 authors = ["Jason Young"]
 license = "MIT"
@@ -24,6 +24,12 @@ doctest = false
 [[bin]]
 name = "ccs"
 path = "src/bin/ccs.rs"
+
+# 资源管理器右键菜单专用启动器。windows_subsystem="windows"（无控制台），
+# 避免从资源管理器启动时闪现控制台窗口；只调 cc_switch_lib::cli::run_open_command。
+[[bin]]
+name = "ccs-open"
+path = "src/bin/ccs_open.rs"
 
 [features]
 default = []
