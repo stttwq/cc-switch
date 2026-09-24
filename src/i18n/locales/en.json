@@ -734,6 +734,16 @@
       "copyCommandHint": "Wire ccs env into your own shell (generates a one-time snippet with an absolute path; does not modify the system PATH).",
       "copiedToast": "Activation command copied to clipboard"
     },
+    "shellMenu": {
+      "title": "Explorer right-click menu",
+      "description": "Add an 'Open terminal here' cascading menu (Claude / Codex / Pi) to the folder right-click menu; clicking runs the matching CLI in that folder with the current provider — no need to open the main window and pick a folder first. Writes to the current user's registry only; no admin required.",
+      "menuRoot": "Open terminal here",
+      "menuClaude": "Claude",
+      "menuCodex": "Codex",
+      "menuPi": "Pi",
+      "enabledToast": "Added to the Explorer right-click menu",
+      "disabledToast": "Removed from the Explorer right-click menu"
+    },
     "diagnostics": {
       "copy": "Copy diagnostics",
       "copied": "Diagnostics copied to clipboard",

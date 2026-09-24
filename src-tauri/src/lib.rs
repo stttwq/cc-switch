@@ -1174,6 +1174,10 @@ pub fn run() {
             // Provider terminal
             commands::open_provider_terminal,
             commands::run_provider_cli,
+            // 资源管理器右键菜单
+            commands::register_shell_menu,
+            commands::unregister_shell_menu,
+            commands::is_shell_menu_registered,
             // Global upstream proxy
             commands::get_global_proxy_url,
             commands::set_global_proxy_url,

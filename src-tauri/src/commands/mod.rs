@@ -15,6 +15,7 @@ mod prompt;
 mod provider;
 mod session_manager;
 mod settings;
+mod shell_menu;
 pub mod skill;
 mod sync_support;
 
@@ -38,6 +39,7 @@ pub use prompt::*;
 pub use provider::*;
 pub use session_manager::*;
 pub use settings::*;
+pub use shell_menu::*;
 pub use skill::*;
 
 pub use lightweight::*;

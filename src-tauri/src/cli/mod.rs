@@ -132,6 +132,46 @@ pub fn run_env_command(
     env_command_core(&state, app, provider_id, shell, clear)
 }
 
+/// `ccs open <app> [--cwd <dir>]`：用当前激活的供应商，在 `cwd`（缺省=当前目录）
+/// 直接跑该 app 对应的 CLI（claude/codex/pi）。资源管理器右键层叠菜单的落点，
+/// 由无控制台的 `ccs-open.exe` 调用（避免闪窗）。
+///
+/// 安全边界与 GUI「运行 X」完全一致：密钥只经 `Command::env` 进目标 shell 进程，
+/// 绝不落 `HKCU\Environment` 或任何文件。此处不新写取值/选取逻辑，全部复用现成内核。
+/// Pi 无「当前供应商」概念，用 Pi 原生 `defaultProvider` 兜底。
+pub fn run_open_command(app: &str, cwd: Option<String>) -> Result<(), AppError> {
+    let state = build_state()?;
+    let app_type = AppType::from_str(app)?;
+
+    let provider_id: Option<String> = if app_type == AppType::Pi {
+        Some(
+            crate::services::pi_state::PiStateService::current(&state)?
+                .default_provider_id
+                .ok_or_else(|| {
+                    AppError::localized(
+                        "ccs_no_current",
+                        "Pi 尚未设置默认供应商，无法从右键菜单打开",
+                        "Pi has no default provider set; cannot open from context menu",
+                    )
+                })?,
+        )
+    } else {
+        None
+    };
+
+    let provider = resolve_provider(&state, &app_type, provider_id.as_deref())?;
+
+    crate::commands::launch_provider_terminal(
+        &state,
+        app.to_string(),
+        provider.id.clone(),
+        cwd,
+        true, // 默认直接跑 CLI，省一步手动输入
+    )
+    .map_err(|msg| AppError::localized("ccs_open_failed", msg.clone(), msg))?;
+    Ok(())
+}
+
 /// 构建无 tauri 的 `AppState`。shim 每次启动都要重新解析 `app_paths.json`
 /// 并注入 override，且必须发生在任何 DB 打开/路径读取之前（多进程不共享缓存）。
 fn build_state() -> Result<AppState, AppError> {
@@ -436,6 +476,14 @@ pub fn classify_exit(err: &AppError) -> i32 {
 pub fn error_message_en(err: &AppError) -> String {
     match err {
         AppError::Localized { en, .. } => en.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// 取 [`AppError`] 的中文文案（无控制台启动器 `ccs-open` 弹框提示用）。
+pub fn error_message_zh(err: &AppError) -> String {
+    match err {
+        AppError::Localized { zh, .. } => zh.clone(),
         other => other.to_string(),
     }
 }

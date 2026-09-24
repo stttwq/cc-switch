@@ -734,6 +734,16 @@
       "copyCommandHint": "把 ccs env 接入你自己的 shell（產生帶絕對路徑的一次性片段，不修改系統 PATH）。",
       "copiedToast": "啟用命令已複製到剪貼簿"
     },
+    "shellMenu": {
+      "title": "檔案管理員右鍵選單",
+      "description": "在資料夾右鍵選單加「在此開啟終端機」層疊選單（Claude / Codex / Pi），點擊即用目前供應商在該目錄直接執行對應 CLI，免去先開主畫面再選目錄。僅寫目前使用者註冊表，無需管理員權限。",
+      "menuRoot": "在此開啟終端機",
+      "menuClaude": "Claude",
+      "menuCodex": "Codex",
+      "menuPi": "Pi",
+      "enabledToast": "已新增到檔案管理員右鍵選單",
+      "disabledToast": "已從檔案管理員右鍵選單移除"
+    },
     "diagnostics": {
       "copy": "複製診斷資訊",
       "copied": "診斷資訊已複製到剪貼簿",

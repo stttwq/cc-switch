@@ -2914,7 +2914,7 @@ pub fn open_provider_terminal(
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
 ) -> Result<bool, String> {
-    launch_provider_terminal(state, app, providerId, cwd, false)
+    launch_provider_terminal(state.inner(), app, providerId, cwd, false)
 }
 
 /// 「运行 X」：设好凭据后，按 app 直接起对应 CLI（claude/codex/pi）。P3 新增入口。
@@ -2925,11 +2925,13 @@ pub fn run_provider_cli(
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
 ) -> Result<bool, String> {
-    launch_provider_terminal(state, app, providerId, cwd, true)
+    launch_provider_terminal(state.inner(), app, providerId, cwd, true)
 }
 
-fn launch_provider_terminal(
-    state: State<'_, crate::store::AppState>,
+/// 共用内核：GUI 命令与 CLI（`ccs open`）都走这里，只吃 `&AppState`，
+/// 不绑定 tauri `State`，保证凭据注入与终端启动逻辑单一来源。
+pub(crate) fn launch_provider_terminal(
+    state: &crate::store::AppState,
     app: String,
     provider_id: String,
     cwd: Option<String>,
@@ -2939,7 +2941,7 @@ fn launch_provider_terminal(
     let launch_cwd = resolve_launch_cwd(cwd)?;
 
     // 获取提供商配置
-    let providers = ProviderService::list(state.inner(), app_type.clone())
+    let providers = ProviderService::list(state, app_type.clone())
         .map_err(|e| format!("获取提供商列表失败: {e}"))?;
 
     let provider = providers
@@ -2951,9 +2953,8 @@ fn launch_provider_terminal(
     let config = &provider.settings_config;
     let mut env_vars = extract_env_vars_from_config(config, &app_type);
     let mut warnings = Vec::new();
-    let pairs =
-        ProviderService::provider_env_pairs(state.inner(), &app_type, provider, &mut warnings)
-            .map_err(|e| format!("读取供应商凭据失败: {e}"))?;
+    let pairs = ProviderService::provider_env_pairs(state, &app_type, provider, &mut warnings)
+        .map_err(|e| format!("读取供应商凭据失败: {e}"))?;
     for warning in warnings {
         log::warn!("launch_provider_terminal 凭据投递告警: {warning}");
     }

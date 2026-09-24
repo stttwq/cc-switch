@@ -76,6 +76,29 @@ export const settingsApi = {
     return await invoke("get_shim_activation_snippet", { shell });
   },
 
+  /** 资源管理器右键层叠菜单是否已注册（设置页开关回显） */
+  async isShellMenuRegistered(): Promise<boolean> {
+    return await invoke("is_shell_menu_registered");
+  },
+
+  /**
+   * 注册资源管理器右键「在此打开终端」层叠菜单。labels 随应用语言传入，
+   * 注册表只存一次；命令指向同目录 ccs.exe，与 GUI「打开终端」同一凭据边界。
+   */
+  async registerShellMenu(labels: {
+    root: string;
+    claude: string;
+    codex: string;
+    pi: string;
+  }): Promise<void> {
+    await invoke("register_shell_menu", { labels });
+  },
+
+  /** 卸载资源管理器右键菜单（幂等） */
+  async unregisterShellMenu(): Promise<void> {
+    await invoke("unregister_shell_menu");
+  },
+
   /** 是否存在统一 Codex 会话历史的迁移备份（关闭弹窗据此显示"恢复备份"勾选） */
   async hasCodexUnifyHistoryBackup(): Promise<boolean> {
     return await invoke("has_codex_unify_history_backup");

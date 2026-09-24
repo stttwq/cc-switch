@@ -363,6 +363,22 @@
           <Custom Action="LaunchApplication" After="InstallFinalize">AUTOLAUNCHAPP AND NOT Installed</Custom>
         </InstallExecuteSequence>
 
+        <!-- 真正卸载（非版本升级）时清掉运行时写入的资源管理器右键菜单；
+             菜单键由 app 运行时创建，不属任何组件，WiX 无法自动回收，故用条件 CA 删除。
+             条件与 DeleteUpdateTask 一致，避免升级时误删用户已启用的菜单。Return=ignore：未启用时键不存在也不阻断卸载。 -->
+        <CustomAction
+            Id="RemoveShellMenu"
+            Return="ignore"
+            Directory="INSTALLDIR"
+            Execute="deferred"
+            Impersonate="yes"
+            ExeCommand="cmd.exe /c reg delete &quot;HKCU\Software\Classes\Directory\shell\CCSwitchTerminal&quot; /f &amp; reg delete &quot;HKCU\Software\Classes\Directory\Background\shell\CCSwitchTerminal&quot; /f" />
+        <InstallExecuteSequence>
+            <Custom Action="RemoveShellMenu" Before="InstallFinalize">
+                (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
+            </Custom>
+        </InstallExecuteSequence>
+
         <SetProperty Id="ARPINSTALLLOCATION" Value="[INSTALLDIR]" After="CostFinalize"/>
     </Product>
 </Wix>

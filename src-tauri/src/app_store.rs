@@ -58,7 +58,11 @@ fn default_app_paths_store_file() -> Option<PathBuf> {
     #[cfg(windows)]
     {
         let appdata = std::env::var("APPDATA").ok()?;
-        return Some(PathBuf::from(appdata).join(APP_IDENTIFIER).join("app_paths.json"));
+        Some(
+            PathBuf::from(appdata)
+                .join(APP_IDENTIFIER)
+                .join("app_paths.json"),
+        )
     }
     #[cfg(not(windows))]
     {

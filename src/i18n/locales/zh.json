@@ -734,6 +734,16 @@
       "copyCommandHint": "把 ccs env 接入你自己的 shell（生成带绝对路径的一次性片段，不修改系统 PATH）。",
       "copiedToast": "激活命令已复制到剪贴板"
     },
+    "shellMenu": {
+      "title": "资源管理器右键菜单",
+      "description": "在文件夹右键菜单加「在此打开终端」层叠菜单（Claude / Codex / Pi），点击即用当前供应商在该目录直接运行对应 CLI，免去先开主界面再选目录。仅写当前用户注册表，无需管理员。",
+      "menuRoot": "在此打开终端",
+      "menuClaude": "Claude",
+      "menuCodex": "Codex",
+      "menuPi": "Pi",
+      "enabledToast": "已添加到资源管理器右键菜单",
+      "disabledToast": "已从资源管理器右键菜单移除"
+    },
     "diagnostics": {
       "copy": "复制诊断信息",
       "copied": "诊断信息已复制到剪贴板",
