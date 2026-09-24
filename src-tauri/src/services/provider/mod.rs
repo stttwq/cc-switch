@@ -1018,10 +1018,7 @@ impl ProviderService {
     /// 2.2 方案 P2：只收回指定 app 集合的已投递变量（分级清理粒度跟分级走）。
     /// 不误伤仍宽松的其他 app 变量。Pi 按 app 圈定 = 收回该 app 下全部 Pi 变量（additive
     /// 场景由 P1 的 `ccs env pi <id>` 提供 per-provider 精确清理，这里是全局/按-app 开关侧）。
-    pub fn purge_env_delivery_for_apps(
-        state: &AppState,
-        apps: &[String],
-    ) -> Result<(), AppError> {
+    pub fn purge_env_delivery_for_apps(state: &AppState, apps: &[String]) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
 
         let sink = state.env_sink.as_ref();

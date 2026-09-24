@@ -106,12 +106,15 @@ fn run(args: Vec<String>) -> Result<Option<EnvCommandOutput>, (i32, String)> {
         eprintln!(
             "ccs: cmd has no eval pipeline; run: \
              for /f \"delims=\" %i in ('ccs env {app}{} --shell cmd') do @%i",
-            provider_id.as_deref().map(|p| format!(" {p}")).unwrap_or_default()
+            provider_id
+                .as_deref()
+                .map(|p| format!(" {p}"))
+                .unwrap_or_default()
         );
     }
 
     let result = cli::run_env_command(&app, provider_id.as_deref(), shell, clear)
-            .map_err(|e| (classify_exit(&e), error_message_en(&e)))?;
+        .map_err(|e| (classify_exit(&e), error_message_en(&e)))?;
 
     // 探测提示排在业务告警前，避免用户误读默认 shell。
     let mut output = result;

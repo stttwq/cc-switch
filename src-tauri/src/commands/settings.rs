@@ -128,7 +128,10 @@ pub async fn set_env_delivery_strict_apps(
 ) -> Result<Vec<String>, String> {
     let prev = crate::settings::get_settings();
     let prev_strict: Vec<String> = if prev.env_delivery_strict_mode {
-        ["claude", "codex", "pi"].into_iter().map(String::from).collect()
+        ["claude", "codex", "pi"]
+            .into_iter()
+            .map(String::from)
+            .collect()
     } else {
         prev.env_delivery_strict_apps.unwrap_or_default()
     };

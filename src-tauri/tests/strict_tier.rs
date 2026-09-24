@@ -9,7 +9,10 @@ use cc_switch_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{attach_test_env_sink, create_test_state_with_config, ensure_test_home, reset_test_fs, test_mutex};
+use support::{
+    attach_test_env_sink, create_test_state_with_config, ensure_test_home, reset_test_fs,
+    test_mutex,
+};
 
 fn tier_config() -> MultiAppConfig {
     let mut c = MultiAppConfig::default();
@@ -60,8 +63,7 @@ fn per_app_strict_only_affects_selected_app() {
     let mut state = create_test_state_with_config(&tier_config()).expect("state");
     let sink = attach_test_env_sink(&mut state);
 
-    ProviderService::switch(&state, AppType::Codex, "c")
-        .expect("切换宽松 Codex 应成功");
+    ProviderService::switch(&state, AppType::Codex, "c").expect("切换宽松 Codex 应成功");
     ProviderService::switch(&state, AppType::Claude, "a").expect("切换严格 Claude 应成功");
 
     let snap = sink.snapshot();
@@ -107,8 +109,5 @@ fn purge_only_touches_selected_apps() {
 
     let managed = ManagedEnvVars::load(&state.db).expect("load");
     assert!(managed.vars_for_app("claude").is_empty(), "Claude 登记清空");
-    assert!(
-        !managed.vars_for_app("codex").is_empty(),
-        "Codex 登记保留"
-    );
+    assert!(!managed.vars_for_app("codex").is_empty(), "Codex 登记保留");
 }

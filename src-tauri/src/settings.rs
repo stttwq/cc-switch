@@ -792,7 +792,10 @@ pub fn strict_for(app: &AppType) -> bool {
 pub fn strict_apps_for_display() -> Vec<String> {
     let s = get_settings();
     if s.env_delivery_strict_mode {
-        return ["claude", "codex", "pi"].into_iter().map(String::from).collect();
+        return ["claude", "codex", "pi"]
+            .into_iter()
+            .map(String::from)
+            .collect();
     }
     s.env_delivery_strict_apps.unwrap_or_default()
 }

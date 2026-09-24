@@ -14,7 +14,10 @@ use cc_switch_lib::{
 
 #[path = "support.rs"]
 mod support;
-use support::{attach_test_env_sink, create_test_state_with_config, ensure_test_home, reset_test_fs, test_mutex};
+use support::{
+    attach_test_env_sink, create_test_state_with_config, ensure_test_home, reset_test_fs,
+    test_mutex,
+};
 
 fn default_settings() {
     update_settings(AppSettings::default()).expect("reset settings");
@@ -46,16 +49,15 @@ fn activate_claude_powershell_quotes_and_sets() {
     default_settings();
 
     // 对抗值：含 ' " % & 与空格，验证 PowerShell 只把 ' 翻倍。
-    let state = create_test_state_with_config(&claude_config("a", "A'B\"C%D&E"))
-        .expect("create state");
+    let state =
+        create_test_state_with_config(&claude_config("a", "A'B\"C%D&E")).expect("create state");
 
     let out = cli::env_command_core(&state, "claude", None, Shell::PowerShell, false)
         .expect("activate should succeed");
 
     assert_eq!(out.exit_code, 0);
     assert_eq!(
-        out.stdout,
-        "$env:ANTHROPIC_AUTH_TOKEN='A''B\"C%D&E'\n",
+        out.stdout, "$env:ANTHROPIC_AUTH_TOKEN='A''B\"C%D&E'\n",
         "stdout 只含可执行赋值语句"
     );
 }
@@ -146,10 +148,15 @@ fn codex_missing_key_warns_fails_closed_no_empty_export() {
 
     let out = cli::env_command_core(&state, "codex", None, Shell::PowerShell, false)
         .expect("codex 缺密钥走告警不返 Err");
-    assert_eq!(out.exit_code, EXIT_MISSING_KEY, "无内容且有缺 key 告警 → 码 3");
+    assert_eq!(
+        out.exit_code, EXIT_MISSING_KEY,
+        "无内容且有缺 key 告警 → 码 3"
+    );
     assert!(out.stdout.is_empty(), "绝不输出空 export");
     assert!(
-        out.warnings.iter().any(|w| w.contains("No credentials available")),
+        out.warnings
+            .iter()
+            .any(|w| w.contains("No credentials available")),
         "stderr 要有明确缺密钥说明，实得: {:?}",
         out.warnings
     );
@@ -170,14 +177,10 @@ fn pi_config() -> MultiAppConfig {
 
 /// 直接播种 Pi 密钥到内存凭据存储，绕开迁移对 `literal:` 前缀的处理差异。
 fn seed_pi_key(state: &cc_switch_lib::AppState, id: &str, key: &str) {
-    futures::executor::block_on(
-        state
-            .secrets
-            .set(
-                &SecretTarget::provider_api_key(AppType::Pi, id.to_string()),
-                Zeroizing::new(key.to_string()),
-            ),
-    )
+    futures::executor::block_on(state.secrets.set(
+        &SecretTarget::provider_api_key(AppType::Pi, id.to_string()),
+        Zeroizing::new(key.to_string()),
+    ))
     .expect("seed pi key");
 }
 
@@ -207,10 +210,10 @@ fn pi_with_id_emits_provider_scoped_env_name() {
 
     let state = create_test_state_with_config(&pi_config()).expect("state");
     seed_pi_key(&state, "p1", "key-p1");
-    let out = cli::env_command_core(&state, "pi", Some("p1"), Shell::Bash, false).expect("activate");
+    let out =
+        cli::env_command_core(&state, "pi", Some("p1"), Shell::Bash, false).expect("activate");
     assert_eq!(
-        out.stdout,
-        "export CC_SWITCH_PI_P1_API_KEY='key-p1'\n",
+        out.stdout, "export CC_SWITCH_PI_P1_API_KEY='key-p1'\n",
         "Pi 必须用 per-provider 变量名"
     );
 }
@@ -256,7 +259,8 @@ fn clear_unregisters_and_emits_only_unsets() {
     managed.register("ANTHROPIC_AUTH_TOKEN", "claude", "a");
     managed.save(&state.db).expect("save");
 
-    let out = cli::env_command_core(&state, "claude", None, Shell::PowerShell, true).expect("clear");
+    let out =
+        cli::env_command_core(&state, "claude", None, Shell::PowerShell, true).expect("clear");
     assert_eq!(out.exit_code, 0);
     assert!(
         !out.stdout.contains("$env:"),
@@ -324,8 +328,8 @@ fn clear_removes_real_value_and_registration_together() {
     managed.register("ANTHROPIC_AUTH_TOKEN", "claude", "a");
     managed.save(&state.db).expect("save");
 
-    let out = cli::env_command_core(&state, "claude", None, Shell::PowerShell, true)
-        .expect("clear");
+    let out =
+        cli::env_command_core(&state, "claude", None, Shell::PowerShell, true).expect("clear");
     assert_eq!(out.exit_code, 0);
 
     // 回归 D-4：删值与摘登记必须成对，否则下次切换会判 foreign 拒写。
@@ -334,8 +338,5 @@ fn clear_removes_real_value_and_registration_together() {
         "--clear 必须把投递落点的真实值也删掉，不能只摘登记留孤儿值"
     );
     let after = ManagedEnvVars::load(&state.db).expect("reload");
-    assert!(
-        after.vars_for_app("claude").is_empty(),
-        "登记簿同步清空"
-    );
+    assert!(after.vars_for_app("claude").is_empty(), "登记簿同步清空");
 }

@@ -73,11 +73,10 @@ export function EnvDeliverySection() {
     else next.add(app);
     const list = STRICT_APPS.filter((a) => next.has(a));
     // 全清空则回到"关"，避免保存空"按应用"列表。
-    void run(
-      () =>
-        list.length === 0
-          ? settingsApi.setEnvDeliveryStrictMode(false)
-          : settingsApi.setEnvDeliveryStrictApps(list),
+    void run(() =>
+      list.length === 0
+        ? settingsApi.setEnvDeliveryStrictMode(false)
+        : settingsApi.setEnvDeliveryStrictApps(list),
     );
   };
 
@@ -160,7 +159,9 @@ export function EnvDeliverySection() {
       {/* P1：复制激活命令，把 ccs env shim 接入用户自己的 shell */}
       <div className="space-y-2 rounded-lg border border-border p-3">
         <div className="text-left">
-          <span className="text-sm">{t("settings.envDelivery.copyCommand")}</span>
+          <span className="text-sm">
+            {t("settings.envDelivery.copyCommand")}
+          </span>
           <p className="text-xs text-muted-foreground">
             {t("settings.envDelivery.copyCommandHint")}
           </p>
@@ -172,7 +173,9 @@ export function EnvDeliverySection() {
               type="button"
               onClick={() => setShell(s)}
               className={`rounded px-2 py-1 text-xs ${
-                shell === s ? "bg-primary/10 text-primary" : "text-muted-foreground"
+                shell === s
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground"
               }`}
             >
               {s}

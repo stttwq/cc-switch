@@ -740,7 +740,8 @@ function App() {
   const handleOpenTerminal = (provider: Provider) =>
     launchProviderShell(provider, false);
 
-  const handleRunCli = (provider: Provider) => launchProviderShell(provider, true);
+  const handleRunCli = (provider: Provider) =>
+    launchProviderShell(provider, true);
 
   const handleImportSuccess = async () => {
     try {

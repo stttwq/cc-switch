@@ -265,13 +265,13 @@ pub fn env_command_core(
     let mut warnings: Vec<String> = Vec::new();
     let pending = ProviderService::provider_env_pairs(state, &app_type, &provider, &mut warnings)
         .map_err(|e| {
-            // provider_env_pairs 的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
-            AppError::localized(
-                "ccs_missing_key",
-                e.to_string(),
-                format!("Missing credentials for provider '{}': {}", provider.id, e),
-            )
-        })?;
+        // provider_env_pairs 的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
+        AppError::localized(
+            "ccs_missing_key",
+            e.to_string(),
+            format!("Missing credentials for provider '{}': {}", provider.id, e),
+        )
+    })?;
 
     let pending_names: Vec<String> = pending.iter().map(|(k, _)| k.clone()).collect();
 
@@ -300,10 +300,7 @@ pub fn env_command_core(
         .iter()
         .any(|w| w.starts_with("codex_missing_api_key:") || w.starts_with("pi_missing_api_key:"));
     let (stdout, exit_code) = if pending.is_empty() && has_missing {
-        (
-            String::new(),
-            EXIT_MISSING_KEY,
-        )
+        (String::new(), EXIT_MISSING_KEY)
     } else {
         let mut out = lines.join("\n");
         if !out.is_empty() {
@@ -390,20 +387,17 @@ fn resolve_provider(
 ) -> Result<crate::provider::Provider, AppError> {
     if *app_type == AppType::Pi {
         let id = provider_id.ok_or_else(|| pi_requires_id(state, app_type))?;
-        return state
-            .db
-            .get_provider_by_id(id, "pi")?
-            .ok_or_else(|| {
-                AppError::localized(
-                    "ccs_no_current",
-                    format!("Pi 供应商不存在: {id}"),
-                    format!("Pi provider not found: {id}"),
-                )
-            });
+        return state.db.get_provider_by_id(id, "pi")?.ok_or_else(|| {
+            AppError::localized(
+                "ccs_no_current",
+                format!("Pi 供应商不存在: {id}"),
+                format!("Pi provider not found: {id}"),
+            )
+        });
     }
 
-    let id = crate::settings::get_effective_current_provider(&state.db, app_type)?
-        .ok_or_else(|| {
+    let id =
+        crate::settings::get_effective_current_provider(&state.db, app_type)?.ok_or_else(|| {
             AppError::localized(
                 "ccs_no_current",
                 format!("{} 尚未选择当前供应商", app_type.as_str()),
@@ -512,10 +506,7 @@ mod tests {
 
     #[test]
     fn render_set_lines_per_shell() {
-        assert_eq!(
-            render_set(Shell::PowerShell, "K", "v"),
-            "$env:K='v'"
-        );
+        assert_eq!(render_set(Shell::PowerShell, "K", "v"), "$env:K='v'");
         assert_eq!(render_set(Shell::Bash, "K", "v"), "export K='v'");
         assert_eq!(render_set(Shell::Cmd, "K", "v"), "set \"K=v\"");
     }
@@ -544,7 +535,10 @@ mod tests {
             classify_exit(&AppError::localized("ccs_db_version", "z", "e")),
             EXIT_DB_VERSION
         );
-        assert_eq!(classify_exit(&AppError::Database("x".into())), EXIT_UNAVAILABLE);
+        assert_eq!(
+            classify_exit(&AppError::Database("x".into())),
+            EXIT_UNAVAILABLE
+        );
     }
 
     #[test]

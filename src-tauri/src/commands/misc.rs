@@ -3348,7 +3348,10 @@ mod tests {
     fn terminal_bat_content_run_cli_uses_app_command_and_selfdeletes() {
         let cli = cli_command_for(&AppType::Codex);
         let content = terminal_bat_content("cd /d \"C:\\x\"\r\n", cli, true);
-        assert!(content.contains("\ncodex\n"), "应按 app 起对应 CLI: {content}");
+        assert!(
+            content.contains("\ncodex\n"),
+            "应按 app 起对应 CLI: {content}"
+        );
         assert!(content.contains("del \"%~f0\""), "运行 X 末尾自删");
     }
 
