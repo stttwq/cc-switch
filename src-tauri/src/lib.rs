@@ -4,6 +4,8 @@ mod app_store;
 mod auto_launch;
 mod claude_mcp;
 mod claude_plugin;
+/// 2.2 方案 P1：`ccs env <app>` 控制台 shim 的核心逻辑（供 `src/bin/ccs.rs` 调用）。
+pub mod cli;
 mod codex_config;
 mod codex_history_migration;
 mod codex_state_db;
@@ -21,8 +23,6 @@ mod prompt;
 mod prompt_files;
 mod provider;
 pub mod secrets;
-/// 2.2 方案 P1：`ccs env <app>` 控制台 shim 的核心逻辑（供 `src/bin/ccs.rs` 调用）。
-pub mod cli;
 mod services;
 mod session_manager;
 mod settings;
@@ -356,6 +356,9 @@ pub fn run() {
 
             #[cfg(target_os = "windows")]
             set_windows_app_user_model_id(app.handle());
+
+            // 启动自愈：升级后若右键菜单命令行过期则静默重写（未注册不动）。
+            commands::heal_shell_menu_on_startup();
 
             // 初始化数据库
             let app_config_dir = crate::config::get_app_config_dir();

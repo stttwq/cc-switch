@@ -62,6 +62,20 @@ pub async fn is_shell_menu_registered() -> Result<bool, String> {
     }
 }
 
+/// 启动自愈：若右键菜单已注册但命令行过期（升级后 exe 路径或命令格式变化），
+/// 静默重写为当前命令。未注册则不动，全新安装不受影响。
+/// 仅 Windows 生效；失败只记日志，不阻断启动。
+pub fn heal_shell_menu_on_startup() {
+    #[cfg(windows)]
+    {
+        match windows_impl::heal() {
+            Ok(true) => log::info!("右键菜单命令已过期，已自愈重写"),
+            Ok(false) => {}
+            Err(e) => log::warn!("右键菜单启动自愈失败: {e}"),
+        }
+    }
+}
+
 #[cfg(windows)]
 mod windows_impl {
     use super::{ShellMenuLabels, MENU_KEY};
@@ -84,6 +98,11 @@ mod windows_impl {
             .parent()
             .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "无法定位安装目录"))?;
         Ok(dir.join("ccs-open.exe").to_string_lossy().to_string())
+    }
+
+    /// 命令行的唯一真源：register 与 heal 都用它生成，避免两处漂移。
+    fn expected_command(launcher: &str, app: &str) -> String {
+        format!("\"{launcher}\" {app} --cwd \"%V\"")
     }
 
     pub fn register(labels: &ShellMenuLabels) -> io::Result<()> {
@@ -114,8 +133,7 @@ mod windows_impl {
                 verb_key.set_value("MUIVerb", &label)?;
                 verb_key.set_value("Icon", &icon)?;
                 let (cmd, _) = verb_key.create_subkey("command")?;
-                let line = format!("\"{launcher}\" {app} --cwd \"%V\"");
-                cmd.set_value("", &line)?;
+                cmd.set_value("", &expected_command(&launcher, app))?;
             }
         }
         Ok(())
@@ -139,5 +157,54 @@ mod windows_impl {
         parent_paths()
             .iter()
             .any(|p| hkcu.open_subkey_with_flags(p, KEY_READ).is_ok())
+    }
+
+    /// 逐落点、逐 verb 比对命令行，过期才重写（含图标一并刷新）。返回是否重写过。
+    /// 只处理已存在的落点，不对未启用的落点无中生有。
+    pub fn heal() -> io::Result<bool> {
+        if !is_registered() {
+            return Ok(false);
+        }
+        let launcher = launcher_path()?;
+        let icon = std::env::current_exe()?.to_string_lossy().to_string();
+        let items = [("01claude", "claude"), ("02codex", "codex"), ("03pi", "pi")];
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let mut healed = false;
+
+        for parent in parent_paths() {
+            // 落点不存在说明用户未在此启用，跳过（另一落点可能存在）。
+            if hkcu.open_subkey(&parent).is_err() {
+                continue;
+            }
+
+            let mut parent_healed = false;
+            for (verb, app) in items {
+                let cmd_path = format!(r"{parent}\shell\{verb}\command");
+                let expected = expected_command(&launcher, app);
+                let current = hkcu
+                    .open_subkey(&cmd_path)
+                    .ok()
+                    .and_then(|k| k.get_value::<String, _>("").ok());
+                if current.as_deref() == Some(expected.as_str()) {
+                    continue;
+                }
+                // 命令过期：重写命令行并刷新该 verb 图标。
+                let (cmd, _) = hkcu.create_subkey(&cmd_path)?;
+                cmd.set_value("", &expected)?;
+                if let Ok((verb_key, _)) = hkcu.create_subkey(format!(r"{parent}\shell\{verb}")) {
+                    let _ = verb_key.set_value("Icon", &icon);
+                }
+                parent_healed = true;
+            }
+
+            if parent_healed {
+                // 安装路径变化时同步刷新父键图标。
+                if let Ok((root, _)) = hkcu.create_subkey(&parent) {
+                    let _ = root.set_value("Icon", &icon);
+                }
+                healed = true;
+            }
+        }
+        Ok(healed)
     }
 }
