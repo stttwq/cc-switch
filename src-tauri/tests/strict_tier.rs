@@ -84,7 +84,11 @@ fn purge_only_touches_selected_apps() {
     reset_test_fs();
     let _home = ensure_test_home();
 
-    update_settings(AppSettings::default()).expect("常规模式");
+    update_settings(AppSettings {
+        env_delivery_strict_mode: false,
+        ..AppSettings::default()
+    })
+    .expect("常规模式");
 
     let mut state = create_test_state_with_config(&tier_config()).expect("state");
     let sink = attach_test_env_sink(&mut state);

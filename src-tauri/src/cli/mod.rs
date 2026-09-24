@@ -144,17 +144,25 @@ pub fn run_open_command(app: &str, cwd: Option<String>) -> Result<(), AppError> 
     let app_type = AppType::from_str(app)?;
 
     let provider_id: Option<String> = if app_type == AppType::Pi {
-        Some(
-            crate::services::pi_state::PiStateService::current(&state)?
-                .default_provider_id
-                .ok_or_else(|| {
-                    AppError::localized(
+        let pi_state = crate::services::pi_state::PiStateService::current(&state)?;
+        let id = match pi_state.default_provider_id {
+            Some(id) => id,
+            // Pi 无原生 defaultProvider 时：models.json 只有一个供应商就用它兜底
+            // （唯一候选无歧义）；多于一个仍报错，避免替用户瞎选。
+            None => {
+                let mut enabled = pi_state.enabled_provider_ids;
+                if enabled.len() == 1 {
+                    enabled.remove(0)
+                } else {
+                    return Err(AppError::localized(
                         "ccs_no_current",
                         "Pi 尚未设置默认供应商，无法从右键菜单打开",
                         "Pi has no default provider set; cannot open from context menu",
-                    )
-                })?,
-        )
+                    ));
+                }
+            }
+        };
+        Some(id)
     } else {
         None
     };

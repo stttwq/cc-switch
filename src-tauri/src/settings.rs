@@ -459,8 +459,8 @@ pub struct AppSettings {
     // ===== 环境变量投递（B5 严格模式，方案 2.4.7）=====
     /// 严格投递模式：开启后切换供应商不再把密钥写入 `HKCU\Environment`，只更新 live 文件；
     /// 密钥仅经 cc-switch「打开终端」注入到其自起的终端进程。从别处启动的 CLI 拿不到密钥
-    /// （Codex `env_key` 缺失、Pi 变量未解析，均 fail-closed）。默认关。
-    #[serde(default)]
+    /// （Codex `env_key` 缺失、Pi 变量未解析，均 fail-closed）。默认全局严格开。
+    #[serde(default = "default_env_delivery_strict_mode")]
     pub env_delivery_strict_mode: bool,
 
     /// 2.2 方案 P2：严格模式分级——"按应用"时列出的严格 app 集合（`["claude","codex","pi"]` 子集）。
@@ -502,6 +502,12 @@ fn default_show_profile_switcher() -> bool {
     true
 }
 
+/// 严格投递默认全局开启：切换供应商不写 `HKCU\Environment`，密钥只经
+/// cc-switch 终端 / `ccs env` 注入。老 settings.json 缺该字段时也按开处理。
+fn default_env_delivery_strict_mode() -> bool {
+    true
+}
+
 impl Default for AppSettings {
     fn default() -> Self {
         Self {
@@ -533,7 +539,7 @@ impl Default for AppSettings {
             preferred_terminal: None,
             preferred_terminal_custom_path: None,
             preferred_terminal_custom_args: None,
-            env_delivery_strict_mode: false,
+            env_delivery_strict_mode: true,
             env_delivery_strict_apps: None,
             local_migrations: None,
         }

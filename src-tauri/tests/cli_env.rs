@@ -20,7 +20,11 @@ use support::{
 };
 
 fn default_settings() {
-    update_settings(AppSettings::default()).expect("reset settings");
+    update_settings(AppSettings {
+        env_delivery_strict_mode: false,
+        ..AppSettings::default()
+    })
+    .expect("reset settings");
 }
 
 fn claude_config(current: &str, key: &str) -> MultiAppConfig {

@@ -99,6 +99,40 @@ pub(crate) fn read_pi_native_defaults() -> Result<PiNativeDefaults, AppError> {
     })
 }
 
+/// 把 Pi 的当前默认供应商写入 `settings.json` 的 `defaultProvider`，保留其余字段。
+/// Pi 累加模式无 cc-switch「当前供应商」概念，靠 Pi 原生 `defaultProvider` 定位；
+/// 从 GUI「运行 Pi / 打开终端」启动某 Pi 供应商时调用，使 Pi 本体与右键菜单都跟随最近一次选择。
+/// 幂等：值未变则不写盘。
+pub(crate) fn set_pi_default_provider(provider_id: &str) -> Result<(), AppError> {
+    let path = get_pi_settings_path()?;
+    let mut object = if path.exists() {
+        match read_json5_value(&path, "Pi settings")? {
+            Value::Object(map) => map,
+            _ => {
+                return Err(AppError::Config(format!(
+                    "Pi settings root must be an object: {}",
+                    path.display()
+                )))
+            }
+        }
+    } else {
+        Map::new()
+    };
+
+    if object.get("defaultProvider").and_then(Value::as_str) == Some(provider_id) {
+        return Ok(());
+    }
+    object.insert(
+        "defaultProvider".to_string(),
+        Value::String(provider_id.to_string()),
+    );
+
+    let serialized = serde_json::to_vec_pretty(&Value::Object(object))
+        .map_err(|e| AppError::JsonSerialize { source: e })?;
+    atomic_write_private(&path, &serialized)?;
+    Ok(())
+}
+
 pub(crate) fn read_pi_native_providers() -> Result<IndexMap<String, Value>, AppError> {
     let _guard = lock_models_file()?;
     read_pi_native_providers_locked(&get_pi_models_path()?)
@@ -573,6 +607,43 @@ mod tests {
             .expect("resolve Pi directory"),
             settings_dir
         );
+    }
+
+    #[test]
+    #[serial]
+    fn set_default_provider_preserves_other_fields_and_is_idempotent() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_settings_path().expect("settings path");
+        fs::create_dir_all(path.parent().expect("settings dir")).expect("create dir");
+        fs::write(
+            &path,
+            r#"{"defaultProvider":"old","defaultModel":"m1","sessionDir":"/tmp/s"}"#,
+        )
+        .expect("seed settings");
+
+        set_pi_default_provider("jm").expect("set default");
+        let defaults = read_pi_native_defaults().expect("read defaults");
+        assert_eq!(defaults.default_provider.as_deref(), Some("jm"));
+        assert_eq!(defaults.default_model.as_deref(), Some("m1"));
+        assert_eq!(defaults.session_dir.as_deref(), Some("/tmp/s"));
+
+        // 幂等：再写相同值不报错，其它字段不丢。
+        set_pi_default_provider("jm").expect("idempotent set");
+        let again = read_pi_native_defaults().expect("read defaults again");
+        assert_eq!(again.default_provider.as_deref(), Some("jm"));
+        assert_eq!(again.default_model.as_deref(), Some("m1"));
+    }
+
+    #[test]
+    #[serial]
+    fn set_default_provider_creates_settings_when_missing() {
+        let _agent = test_support::TestAgentDir::new();
+        let path = get_pi_settings_path().expect("settings path");
+        assert!(!path.exists(), "precondition: no settings.json");
+
+        set_pi_default_provider("hb").expect("create + set default");
+        let defaults = read_pi_native_defaults().expect("read defaults");
+        assert_eq!(defaults.default_provider.as_deref(), Some("hb"));
     }
 
     #[test]

@@ -2966,6 +2966,15 @@ pub(crate) fn launch_provider_terminal(
         }
     }
 
+    // Pi 累加模式无 cc-switch「当前供应商」：启动某 Pi 供应商时，把它写回 Pi 原生
+    // `defaultProvider`，使右键菜单（靠 defaultProvider 定位）与 Pi 本体都跟随最近一次选择。
+    // best-effort：写失败只记日志，不阻断本次启动。
+    if app_type == AppType::Pi {
+        if let Err(e) = crate::pi_config::set_pi_default_provider(&provider_id) {
+            log::warn!("写入 Pi defaultProvider 失败（不阻断启动）: {e}");
+        }
+    }
+
     // 根据平台启动终端，密钥只经进程环境注入，不写任何文件
     launch_terminal_with_env(env_vars, launch_cwd.as_deref(), &app_type, run_cli)
         .map_err(|e| format!("启动终端失败: {e}"))?;
@@ -3114,6 +3123,17 @@ fn launch_windows_terminal(
         }
     }
     let cwd_command = build_windows_cwd_command(cwd);
+    // 目录路径值改经环境变量 CC_SWITCH_CWD 注入：env 由 CreateProcess 以 UTF-16 传递，
+    // 不经 bat 文件（bat 以 UTF-8 写入、cmd 却按控制台码页如 GBK/936 解析，中文路径会被误读
+    // 而 cd 失败）。故 bat 内只出现全 ASCII 的 `%CC_SWITCH_CWD%` 占位符，中文/特殊字符路径皆可正确 cd。
+    let mut env_owned = env_vars.to_vec();
+    if let Some(dir) = cwd {
+        env_owned.push((
+            "CC_SWITCH_CWD".to_string(),
+            dir.to_string_lossy().into_owned(),
+        ));
+    }
+    let env_vars: &[(String, String)] = &env_owned;
     // 批处理只负责切目录 (+启动 CLI)(+自删)，绝不写入任何环境变量值，
     // 密钥改由下方 Command::env 注入到 cmd 进程，经 `start` 传递给终端子进程。
     let cli_line = if run_cli {
@@ -3171,13 +3191,13 @@ fn is_windows_unc_path(path: &str) -> bool {
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 fn build_windows_cwd_command_str(path: &str) -> String {
-    let escaped = escape_windows_batch_value(path);
-
+    // 路径值经环境变量 CC_SWITCH_CWD 注入，bat 内只放全 ASCII 占位符（见调用处说明）。
+    // 仍按真实路径判 UNC：`cmd.exe` 无法用 `cd` 切到 UNC，需 `pushd` 先映射盘符。
+    // 占位符在双引号内展开，路径含 `&|<>%` 等元字符也安全，无需再转义。
     if is_windows_unc_path(path) {
-        // `cmd.exe` cannot make a UNC path current via `cd`; `pushd` maps it first.
-        format!("pushd \"{escaped}\" || exit /b 1\r\n")
+        "pushd \"%CC_SWITCH_CWD%\" || exit /b 1\r\n".to_string()
     } else {
-        format!("cd /d \"{escaped}\" || exit /b 1\r\n")
+        "cd /d \"%CC_SWITCH_CWD%\" || exit /b 1\r\n".to_string()
     }
 }
 
@@ -3187,18 +3207,6 @@ fn build_windows_cwd_command(cwd: Option<&Path>) -> String {
         .unwrap_or_default()
 }
 
-#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
-fn escape_windows_batch_value(value: &str) -> String {
-    value
-        .replace('^', "^^")
-        .replace('%', "%%")
-        .replace('&', "^&")
-        .replace('|', "^|")
-        .replace('<', "^<")
-        .replace('>', "^>")
-        .replace('(', "^(")
-        .replace(')', "^)")
-}
 /// 拆分自定义终端参数模板：空白分隔，双引号内视为整体（引号本身去除）。
 /// 例：`-e "cmd /K {bat}"` → `["-e", "cmd /K <bat路径>"]`。
 #[cfg(target_os = "windows")]
@@ -4916,17 +4924,14 @@ mod tests {
     fn build_windows_cwd_command_str_uses_cd_for_drive_paths() {
         let command = build_windows_cwd_command_str(r"C:\work\repo");
 
-        assert_eq!(command, "cd /d \"C:\\work\\repo\" || exit /b 1\r\n");
+        assert_eq!(command, "cd /d \"%CC_SWITCH_CWD%\" || exit /b 1\r\n");
     }
 
     #[test]
     fn build_windows_cwd_command_str_uses_pushd_for_unc_paths() {
         let command = build_windows_cwd_command_str(r"\\wsl$\Ubuntu\home\coder\repo");
 
-        assert_eq!(
-            command,
-            "pushd \"\\\\wsl$\\Ubuntu\\home\\coder\\repo\" || exit /b 1\r\n"
-        );
+        assert_eq!(command, "pushd \"%CC_SWITCH_CWD%\" || exit /b 1\r\n");
     }
 
     #[test]
@@ -4967,12 +4972,10 @@ mod tests {
     }
 
     #[test]
-    fn build_windows_cwd_command_str_escapes_batch_metacharacters() {
+    fn build_windows_cwd_command_str_uses_placeholder_not_literal_path() {
+        // 路径值走环境变量，含批处理元字符的路径也不再内嵌进 bat（绝不因编码/转义出错）。
         let command = build_windows_cwd_command_str(r"\\server\share\100%&(test)");
 
-        assert_eq!(
-            command,
-            "pushd \"\\\\server\\share\\100%%^&^(test^)\" || exit /b 1\r\n"
-        );
+        assert_eq!(command, "pushd \"%CC_SWITCH_CWD%\" || exit /b 1\r\n");
     }
 }

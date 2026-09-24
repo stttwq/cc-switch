@@ -5,6 +5,17 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.4] - 2026-09-24
+
+### Fixed
+
+- **Right-click "Open here" now works with non-ASCII (e.g. Chinese) folder paths (Windows).** The launcher batch file is written as UTF-8, but `cmd.exe` parses it in the console code page (GBK/936 on Chinese Windows), so a `cd /d "<Chinese path>"` line was misread and the terminal failed to switch into the clicked folder (surfacing as errors such as `'/d' is not recognized` / "path not found"). The target directory is now passed through an environment variable (`%CC_SWITCH_CWD%`, delivered to the child process as UTF-16), leaving the batch file pure ASCII so any path resolves correctly.
+- **Pi right-click launch resolves a provider even without a native default.** Pi runs in additive mode with no cc-switch "current provider", so the context-menu launcher relied solely on Pi's native `defaultProvider` in `settings.json` and failed with "no default provider" when it was unset. Launching a Pi provider from the GUI ("Run Pi" / "Open Terminal") now writes it back to Pi's `defaultProvider` (preserving the file's other fields, idempotent), so the right-click menu and Pi itself both follow your most recent choice; when exactly one Pi provider exists it is used automatically.
+
+### Changed
+
+- **Strict credential delivery now defaults to global-strict.** Fresh installs (and configs missing the field) no longer write provider secrets into `HKCU\Environment`; credentials are injected only into terminals launched from cc-switch or activated via `ccs env`. Existing settings that already recorded the switch are left untouched.
+
 ## [2.2.3] - 2026-09-24
 
 ### Fixed

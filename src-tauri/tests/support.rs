@@ -53,8 +53,12 @@ pub fn reset_test_fs() {
         let _ = std::fs::remove_file(&claude_json);
     }
 
-    // 重置内存中的设置缓存，确保测试环境不受上一次调用影响
-    let _ = update_settings(AppSettings::default());
+    // 重置内存中的设置缓存，确保测试环境不受上一次调用影响。
+    // 显式关严格投递：产品默认已改为全局严格，但测试基线沿用常规投递语义。
+    let _ = update_settings(AppSettings {
+        env_delivery_strict_mode: false,
+        ..AppSettings::default()
+    });
 }
 
 /// 全局互斥锁，避免多测试并发写入相同的 HOME 目录。
