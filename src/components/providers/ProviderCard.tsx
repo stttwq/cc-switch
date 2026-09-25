@@ -10,7 +10,10 @@ import { useSettingsQuery } from "@/lib/query";
 import { ProviderActions } from "@/components/providers/ProviderActions";
 import { ProviderIcon } from "@/components/ProviderIcon";
 import { extractCodexBaseUrl } from "@/utils/providerConfigUtils";
-import { resolveCodexOfficialIdentity } from "@/utils/providerCapabilities";
+import {
+  IMPORTED_LIVE_PROVIDER_ID,
+  resolveCodexOfficialIdentity,
+} from "@/utils/providerCapabilities";
 
 interface DragHandleProps {
   attributes: DraggableAttributes;
@@ -113,6 +116,15 @@ export function ProviderCard({
     (settingsData?.envDeliveryStrictMode ?? false) ||
     (settingsData?.envDeliveryStrictApps ?? []).includes(appId);
   const codexOfficialIdentity = resolveCodexOfficialIdentity(appId, provider);
+  // 自动导入的 live 配置在库里名为 "default"；列表里改用可读名称，
+  // 但仍让用户后续改名后的值优先生效。
+  const displayName =
+    provider.id === IMPORTED_LIVE_PROVIDER_ID &&
+    provider.name.trim().toLowerCase() === IMPORTED_LIVE_PROVIDER_ID
+      ? t("provider.importedLiveProviderName", {
+          defaultValue: "Current Config",
+        })
+      : provider.name;
   const manualNote = provider.notes?.trim() || undefined;
 
   const isAdditiveMode = appId === "pi";
@@ -194,7 +206,7 @@ export function ProviderCard({
           <div className="h-8 w-8 flex-shrink-0 rounded-lg bg-muted flex items-center justify-center border border-border group-hover:scale-105 transition-transform duration-300">
             <ProviderIcon
               icon={provider.icon}
-              name={provider.name}
+              name={displayName}
               color={provider.iconColor}
               size={20}
             />
@@ -207,9 +219,9 @@ export function ProviderCard({
                   "text-base font-semibold leading-none",
                   codexOfficialIdentity && "min-w-0 flex-1 truncate",
                 )}
-                title={codexOfficialIdentity ? provider.name : undefined}
+                title={codexOfficialIdentity ? displayName : undefined}
               >
-                {provider.name}
+                {displayName}
               </h3>
               {/* §5.5：密钥不随同步/导出走，跨机还原后要重新输入才能切换 */}
               {provider.secretStatus &&

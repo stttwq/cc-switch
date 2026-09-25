@@ -102,7 +102,8 @@
   "provider": {
     "tabProvider": "プロバイダー",
     "noProviders": "まだプロバイダーがありません",
-    "noProvidersDescription": "既存の設定がある場合は「現在の設定をインポート」をクリックしてください。すべてのデータが default プロバイダーに安全に保存されます",
+    "noProvidersDescription": "既存の設定がある場合は「現在の設定をインポート」をクリックしてください。すべてのデータが「現在の設定」プロバイダーに安全に保存されます",
+    "importedLiveProviderName": "現在の設定",
     "noProvidersDescriptionSnippet": "API キーとリクエスト URL 以外のデータ（プラグインなど）は共通設定スニペットに保存され、プロバイダー間で共有できます",
     "importCurrent": "現在の設定をインポート",
     "importFromClaude": "Claude Code の既存プロバイダーをインポート",
@@ -292,7 +293,7 @@
       },
       "secretStore": {
         "title": "資格情報マネージャーのメンテナンス",
-        "description": "削除したプロバイダーが残した資格情報エントリを消去します"
+        "description": "削除済みプロバイダーが Windows 資格情報マネージャーに残したエントリを整理し、暗号化バンドルで資格情報を別マシンへ移行できます"
       }
     },
     "language": "言語",
@@ -1780,5 +1781,16 @@
       "file_locked": "{{target}}：対象ファイルが使用中または読み取り専用で書き込めません",
       "other": "{{target}}：live 設定の書き換えに失敗しました"
     }
+  },
+  "secretsPortable": {
+    "hint": "WebDAV/S3 同期は資格情報を一切含みません。アンインストールすると Windows 資格情報マネージャーの cc-switch エントリがすべて削除されます。アンインストール前または別マシンへの移行前に暗号化バンドルをエクスポートし、移行先でインポートすると API キーと Base URL を復元できます。",
+    "passphraseLabel": "パスフレーズ（{{min}} 文字以上）",
+    "passphrasePlaceholder": "パスワードマネージャーでの生成を推奨",
+    "passphraseHint": "{{min}} 文字以上。バンドルはこれで暗号化され、忘れると復元できません。",
+    "passphraseTooShort": "パスフレーズは {{min}} 文字以上必要です",
+    "export": "資格情報をエクスポート",
+    "import": "資格情報をインポート",
+    "exportDone": "{{count}} 件の資格情報を {{path}} にエクスポートしました",
+    "importDone": "{{imported}} 件をインポート、{{overwritten}} 件を上書き、{{unchanged}} 件は変更なし"
   }
 }

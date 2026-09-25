@@ -102,11 +102,12 @@
   "provider": {
     "tabProvider": "供应商",
     "noProviders": "还没有添加任何供应商",
-    "noProvidersDescription": "如果你已有配置，请点击\"导入当前配置\"，所有数据将安全保存在 default 供应商中",
+    "noProvidersDescription": "如果你已有配置，请点击\"导入当前配置\"，所有数据将安全保存在 \"当前配置\" 供应商中",
     "noProvidersDescriptionSnippet": "除 Key 和请求地址外的数据（如插件配置）会被保存到通用配置片段，用于在不同供应商之间共享",
     "importCurrent": "导入当前配置",
     "importFromClaude": "将 Claude Code 中已有的供应商导入",
     "importCurrentDescription": "将当前正在使用的配置导入为默认供应商",
+    "importedLiveProviderName": "当前配置",
     "currentlyUsing": "当前使用",
     "enable": "启用",
     "inUse": "使用中",
@@ -292,7 +293,7 @@
       },
       "secretStore": {
         "title": "凭据管理器维护",
-        "description": "清理已删除供应商在 Windows 凭据管理器里残留的条目"
+        "description": "清理已删除供应商在 Windows 凭据管理器里残留的条目，并可用加密便携包在设备之间迁移凭据"
       }
     },
     "language": "界面语言",
@@ -1780,5 +1781,16 @@
       "file_locked": "{{target}}：目标文件被占用或只读，暂时写不进去",
       "other": "{{target}}：live 配置重写失败"
     }
+  },
+  "secretsPortable": {
+    "hint": "WebDAV/S3 同步不携带任何凭据，卸载则会把 Windows 凭据管理器里的 cc-switch 条目全部删除。卸载前或换机前先导出加密便携包；在新机器上导入即可恢复 API Key 与 Base URL。",
+    "passphraseLabel": "口令（至少 {{min}} 字符）",
+    "passphrasePlaceholder": "建议用密码管理器生成",
+    "passphraseHint": "至少 {{min}} 字符。便携包用它加密，忘记口令则无法恢复。",
+    "passphraseTooShort": "口令至少需要 {{min}} 个字符",
+    "export": "导出凭据",
+    "import": "导入凭据",
+    "exportDone": "已导出 {{count}} 条凭据到 {{path}}",
+    "importDone": "导入 {{imported}} 条，覆盖 {{overwritten}} 条，未变 {{unchanged}} 条"
   }
 }

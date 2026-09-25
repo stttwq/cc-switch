@@ -38,6 +38,8 @@ fn run(args: Vec<String>) -> Result<Option<EnvCommandOutput>, (i32, String)> {
     let mut it = args.into_iter().skip(1); // 去掉程序名
     match it.next().as_deref() {
         Some("env") => {}
+        // 卸载清理：MSI 的自定义动作调用 `ccs.exe --cleanup-user-data`。
+        Some("--cleanup-user-data") => return Ok(Some(run_cleanup())),
         Some("--help") | Some("-h") | None => {
             eprintln!("{}", usage());
             return Ok(None);
@@ -126,8 +128,23 @@ fn run(args: Vec<String>) -> Result<Option<EnvCommandOutput>, (i32, String)> {
 
 fn usage() -> &'static str {
     "usage: ccs env <app> [provider_id] [--shell powershell|cmd|bash] [--clear]\n\
+     \x20      ccs --cleanup-user-data\n\
      \x20 app: claude | codex | pi (pi requires an explicit provider_id)\n\
      \x20 exit codes: 0 ok, 2 usage, 3 missing key, 4 db version mismatch, 5 store/config unavailable"
+}
+
+/// 卸载时清理 CC Switch 写到应用外部的托管数据。
+///
+/// 结果写 stderr，stdout 保持为空：MSI 的 `ExeCommand` 不消费输出，
+/// 但保持与 `env` 子命令一致的「stdout 只放给 shell 的语句」约定。
+fn run_cleanup() -> EnvCommandOutput {
+    let report = cc_switch_lib::uninstall_cleanup::run();
+    eprintln!("ccs: user data cleanup done ({})", report.summary());
+    EnvCommandOutput {
+        stdout: String::new(),
+        warnings: Vec::new(),
+        exit_code: cli::EXIT_OK,
+    }
 }
 
 #[cfg(windows)]

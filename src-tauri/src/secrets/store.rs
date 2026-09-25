@@ -108,6 +108,19 @@ pub trait SecretStore: Send + Sync {
     async fn retrieve(&self, target: &SecretTarget) -> Result<Option<Zeroizing<String>>, AppError> {
         self.get(target).await
     }
+
+    /// 按 `TargetName` 直接读取一条凭据。
+    ///
+    /// 供凭据便携包使用：那里只有枚举出来的 target 名，把它反解析回 `SecretTarget`
+    /// 要处理 `env/<VAR>` 与 `Legacy` 两种形态、又可能因新字段失配。`keyring::Entry`
+    /// 支持用 `TargetName` 直接构造条目，正好跳过反解析。
+    async fn get_target_raw(
+        &self,
+        target_name: &str,
+    ) -> Result<Option<Zeroizing<String>>, AppError>;
+
+    /// 按 `TargetName` 直接写入一条凭据（理由同 `get_target_raw`）。
+    async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError>;
 }
 
 #[cfg(target_os = "windows")]
@@ -118,6 +131,91 @@ fn windows_entry(target: &SecretTarget) -> Result<keyring::Entry, SecretError> {
         &target.to_user_metadata(),
     )
     .map_err(|e| SecretError::Backend(format!("Failed to create entry: {e}")))
+}
+
+/// 用 `CredEnumerateW` 枚举匹配 `prefix` 的凭据 target 名。
+///
+/// `list_targets` 与卸载清理共用：两个调用方都需要「拿到全部 `cc-switch/*` 条目名」。
+/// 不用 `keyring`：它没有枚举接口，Windows 后端必须直接走 Win32。
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_enumerate_targets(prefix: &str) -> Result<Vec<String>, AppError> {
+    use windows_sys::Win32::Security::Credentials::{CredEnumerateW, CredFree, CREDENTIALW};
+
+    // `CredEnumerateW` 的过滤器只支持 '*' 通配符，用 "<prefix>*" 一次筛出全部。
+    let filter: Vec<u16> = format!("{prefix}*")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+
+    let mut count: u32 = 0;
+    let mut credentials: *mut *mut CREDENTIALW = std::ptr::null_mut();
+
+    // SAFETY: filter 是以 NUL 结尾的宽字符串；两个输出指针都是本栈上的有效地址。
+    // Flags 必须为 0：传 `CRED_ENUMERATE_ALL_CREDENTIALS` 会忽略 Filter 并枚举全部
+    // 凭据（包括其它应用的），那会把用户其它应用的凭据也列进来。
+    let ok = unsafe { CredEnumerateW(filter.as_ptr(), 0, &mut count, &mut credentials) };
+    if ok == 0 {
+        let error = std::io::Error::last_os_error();
+        // ERROR_NOT_FOUND：一条匹配的凭据都没有，不是错误。
+        if error.raw_os_error() == Some(1168) {
+            return Ok(Vec::new());
+        }
+        return Err(
+            SecretError::Backend(format!("Failed to enumerate credentials: {error}")).into(),
+        );
+    }
+
+    let mut targets = Vec::with_capacity(count as usize);
+    // SAFETY: 成功返回时 credentials 指向 count 个由 Credential Manager 分配的
+    // CREDENTIALW 指针，在 CredFree 之前保持有效。
+    unsafe {
+        for index in 0..count as usize {
+            let entry = *credentials.add(index);
+            if entry.is_null() {
+                continue;
+            }
+            let name = (*entry).TargetName;
+            if name.is_null() {
+                continue;
+            }
+            // TargetName 是 NUL 结尾的宽字符串。
+            let mut len = 0usize;
+            while *name.add(len) != 0 {
+                len += 1;
+            }
+            targets.push(String::from_utf16_lossy(std::slice::from_raw_parts(
+                name, len,
+            )));
+        }
+        CredFree(credentials as *const core::ffi::c_void);
+    }
+
+    Ok(targets)
+}
+
+/// 按 `TargetName` 直接删除一条凭据。
+///
+/// 用于卸载清理：`CredEnumerateW` 只回 target 名，把它反解析回 `SecretTarget`
+/// 既要处理 `env/<VAR>` 与 `Legacy` 两种形态、又可能因新字段失配，代价大于收益。
+/// `keyring::Entry` 支持用 `TargetName` + 固定 service 直接构造条目，正好跳过反解析。
+#[cfg(target_os = "windows")]
+pub(crate) fn windows_delete_credential(target_name: &str) -> Result<(), AppError> {
+    let entry = keyring::Entry::new_with_target(
+        target_name,
+        SecretTarget::service(),
+        // Credential Manager 的 TargetName 才是唯一定位键；用户名不重要。
+        target_name,
+    )
+    .map_err(|e| AppError::SecretStoreError(format!("Failed to create entry: {e}")))?;
+
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        // 条目已被并发删除时视为成功（幂等）。
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(AppError::SecretStoreError(format!(
+            "Failed to delete secret: {e}"
+        ))),
+    }
 }
 
 /// Windows Credential Manager implementation
@@ -325,16 +423,67 @@ impl SecretStore for WindowsSecretStore {
     async fn list_targets(&self, prefix: &str) -> Result<Vec<String>, AppError> {
         #[cfg(target_os = "windows")]
         {
-            // Windows Credential Manager doesn't provide efficient prefix search
-            // We'll need to enumerate and filter
-            // For now, return empty - this will be implemented if orphan cleanup is needed
-            let _ = prefix;
-            Ok(Vec::new())
+            windows_enumerate_targets(prefix)
         }
 
         #[cfg(not(target_os = "windows"))]
         {
             let _ = prefix;
+            Err(AppError::SecretStoreError(
+                "Not supported on this platform".to_string(),
+            ))
+        }
+    }
+
+    async fn get_target_raw(
+        &self,
+        target_name: &str,
+    ) -> Result<Option<Zeroizing<String>>, AppError> {
+        #[cfg(target_os = "windows")]
+        {
+            match keyring::Entry::new_with_target(target_name, SecretTarget::service(), target_name)
+                .map_err(|e| SecretError::Backend(format!("Failed to create entry: {e}")))?
+                .get_password()
+            {
+                Ok(password) => Ok(Some(Zeroizing::new(password))),
+                Err(keyring::Error::NoEntry) => Ok(None),
+                Err(e) => Err(SecretError::Backend(format!("Failed to get secret: {e}")).into()),
+            }
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = target_name;
+            Err(AppError::SecretStoreError(
+                "Not supported on this platform".to_string(),
+            ))
+        }
+    }
+
+    async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+        #[cfg(target_os = "windows")]
+        {
+            let utf16_len = value.encode_utf16().count();
+            if utf16_len > MAX_VALUE_UTF16_UNITS {
+                return Err(SecretError::TooLong {
+                    field: target_name.to_string(),
+                    max: MAX_VALUE_UTF16_UNITS,
+                }
+                .into());
+            }
+            let _guard = self.lock_writes();
+            with_backend_retry(|| {
+                keyring::Entry::new_with_target(target_name, SecretTarget::service(), target_name)
+                    .map_err(|e| SecretError::Backend(format!("Failed to create entry: {e}")))?
+                    .set_password(value)
+                    .map_err(|e| SecretError::Backend(format!("Failed to set secret: {e}")))
+            })?;
+            Ok(())
+        }
+
+        #[cfg(not(target_os = "windows"))]
+        {
+            let _ = (target_name, value);
             Err(AppError::SecretStoreError(
                 "Not supported on this platform".to_string(),
             ))
@@ -381,6 +530,19 @@ impl SecretStore for UnsupportedSecretStore {
 
     async fn list_targets(&self, prefix: &str) -> Result<Vec<String>, AppError> {
         let _ = prefix;
+        Err(SecretError::Unsupported.into())
+    }
+
+    async fn get_target_raw(
+        &self,
+        target_name: &str,
+    ) -> Result<Option<Zeroizing<String>>, AppError> {
+        let _ = target_name;
+        Err(SecretError::Unsupported.into())
+    }
+
+    async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+        let _ = (target_name, value);
         Err(SecretError::Unsupported.into())
     }
 }
@@ -450,6 +612,26 @@ impl SecretStore for InMemorySecretStore {
             .filter(|k| k.starts_with(prefix))
             .cloned()
             .collect())
+    }
+
+    async fn get_target_raw(
+        &self,
+        target_name: &str,
+    ) -> Result<Option<Zeroizing<String>>, AppError> {
+        Ok(self
+            .storage
+            .lock()
+            .unwrap()
+            .get(target_name)
+            .map(|v| Zeroizing::new(v.clone())))
+    }
+
+    async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+        self.storage
+            .lock()
+            .unwrap()
+            .insert(target_name.to_string(), value.to_string());
+        Ok(())
     }
 }
 

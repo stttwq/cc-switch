@@ -102,11 +102,12 @@
   "provider": {
     "tabProvider": "Provider",
     "noProviders": "No providers added yet",
-    "noProvidersDescription": "If you already have a config, click \"Import Current Config\" — all data will be safely saved in a default provider",
+    "noProvidersDescription": "If you already have a config, click \"Import Current Config\" — all data will be safely saved in a \"Current Config\" provider",
     "noProvidersDescriptionSnippet": "Settings other than API key and endpoint (e.g. plugins) will be saved to a common config snippet for sharing across providers",
     "importCurrent": "Import Current Config",
     "importFromClaude": "Import existing providers from Claude Code",
     "importCurrentDescription": "Import current live config as default provider",
+    "importedLiveProviderName": "Current Config",
     "currentlyUsing": "Currently Using",
     "enable": "Enable",
     "inUse": "In Use",
@@ -291,8 +292,8 @@
         }
       },
       "secretStore": {
-        "title": "Credential Manager Maintenance",
-        "description": "Remove credential entries left behind by providers you deleted"
+        "title": "Credential manager maintenance",
+        "description": "Clean up leftover entries in Windows Credential Manager, and move credentials between machines with an encrypted bundle"
       }
     },
     "language": "Language",
@@ -1780,5 +1781,16 @@
       "file_locked": "{{target}}: the target file is locked or read-only and could not be written",
       "other": "{{target}}: live configuration rewrite failed"
     }
+  },
+  "secretsPortable": {
+    "hint": "WebDAV/S3 sync never carries credentials, and uninstalling removes every cc-switch entry from Windows Credential Manager. Export an encrypted bundle before uninstalling or moving to another machine; import it there to restore the API keys and base URLs.",
+    "passphraseLabel": "Passphrase (at least {{min}} characters)",
+    "passphrasePlaceholder": "Use a password manager to generate one",
+    "passphraseHint": "Minimum {{min}} characters. The bundle is encrypted with it; forgetting it means the bundle cannot be recovered.",
+    "passphraseTooShort": "Passphrase must be at least {{min}} characters",
+    "export": "Export credentials",
+    "import": "Import credentials",
+    "exportDone": "Exported {{count}} credential(s) to {{path}}",
+    "importDone": "Imported {{imported}}, overwrote {{overwritten}}, unchanged {{unchanged}}"
   }
 }

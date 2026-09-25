@@ -29,6 +29,7 @@ mod settings;
 mod store;
 
 mod tray;
+pub mod uninstall_cleanup;
 
 pub use app_config::{AppType, InstalledSkill, McpApps, McpServer, MultiAppConfig, SkillApps};
 pub use codex_config::{
@@ -1109,6 +1110,8 @@ pub fn run() {
             // theirs: config import/export and dialogs
             commands::export_config_via_dialog,
             commands::import_config_via_dialog,
+            commands::secrets_export_via_dialog,
+            commands::secrets_import_via_dialog,
             commands::webdav_test_connection,
             commands::webdav_sync_upload,
             commands::webdav_sync_download,

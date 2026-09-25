@@ -42,16 +42,23 @@ pub(crate) const NONCE_LEN: usize = 24;
 
 /// 口令派生的密钥加密密钥（KEK）。
 pub(crate) struct Kek(Zeroizing<[u8; KEY_LEN]>);
+
+impl Kek {
+    /// 供凭据便携包（`secrets::portable`）复用同一套 AEAD。
+    pub(crate) fn as_bytes(&self) -> &[u8; KEY_LEN] {
+        &self.0
+    }
+}
 /// 每次快照随机生成的数据加密密钥（DEK）。
 pub(crate) struct Dek(Zeroizing<[u8; KEY_LEN]>);
 
-fn random_bytes<const N: usize>() -> [u8; N] {
+pub(crate) fn random_bytes<const N: usize>() -> [u8; N] {
     let mut buf = [0u8; N];
     rand_core::OsRng.fill_bytes(&mut buf);
     buf
 }
 
-fn aead_seal(
+pub(crate) fn aead_seal(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
     aad: &[u8],
@@ -64,7 +71,7 @@ fn aead_seal(
         .map_err(|e| AppError::Config(format!("AEAD 加密失败: {e:?}")))
 }
 
-fn aead_open(
+pub(crate) fn aead_open(
     key: &[u8; KEY_LEN],
     nonce: &[u8; NONCE_LEN],
     aad: &[u8],

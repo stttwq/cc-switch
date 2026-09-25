@@ -1128,6 +1128,9 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
     };
 
     let mut provider = Provider::with_id("default".to_string());
+    // id 与 name 均保持 "default"：展示名由前端 i18n 层负责（见 ProviderCard 的
+    // IMPORTED_LIVE_PROVIDER_ID 映射），后端不猜语言。凭据 target、回填保护与
+    // 历史同步也都按该 id 工作，改名会丢数据。
     provider.name = "default".to_string();
     provider.settings_config = settings_config;
     provider.category = Some(

@@ -2,6 +2,7 @@ pub mod cleanup;
 mod extractor;
 pub mod legacy;
 pub mod migration;
+pub mod portable;
 mod rules;
 pub mod scan;
 mod store;
@@ -17,6 +18,8 @@ pub use rules::{
     escape_literal, is_literal_value, is_sensitive_config_key, last_chars,
     normalize_env_key_segment, pi_api_key_env_name, pi_header_env_name, unescape_literal,
 };
+#[cfg(target_os = "windows")]
+pub(crate) use store::{windows_delete_credential, windows_enumerate_targets};
 pub use store::{
     InMemorySecretStore, SecretError, SecretStore, UnsupportedSecretStore, WindowsSecretStore,
 };

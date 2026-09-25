@@ -386,11 +386,27 @@
             Directory="INSTALLDIR"
             Execute="immediate"
             ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='SilentlyContinue'; $paths=@((Join-Path $env:USERPROFILE '.cc-switch')); if ($env:HOME) { $paths += Join-Path $env:HOME '.cc-switch' }; foreach ($p in ($paths | Select-Object -Unique)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }&quot;" />
+        <!-- 清理 CC Switch 写在应用外部的托管数据：Pi 原生 models.json 里由 CC Switch
+             托管的供应商节点（apiKey 引用 $CC_SWITCH_PI_*，用户手配的保留）、凭据管理器
+             cc-switch/* 条目、HKCU\Environment 的 CC_SWITCH_* 变量。不清理这些，重装后
+             旧供应商会被启动时的 Pi live 导入重新拉回来。逻辑在 Rust（可单测），此处只调用。 -->
+        <CustomAction
+            Id="RemoveManagedExternalData"
+            Return="ignore"
+            Directory="INSTALLDIR"
+            Execute="immediate"
+            ExeCommand="&quot;[INSTALLDIR]ccs.exe&quot; --cleanup-user-data" />
         <InstallExecuteSequence>
             <Custom Action="RemoveInstallData" Before="InstallFinalize">
                 (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
             </Custom>
             <Custom Action="RemoveLegacyUserData" Before="InstallFinalize">
+                (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
+            </Custom>
+            <!-- 必须先于 RemoveInstallData：后者会删掉整个 data 目录，但 ccs.exe 在
+                 INSTALLDIR 根下，主题不冲突。这里放在 RemoveInstallData 之后仍能跑，
+                 但提前更稳妥（万一将来 ccs.exe 也被归入 data）。 -->
+            <Custom Action="RemoveManagedExternalData" Before="RemoveInstallData">
                 (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
             </Custom>
         </InstallExecuteSequence>

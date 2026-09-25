@@ -5,6 +5,19 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.9] - 2026-09-25
+
+### Added
+
+- **Encrypted credential bundle for moving credentials between machines.** Credentials live only in Windows Credential Manager and are never part of the WebDAV/S3 payload, so uninstalling deletes them for good — "uninstall + reinstall + sync" used to lose every API key and base URL permanently. Settings → Advanced → Credential manager maintenance now offers **Export credentials** / **Import credentials**: every `cc-switch/*` entry is sealed into one file with a passphrase (20-character minimum) using the same Argon2id + XChaCha20-Poly1305 construction as end-to-end sync, in a format of its own so the two payloads cannot be mistaken for each other. On import the bundle wins over local values and entries that exist only locally are kept. Neither plaintext credentials nor the passphrase ever appear in the file.
+
+### Fixed
+
+- **Full uninstall now clears the data CC Switch writes outside its own directories, so a reinstall no longer resurrects old providers.** Uninstall previously removed only the install-directory `data` and the legacy `%USERPROFILE%\.cc-switch`; it left behind `~/.pi/agent/models.json` (Pi's native config, which startup re-imports as live providers), every `cc-switch/*` Windows Credential Manager entry, and the `CC_SWITCH_*` variables in `HKCU\Environment`. The new `ccs --cleanup-user-data` step runs on full uninstall and removes exactly what CC Switch manages: Pi `models.json` nodes are removed only when their `apiKey` references `$CC_SWITCH_PI_*`, so providers you configured yourself are preserved.
+- Uninstall also clears `env_key = "CC_SWITCH_CODEX_API_KEY"` from `~/.codex/config.toml`. The env var it points at is removed by the same uninstall step, so leaving the reference behind would break Codex until CC Switch was reinstalled. Because dropping the `env_key` removes the provider's credential short-circuit, `requires_openai_auth` is set to `false` at the same time — otherwise Codex would fall back to the official OAuth login in `auth.json` and send those credentials to a third-party endpoint. A user-authored `env_key` is left alone.
+- The provider imported from live config on a fresh install is no longer displayed as the literal `default`. Its id stays `default` (credential targets, backfill protection, and history sync are keyed on it), but the card now shows a readable name via the i18n layer.
+- Windows Credential Manager entries can now be enumerated (`SecretStore::list_targets` previously returned an empty list on the Windows backend). The encrypted credential bundle and the uninstall cleanup both depend on it.
+
 ## [2.2.8] - 2026-09-25
 
 ### Fixed
@@ -67,7 +80,7 @@ Strict-mode ergonomics: activate credentials in your own shell, a tiered strict-
 
 ### Added
 
-- **`ccs env <app>` shell shim (P1).** A new console sub-binary (`ccs.exe`, built from a dedicated `[[bin]]`, no tauri/single-instance) lets you activate the current provider's credentials inside *your own* PowerShell / cmd / Git Bash: `ccs env claude | iex`, `eval "$(ccs env claude --shell bash)"`. Keys go only into that shell process (same security boundary as the terminal injection — never `HKCU\Environment`, never a file). `--clear` emits only unsets and synchronously deregisters from `managed_env_vars` so re-activation isn't falsely blocked. Credentials reuse `provider_env_pairs`; the shim refuses to migrate a schema that is newer/older than itself and resolves the custom config-dir override from `app_paths.json`. A "Copy activation command" button in Settings emits a one-time absolute-path snippet (does not touch PATH). Stable exit codes: 0 ok, 2 usage, 3 missing key, 4 DB version, 5 store/config unavailable.
+- **`ccs env <app>` shell shim (P1).** A new console sub-binary (`ccs.exe`, built from a dedicated `[[bin]]`, no tauri/single-instance) lets you activate the current provider's credentials inside _your own_ PowerShell / cmd / Git Bash: `ccs env claude | iex`, `eval "$(ccs env claude --shell bash)"`. Keys go only into that shell process (same security boundary as the terminal injection — never `HKCU\Environment`, never a file). `--clear` emits only unsets and synchronously deregisters from `managed_env_vars` so re-activation isn't falsely blocked. Credentials reuse `provider_env_pairs`; the shim refuses to migrate a schema that is newer/older than itself and resolves the custom config-dir override from `app_paths.json`. A "Copy activation command" button in Settings emits a one-time absolute-path snippet (does not touch PATH). Stable exit codes: 0 ok, 2 usage, 3 missing key, 4 DB version, 5 store/config unavailable.
 - **Tiered strict-delivery mode (P2).** The global bool becomes three states — Off / Per app / Global — via an additive `env_delivery_strict_apps` list (old `env_delivery_strict_mode` still honored). Delivery/preflight now decide per app (`strict_for`), enabling a mode only reclaims the variables of apps that just turned strict, and the tray hint / diagnostics / provider-card badge now aggregate instead of reading the raw bool. The mutual-exclusion invariant is enforced at the single always-on save path.
 - **"Run X" entry + real interactive shell (P3).** The CLI name is now chosen by app (shared `cli_command_for`), so Codex/Pi launch the correct CLI. "Open Terminal" lands an environment-loaded interactive shell without auto-running a CLI; a new "Run X" action starts the app's CLI directly. The terminal button is no longer Claude-only.
 
@@ -144,7 +157,7 @@ Fixes from the first real-machine upgrade rehearsal (3.20.3 → 2.0.0), recorded
 ### Changed
 
 - **Credentials now live in Windows Credential Manager.** API keys, base URLs, Pi request headers, and the WebDAV / S3 sync credentials are stored there and nowhere else. `providers.settings_config`, `settings.json` and the live CLI config files no longer contain values.
-- **Environment variables are the only delivery path.** Claude Code, Codex and Pi receive their credentials as user-level environment variables (`HKCU\Environment`); live config files contain only the *names* of those variables. The helper-command delivery modes (`apiKeyHelper`, Pi's `"!command"`) are not implemented by design.
+- **Environment variables are the only delivery path.** Claude Code, Codex and Pi receive their credentials as user-level environment variables (`HKCU\Environment`); live config files contain only the _names_ of those variables. The helper-command delivery modes (`apiKeyHelper`, Pi's `"!command"`) are not implemented by design.
 - **Database schema v19.** Ten tables tied to the removed features are dropped, `providers.in_failover_queue` is dropped as a column, and `meta.usage_script` is stripped on the Rust side.
 - **Existing installations migrate automatically and idempotently on first launch.** Provider credentials are extracted, written to Credential Manager, and the stored configs are rewritten with the secrets removed. No interaction is required; a report lists what was migrated and offers a retry for any live-file rewrite that failed.
 - **Codex official cards no longer carry a ChatGPT login.** OAuth tokens found in stored configs are discarded rather than migrated — run `codex login` in the Codex CLI instead. Codex third-party cards that would silently fall back to `auth.json` are refused at switch time.

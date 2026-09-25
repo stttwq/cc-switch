@@ -16,6 +16,83 @@ use crate::services::skill::skill_state_write_guard;
 use crate::services::sync_protocol::sync_mutex;
 use crate::store::AppState;
 
+/// 导出凭据便携包（加密）。
+///
+/// 对话框在 Rust 侧弹、路径不经前端往返（同 SQL 导出的约定）。取消返回 `Ok(None)`。
+/// 口令只在本调用内使用，不落任何配置。
+#[tauri::command]
+pub async fn secrets_export_via_dialog<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    passphrase: String,
+    state: State<'_, AppState>,
+) -> Result<Option<Value>, String> {
+    let default_name = format!(
+        "cc-switch-secrets-{}.json",
+        chrono::Local::now().format("%Y%m%d")
+    );
+    let Some(target) = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .set_file_name(&default_name)
+        .blocking_save_file()
+    else {
+        return Ok(None);
+    };
+
+    let app_version = app.package_info().version.to_string();
+    let (bytes, report) =
+        crate::secrets::portable::export(state.secrets.as_ref(), &passphrase, &app_version)
+            .await
+            .map_err(|e| e.to_string())?;
+
+    // 先写临时文件再原子替换：失败不会留下半个便携包（也避免明文密文混写）。
+    let target_path = PathBuf::from(target.to_string());
+    crate::config::atomic_write_private(&target_path, &bytes)
+        .map_err(|e| format!("写入便携包失败: {e}"))?;
+
+    Ok(Some(json!({
+        "success": true,
+        "filePath": target_path.to_string_lossy(),
+        "exported": report.exported,
+        "appSecrets": report.app_secrets,
+    })))
+}
+
+/// 从便携包导入凭据（解密）。取消返回 `Ok(None)`。
+///
+/// 冲突策略：包里有的条目以包里为准（值不同则覆盖），本地独有条目保留不删。
+#[tauri::command]
+pub async fn secrets_import_via_dialog<R: tauri::Runtime>(
+    app: tauri::AppHandle<R>,
+    passphrase: String,
+    state: State<'_, AppState>,
+) -> Result<Option<Value>, String> {
+    let Some(source) = app
+        .dialog()
+        .file()
+        .add_filter("JSON", &["json"])
+        .blocking_pick_file()
+    else {
+        return Ok(None);
+    };
+
+    let source_path = PathBuf::from(source.to_string());
+    let bytes = std::fs::read(&source_path).map_err(|e| format!("读取便携包失败: {e}"))?;
+
+    let report = crate::secrets::portable::import(state.secrets.as_ref(), &bytes, &passphrase)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(Some(json!({
+        "success": true,
+        "imported": report.imported,
+        "overwritten": report.overwritten,
+        "unchanged": report.unchanged,
+        "appSecrets": report.app_secrets,
+    })))
+}
+
 async fn run_with_database_restore_lock<T, Start, Fut>(start_operation: Start) -> T
 where
     Start: FnOnce() -> Fut,

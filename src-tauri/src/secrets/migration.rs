@@ -580,6 +580,26 @@ mod tests {
                 .cloned()
                 .collect())
         }
+
+        async fn get_target_raw(
+            &self,
+            target_name: &str,
+        ) -> Result<Option<Zeroizing<String>>, AppError> {
+            Ok(self
+                .storage
+                .lock()
+                .unwrap()
+                .get(target_name)
+                .map(|v| Zeroizing::new(v.clone())))
+        }
+
+        async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+            self.storage
+                .lock()
+                .unwrap()
+                .insert(target_name.to_string(), value.to_string());
+            Ok(())
+        }
     }
 
     #[tokio::test]

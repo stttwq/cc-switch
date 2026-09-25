@@ -8,6 +8,11 @@ import {
 
 export const CODEX_OFFICIAL_PROVIDER_ID = "codex-official";
 
+/// 启动时从 live 配置自动导入的供应商。id 保持 "default"（凭据 target、
+/// 历史同步与回填逻辑都按该 id 工作，改名会丢数据），但展示名不再直用 id，
+/// 避免列表里出现一个叫 "default" 的供应商。
+export const IMPORTED_LIVE_PROVIDER_ID = "default";
+
 export type CodexOfficialIdentity = "native_login" | "api_key";
 
 const nonEmptyString = (value: unknown): boolean =>

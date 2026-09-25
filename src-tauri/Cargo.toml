@@ -1,6 +1,6 @@
 [package]
 name = "cc-switch"
-version = "2.2.8"
+version = "2.2.9"
 description = "The All-in-One Manager for Claude Code, Codex & Pi"
 authors = ["Jason Young"]
 license = "MIT"
