@@ -16,6 +16,17 @@ fn merge_settings_for_save(
     if incoming.s3_sync.is_none() {
         incoming.s3_sync = existing.s3_sync.clone();
     }
+    // 老前端或陈旧全量表单可能省略新增的终端字段；避免保存其他设置时清空它们。
+    // 用户清空自定义路径/参数时传空字符串，仍可正常保存并由读取端按默认处理。
+    if incoming.preferred_terminal.is_none() {
+        incoming.preferred_terminal = existing.preferred_terminal.clone();
+    }
+    if incoming.preferred_terminal_custom_path.is_none() {
+        incoming.preferred_terminal_custom_path = existing.preferred_terminal_custom_path.clone();
+    }
+    if incoming.preferred_terminal_custom_args.is_none() {
+        incoming.preferred_terminal_custom_args = existing.preferred_terminal_custom_args.clone();
+    }
     // local_migrations 是纯后端状态（迁移完成标记），前端没有合法的修改场景，
     // 无条件取现有值。若按 incoming 透传：后端清掉 marker（如关闭统一会话
     // 开关）后、前端 query 缓存刷新前的一次全量保存会把旧 marker 重放回来，
@@ -306,6 +317,50 @@ mod tests {
         assert_eq!(
             merged.webdav_sync.as_ref().map(|v| v.base_url.as_str()),
             Some("https://dav.example.com")
+        );
+    }
+
+    #[test]
+    fn save_settings_should_preserve_existing_terminal_settings_when_payload_omits_them() {
+        let existing = AppSettings {
+            preferred_terminal: Some("custom".to_string()),
+            preferred_terminal_custom_path: Some("C:\\Pebrel\\pebrel.exe".to_string()),
+            preferred_terminal_custom_args: Some("-e cmd /K {bat}".to_string()),
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(AppSettings::default(), &existing);
+
+        assert_eq!(merged.preferred_terminal.as_deref(), Some("custom"));
+        assert_eq!(
+            merged.preferred_terminal_custom_path.as_deref(),
+            Some("C:\\Pebrel\\pebrel.exe")
+        );
+        assert_eq!(
+            merged.preferred_terminal_custom_args.as_deref(),
+            Some("-e cmd /K {bat}")
+        );
+    }
+
+    #[test]
+    fn save_settings_should_keep_incoming_terminal_settings_when_present() {
+        let existing = AppSettings {
+            preferred_terminal: Some("custom".to_string()),
+            preferred_terminal_custom_path: Some("C:\\Old\\terminal.exe".to_string()),
+            ..AppSettings::default()
+        };
+        let incoming = AppSettings {
+            preferred_terminal: Some("wt".to_string()),
+            preferred_terminal_custom_path: None,
+            ..AppSettings::default()
+        };
+
+        let merged = merge_settings_for_save(incoming, &existing);
+
+        assert_eq!(merged.preferred_terminal.as_deref(), Some("wt"));
+        assert_eq!(
+            merged.preferred_terminal_custom_path.as_deref(),
+            Some("C:\\Old\\terminal.exe")
         );
     }
 

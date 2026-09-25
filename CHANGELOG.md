@@ -5,6 +5,25 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.7] - 2026-09-25
+
+### Changed
+
+- Windows MSI installs now store CC Switch data under the install directory. Existing user-profile data is copied on first launch and retained until full uninstall; upgrades preserve data, while full uninstall removes install-local data and the legacy default user-profile data directories. Custom data directories are left untouched.
+
+## [2.2.6] - 2026-09-25
+
+### Fixed
+
+- Prevented asynchronously loaded custom terminal paths from being replaced by an empty input draft after upgrading.
+
+## [2.2.5] - 2026-09-24
+
+### Fixed
+
+- Pi terminals now receive credentials for every enabled provider, allowing provider switching within a session.
+- Settings saves preserve terminal preferences omitted by stale or older forms; custom terminal launch failures now report an error instead of silently opening cmd.
+
 ## [2.2.4] - 2026-09-24
 
 ### Fixed

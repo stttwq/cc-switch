@@ -586,7 +586,7 @@
     "terminal": {
       "title": "首選終端機",
       "description": "選擇點擊終端機按鈕時使用的終端機應用程式",
-      "fallbackHint": "如果選擇的終端機不可用，將自動使用系統預設終端機",
+      "fallbackHint": "所選終端機啟動失敗時會顯示錯誤，不會自動切換到其他終端機",
       "options": {
         "macos": {
           "terminal": "Terminal.app",

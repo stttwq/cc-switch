@@ -363,6 +363,30 @@
           <Custom Action="LaunchApplication" After="InstallFinalize">AUTOLAUNCHAPP AND NOT Installed</Custom>
         </InstallExecuteSequence>
 
+        <!-- 完全卸载时清除安装目录数据和旧默认目录；版本升级跳过。自定义目录不删除。 -->
+        <CustomAction
+            Id="RemoveInstallData"
+            Return="ignore"
+            Directory="INSTALLDIR"
+            Execute="deferred"
+            Impersonate="yes"
+            ExeCommand="cmd.exe /c if exist &quot;[INSTALLDIR]data&quot; rmdir /s /q &quot;[INSTALLDIR]data&quot;" />
+        <CustomAction
+            Id="RemoveLegacyUserData"
+            Return="ignore"
+            Directory="SystemFolder"
+            Execute="deferred"
+            Impersonate="yes"
+            ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='SilentlyContinue'; $paths=@((Join-Path $env:USERPROFILE '.cc-switch')); if ($env:HOME) { $paths += Join-Path $env:HOME '.cc-switch' }; foreach ($p in ($paths | Select-Object -Unique)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }&quot;" />
+        <InstallExecuteSequence>
+            <Custom Action="RemoveInstallData" Before="InstallFinalize">
+                (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
+            </Custom>
+            <Custom Action="RemoveLegacyUserData" Before="InstallFinalize">
+                (REMOVE = "ALL") AND NOT UPGRADINGPRODUCTCODE
+            </Custom>
+        </InstallExecuteSequence>
+
         <!-- 真正卸载（非版本升级）时清掉运行时写入的资源管理器右键菜单；
              菜单键由 app 运行时创建，不属任何组件，WiX 无法自动回收，故用条件 CA 删除。
              条件与 DeleteUpdateTask 一致，避免升级时误删用户已启用的菜单。Return=ignore：未启用时键不存在也不阻断卸载。 -->

@@ -109,11 +109,9 @@ CC Switch 使用“通用配置片段”功能，在不同的供应商之间传�
 <details>
 <summary><strong>我的数据存储在哪里？</strong></summary>
 
-- **数据库**：`~/.cc-switch/cc-switch.db`（SQLite — 供应商、MCP、提示词、技能）
-- **本地设置**：`~/.cc-switch/settings.json`（设备级 UI 偏好设置）
-- **备份**：`~/.cc-switch/backups/`（自动轮换，保留最近 10 个）
-- **SKILLS**：`~/.cc-switch/skills/`（默认通过软链接连接到对应应用）
-- **技能备份**：`~/.cc-switch/skill-backups/`（卸载前自动创建，保留最近 20 个）
+- **Windows MSI 安装版数据**：`<安装目录>/data/`；首次启动从 `%USERPROFILE%\.cc-switch\` 复制旧数据，旧目录暂时保留。升级保留数据；完全卸载删除安装目录数据及旧默认用户数据目录。
+- **开发版及其他平台数据**：`~/.cc-switch/`，包含数据库、设备设置、备份、技能和日志。
+- **自定义应用配置目录**：继续使用用户指定位置；卸载不会自动删除。
 
 </details>
 
@@ -187,7 +185,7 @@ sha256sum -c SHA256SUMS                                          # 验完整性
 
 **核心设计模式**
 
-- **SSOT**（单一事实源）：所有数据存储在 `~/.cc-switch/cc-switch.db`（SQLite）
+- **SSOT**（单一事实源）：所有供应商与应用数据存储在应用数据目录的 `cc-switch.db`（SQLite）；Windows MSI 安装版位于 `<安装目录>/data/cc-switch.db`。
 - **双层存储**：SQLite 存储可同步数据，JSON 存储设备级设置
 - **双向同步**：切换时写入 live 文件，编辑当前供应商时从 live 回填
 - **原子写入**：临时文件 + 重命名模式防止配置损坏

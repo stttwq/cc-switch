@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Select,
@@ -106,6 +106,16 @@ export function TerminalSettings({
   // 输入框本地态：onBlur 才落盘，避免每个按键都触发一次设置保存。
   const [pathDraft, setPathDraft] = useState(customPath ?? "");
   const [argsDraft, setArgsDraft] = useState(customArgs ?? "");
+  const [pathDirty, setPathDirty] = useState(false);
+  const [argsDirty, setArgsDirty] = useState(false);
+
+  useEffect(() => {
+    if (!pathDirty) setPathDraft(customPath ?? "");
+  }, [customPath, pathDirty]);
+
+  useEffect(() => {
+    if (!argsDirty) setArgsDraft(customArgs ?? "");
+  }, [customArgs, argsDirty]);
 
   return (
     <section className="space-y-2">
@@ -137,10 +147,16 @@ export function TerminalSettings({
               className="w-[360px]"
               placeholder={t("settings.terminal.customPathPlaceholder")}
               value={pathDraft}
-              onChange={(e) => setPathDraft(e.target.value)}
-              onBlur={() =>
-                onCustomChange({ preferredTerminalCustomPath: pathDraft })
-              }
+              onChange={(e) => {
+                setPathDraft(e.target.value);
+                setPathDirty(true);
+              }}
+              onBlur={() => {
+                if (pathDirty) {
+                  onCustomChange({ preferredTerminalCustomPath: pathDraft });
+                  setPathDirty(false);
+                }
+              }}
             />
           </div>
           <div className="space-y-1">
@@ -151,10 +167,16 @@ export function TerminalSettings({
               className="w-[360px]"
               placeholder='-e cmd /K "{bat}"'
               value={argsDraft}
-              onChange={(e) => setArgsDraft(e.target.value)}
-              onBlur={() =>
-                onCustomChange({ preferredTerminalCustomArgs: argsDraft })
-              }
+              onChange={(e) => {
+                setArgsDraft(e.target.value);
+                setArgsDirty(true);
+              }}
+              onBlur={() => {
+                if (argsDirty) {
+                  onCustomChange({ preferredTerminalCustomArgs: argsDraft });
+                  setArgsDirty(false);
+                }
+              }}
             />
             <p className="text-xs text-muted-foreground">
               {t("settings.terminal.customArgsHint")}

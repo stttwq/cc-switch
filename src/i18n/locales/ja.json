@@ -586,7 +586,7 @@
     "terminal": {
       "title": "優先ターミナル",
       "description": "ターミナルボタンをクリックした時に使用するターミナルアプリを選択",
-      "fallbackHint": "選択したターミナルが利用できない場合、システムのデフォルトが使用されます",
+      "fallbackHint": "選択したターミナルの起動に失敗した場合、他のターミナルへ切り替えずエラーを表示します",
       "options": {
         "macos": {
           "terminal": "Terminal.app",

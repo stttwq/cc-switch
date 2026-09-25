@@ -205,6 +205,30 @@ pub fn get_app_config_dir() -> PathBuf {
         return custom;
     }
 
+    #[cfg(windows)]
+    if let Some(install_dir) = installed_data_dir() {
+        let legacy_dirs = legacy_data_dirs();
+        for (index, legacy_dir) in legacy_dirs.iter().enumerate() {
+            if path_is_within(legacy_dir, &install_dir) || path_is_within(&install_dir, legacy_dir)
+            {
+                continue;
+            }
+            if let Err(error) = migrate_legacy_data(
+                legacy_dir,
+                &install_dir,
+                &format!(".migrated-legacy-{index}"),
+            ) {
+                log::error!("迁移 CC Switch 数据到安装目录失败，继续使用旧目录: {error}");
+                return legacy_dirs
+                    .iter()
+                    .find(|dir| dir.join("cc-switch.db").exists())
+                    .cloned()
+                    .unwrap_or_else(|| legacy_dirs[0].clone());
+            }
+        }
+        return install_dir;
+    }
+
     let default_dir = get_home_dir().join(".cc-switch");
 
     // 兼容 v3.10.3：当用户环境存在 `HOME` 且与真实用户目录不同，
@@ -233,6 +257,76 @@ pub fn get_app_config_dir() -> PathBuf {
     }
 
     default_dir
+}
+
+#[cfg(windows)]
+fn installed_data_dir() -> Option<PathBuf> {
+    use winreg::enums::HKEY_CURRENT_USER;
+    use winreg::RegKey;
+
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let key = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey(r"Software\ccswitch\CC Switch")
+        .ok()?;
+    let install_dir: String = key.get_value("InstallDir").ok()?;
+    let install_dir = PathBuf::from(install_dir);
+    let exe_dir = normalize_path_lexically(&exe_dir);
+    let install_dir = normalize_path_lexically(&install_dir);
+    if !path_eq_lexical(&exe_dir, &install_dir) {
+        return None;
+    }
+    Some(install_dir.join("data"))
+}
+
+#[cfg(windows)]
+fn legacy_data_dirs() -> Vec<PathBuf> {
+    let mut paths = vec![get_home_dir().join(".cc-switch")];
+    if let Ok(home_env) = std::env::var("HOME") {
+        let home_env = home_env.trim();
+        if !home_env.is_empty() {
+            let legacy = PathBuf::from(home_env).join(".cc-switch");
+            if !paths.contains(&legacy) {
+                paths.push(legacy);
+            }
+        }
+    }
+    paths
+}
+
+#[cfg(windows)]
+fn migrate_legacy_data(
+    source: &Path,
+    destination: &Path,
+    marker_name: &str,
+) -> Result<(), std::io::Error> {
+    let marker = destination.join(marker_name);
+    if marker.exists() || !source.is_dir() {
+        return Ok(());
+    }
+
+    fs::create_dir_all(destination)?;
+    copy_missing_entries(source, destination)?;
+    fs::write(marker, b"ok")
+}
+
+#[cfg(windows)]
+fn copy_missing_entries(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    for entry in fs::read_dir(source)? {
+        let entry = entry?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let metadata = fs::symlink_metadata(&source_path)?;
+
+        if metadata.file_type().is_symlink() {
+            continue;
+        } else if metadata.is_dir() {
+            fs::create_dir_all(&destination_path)?;
+            copy_missing_entries(&source_path, &destination_path)?;
+        } else if !destination_path.exists() {
+            fs::copy(source_path, destination_path)?;
+        }
+    }
+    Ok(())
 }
 
 /// 获取应用配置文件路径
@@ -499,6 +593,38 @@ mod tests {
             "temporary files remain: {leftovers:?}"
         );
         std::fs::remove_file(path).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn migration_copies_missing_files_and_preserves_existing_destination() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("legacy");
+        let destination = temp.path().join("install-data");
+        fs::create_dir_all(source.join("backups")).unwrap();
+        fs::create_dir_all(&destination).unwrap();
+        fs::write(source.join("cc-switch.db"), b"legacy database").unwrap();
+        fs::write(source.join("backups").join("backup.zip"), b"backup").unwrap();
+        fs::write(destination.join("cc-switch.db"), b"newer database").unwrap();
+
+        migrate_legacy_data(&source, &destination, ".migration-test-marker").unwrap();
+
+        assert_eq!(
+            fs::read(destination.join("cc-switch.db")).unwrap(),
+            b"newer database"
+        );
+        assert_eq!(
+            fs::read(destination.join("backups").join("backup.zip")).unwrap(),
+            b"backup"
+        );
+        assert!(destination.join(".migration-test-marker").exists());
+        assert_eq!(
+            fs::read(source.join("cc-switch.db")).unwrap(),
+            b"legacy database"
+        );
+        fs::write(source.join("new-setting.json"), b"preserve existing target").unwrap();
+        migrate_legacy_data(&source, &destination, ".migration-test-marker").unwrap();
+        assert!(!destination.join("new-setting.json").exists());
     }
 
     #[test]

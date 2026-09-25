@@ -586,7 +586,7 @@
     "terminal": {
       "title": "首选终端",
       "description": "选择点击终端按钮时使用的终端应用",
-      "fallbackHint": "如果选择的终端不可用，将自动使用系统默认终端",
+      "fallbackHint": "所选终端启动失败时会显示错误，不会自动切换到其他终端",
       "options": {
         "macos": {
           "terminal": "Terminal.app",

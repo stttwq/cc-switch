@@ -586,7 +586,7 @@
     "terminal": {
       "title": "Preferred Terminal",
       "description": "Choose which terminal app to use when clicking the terminal button",
-      "fallbackHint": "If the selected terminal is unavailable, the system default will be used",
+      "fallbackHint": "If the selected terminal fails to start, an error is shown instead of switching terminals",
       "options": {
         "macos": {
           "terminal": "Terminal.app",

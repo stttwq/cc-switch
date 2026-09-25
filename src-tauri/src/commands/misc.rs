@@ -2953,14 +2953,40 @@ pub(crate) fn launch_provider_terminal(
     let config = &provider.settings_config;
     let mut env_vars = extract_env_vars_from_config(config, &app_type);
     let mut warnings = Vec::new();
-    let pairs = ProviderService::provider_env_pairs(state, &app_type, provider, &mut warnings)
-        .map_err(|e| format!("读取供应商凭据失败: {e}"))?;
+    let credentials = if app_type == AppType::Pi {
+        let pi_state = crate::services::pi_state::PiStateService::current(state)
+            .map_err(|e| format!("读取 Pi 启用供应商失败: {e}"))?;
+        let enabled_ids = pi_terminal_provider_ids(pi_state.enabled_provider_ids, &provider.id);
+        let mut all_pairs = Vec::new();
+        for enabled_id in enabled_ids {
+            let enabled_provider = providers
+                .get(&enabled_id)
+                .ok_or_else(|| format!("Pi 启用供应商 {enabled_id} 不存在于配置列表"))?;
+            let pairs = ProviderService::provider_env_pairs(
+                state,
+                &app_type,
+                enabled_provider,
+                &mut warnings,
+            )
+            .map_err(|e| format!("读取 Pi 供应商 {enabled_id} 凭据失败: {e}"))?;
+            all_pairs.extend(pairs);
+        }
+        all_pairs
+    } else {
+        ProviderService::provider_env_pairs(state, &app_type, provider, &mut warnings)
+            .map_err(|e| format!("读取供应商凭据失败: {e}"))?
+    };
     for warning in warnings {
         log::warn!("launch_provider_terminal 凭据投递告警: {warning}");
     }
-    for (name, value) in pairs {
+    for (name, value) in credentials {
         let value = value.to_string();
         match env_vars.iter_mut().find(|(k, _)| *k == name) {
+            Some(slot) if app_type == AppType::Pi && slot.1 != value => {
+                return Err(format!(
+                    "Pi 供应商环境变量名称冲突，无法安全注入凭据：{name}"
+                ));
+            }
             Some(slot) => slot.1 = value,
             None => env_vars.push((name, value)),
         }
@@ -2980,6 +3006,13 @@ pub(crate) fn launch_provider_terminal(
         .map_err(|e| format!("启动终端失败: {e}"))?;
 
     Ok(true)
+}
+
+fn pi_terminal_provider_ids(mut enabled_ids: Vec<String>, clicked_id: &str) -> Vec<String> {
+    if !enabled_ids.iter().any(|id| id == clicked_id) {
+        enabled_ids.push(clicked_id.to_string());
+    }
+    enabled_ids
 }
 
 /// 从提供商配置中提取环境变量
@@ -3165,17 +3198,7 @@ fn launch_windows_terminal(
         _ => run_windows_start_command(&["cmd", "/K", &bat_path], "cmd", env_vars), // "cmd" or default
     };
 
-    // If preferred terminal fails and it's not the default, try cmd as fallback
-    if result.is_err() && terminal != "cmd" {
-        log::warn!(
-            "首选终端 {} 启动失败，回退到 cmd: {:?}",
-            terminal,
-            result.as_ref().err()
-        );
-        return run_windows_start_command(&["cmd", "/K", &bat_path], "cmd", env_vars);
-    }
-
-    result
+    result.map_err(|error| format!("首选终端 {terminal} 启动失败，不会静默切换到 cmd：{error}"))
 }
 
 /// POSIX 单引号转义：包裹为 `'...'`，内部单引号用 `'"'"'` 拼接。
@@ -3320,6 +3343,18 @@ pub async fn set_window_theme(window: tauri::Window, theme: String) -> Result<()
 mod tests {
     use super::*;
     use std::path::{Path, PathBuf};
+
+    #[test]
+    fn pi_terminal_credentials_cover_enabled_providers_and_clicked_provider_once() {
+        assert_eq!(
+            pi_terminal_provider_ids(vec!["a".to_string(), "b".to_string()], "c"),
+            vec!["a", "b", "c"]
+        );
+        assert_eq!(
+            pi_terminal_provider_ids(vec!["a".to_string(), "b".to_string()], "b"),
+            vec!["a", "b"]
+        );
+    }
 
     #[test]
     fn cli_command_for_maps_each_app() {
