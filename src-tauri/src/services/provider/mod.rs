@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
-use crate::secrets::{ProviderSecrets, SecretExtractor, SecretTarget};
+use crate::secrets::{ProviderSecrets, SecretExtractor};
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 use std::str::FromStr;
@@ -783,13 +783,13 @@ impl ProviderService {
         app_type: &AppType,
         provider_id: &str,
     ) -> Result<bool, AppError> {
-        let key = futures::executor::block_on(state.secrets.retrieve(
-            &crate::secrets::SecretTarget::provider_api_key(
-                app_type.clone(),
-                provider_id.to_string(),
-            ),
-        ))?;
-        Ok(key.is_some())
+        // §6.2/4.3：查 secret_refs 字段名清单是否含 api_key，不碰 vault / store。
+        let has = state
+            .db
+            .get_secret_ref_fields(app_type.as_str(), provider_id)?
+            .map(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY))
+            .unwrap_or(false);
+        Ok(has)
     }
 
     /// 缺陷 D-4：把注册表里「按我们的命名规则、但库里没有登记」的用户环境变量认领回来。
@@ -1655,15 +1655,16 @@ impl ProviderService {
         };
 
         if need_api_key && incoming.api_key.is_none() {
+            // §6.6/4.3：改查 secret_refs 字段名，不调 vault / store。
             let stored = candidate_ids.iter().any(|id| {
-                futures::executor::block_on(
-                    state
-                        .secrets
-                        .get(&SecretTarget::provider_api_key(app_type.clone(), *id)),
-                )
-                .ok()
-                .flatten()
-                .is_some()
+                state
+                    .db
+                    .get_secret_ref_fields(app_type.as_str(), id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|fields| {
+                        fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY)
+                    })
             });
             if !stored {
                 return Err(AppError::localized(
@@ -1691,15 +1692,16 @@ impl ProviderService {
                 });
 
         if need_base_url && incoming.base_url.is_none() && !has_model_level_base_url {
+            // §6.6/4.3：改查 secret_refs 字段名。
             let stored = candidate_ids.iter().any(|id| {
-                futures::executor::block_on(
-                    state
-                        .secrets
-                        .retrieve(&SecretTarget::provider_base_url(app_type.clone(), *id)),
-                )
-                .ok()
-                .flatten()
-                .is_some()
+                state
+                    .db
+                    .get_secret_ref_fields(app_type.as_str(), id)
+                    .ok()
+                    .flatten()
+                    .is_some_and(|fields| {
+                        fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL)
+                    })
             });
             if !stored {
                 return Err(AppError::localized(
@@ -1857,6 +1859,10 @@ pub(super) fn delete_provider_secrets(state: &AppState, app_type: &AppType, id: 
     if let Err(e) = state.vault.delete(&group) {
         log::warn!("删除供应商凭据失败 {}/{id}: {e}", app_type.as_str());
     }
+    // §4.3：同步抹掉引用行（best-effort）。
+    if let Err(e) = state.db.delete_secret_ref(app_type.as_str(), id) {
+        log::warn!("删除 secret_refs 失败 {}/{id}: {e}", app_type.as_str());
+    }
 }
 
 fn parse_secret_target(target: &str) -> Option<crate::secrets::SecretTarget> {
@@ -1932,7 +1938,15 @@ fn store_provider_bundle(
         // 无密钥可写（且无旧值）：与旧的“只增不删”行为一致，什么都不写。
         return Ok(());
     }
-    state.vault.put(&group, &bundle)?;
+    let vref = state.vault.put(&group, &bundle)?;
+    // §4.3：整包写入后登记引用（只字段名，不含值），列表/校验/删除据此零 vault 往返。
+    state.db.upsert_secret_ref(
+        app_type.as_str(),
+        provider_id,
+        &vref.vault_id,
+        &vref.item_id,
+        &vref.fields,
+    )?;
     Ok(())
 }
 
@@ -1946,7 +1960,7 @@ pub struct ProviderSortUpdate {
 #[cfg(test)]
 mod required_secret_tests {
     use super::*;
-    use crate::secrets::{InMemorySecretStore, SecretTarget};
+    use crate::secrets::InMemorySecretStore;
     use serde_json::json;
     use std::sync::Arc;
 
@@ -1982,12 +1996,12 @@ mod required_secret_tests {
             "第三方卡缺 key 必须拒绝"
         );
 
-        // 密钥已在凭据管理器里（编辑时前端不回显、也不重发）→ 放行
-        futures::executor::block_on(state.secrets.store(
-            &SecretTarget::provider_api_key(app.clone(), "bare"),
-            "sk-ant-x",
-        ))
-        .expect("store key");
+        // 密钥已在保险箱里（编辑时前端不回显、也不重发）→ 放行。
+        // §4.3：存在性现由 secret_refs 判定。
+        state
+            .db
+            .upsert_secret_ref(app.as_str(), "bare", "", "provider/claude/bare", &["api_key".to_string()])
+            .expect("upsert ref");
         assert!(check(&state, &app, &bare).is_ok(), "已存凭据必须放行编辑");
 
         // Claude Official 预设的 env 就是空的
@@ -2044,12 +2058,11 @@ mod required_secret_tests {
         );
         assert!(check(&state, &app, &model_level).is_ok());
 
-        // 端点已在凭据管理器里
-        futures::executor::block_on(state.secrets.store(
-            &SecretTarget::provider_base_url(app.clone(), "pi-stored"),
-            "https://pi.example.com",
-        ))
-        .expect("store base url");
+        // 端点已在保险箱里→ §4.3 存在性由 secret_refs 判定。
+        state
+            .db
+            .upsert_secret_ref(app.as_str(), "pi-stored", "", "provider/pi/pi-stored", &["base_url".to_string()])
+            .expect("upsert ref");
         let stored = provider_with("pi-stored", None, json!({"apiKey": "k"}));
         assert!(check(&state, &app, &stored).is_ok());
     }

@@ -140,6 +140,23 @@ impl<'a> CredentialMigrator<'a> {
             .await?;
         }
 
+        // §4.3：迁移写入凭据同时登记 secret_refs（列表/校验据此，零 vault 往返）。
+        // 在下面获取 conn 锁之前做，避免与同笔事务重入锁。
+        for row in &pending {
+            let fields = crate::secrets::SecretBundle::from_provider_secrets(&row.secrets)
+                .field_names();
+            if fields.is_empty() {
+                continue;
+            }
+            let item_id = format!("provider/{}/{}", row.app_type.as_str(), row.provider.id);
+            self.db.upsert_secret_ref(
+                row.app_type.as_str(),
+                &row.provider.id,
+                "",
+                &item_id,
+                &fields,
+            )?;
+        }
         {
             let mut targets = crate::secrets::load_known_targets(self.db).unwrap_or_else(|e| {
                 log::warn!("读取 known_secret_targets 失败，按空集合重建: {e}");

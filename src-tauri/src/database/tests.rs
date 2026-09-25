@@ -596,6 +596,7 @@ fn create_tables_does_not_rebuild_v19_dropped_tables() {
         "profiles",
         "prompts",
         "providers",
+        "secret_refs",
         "settings",
         "skill_repos",
         "skills",

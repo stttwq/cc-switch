@@ -136,6 +136,21 @@ impl Database {
             let _ = conn.execute("DELETE FROM settings WHERE key = 'current_profile_id'", []);
         }
 
+        // 20. secret_refs 表（§4.3）：凭据条目引用（vault/item id + 字段名清单），不存值。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS secret_refs (
+                app          TEXT NOT NULL,
+                provider_id  TEXT NOT NULL,
+                vault_id     TEXT NOT NULL,
+                item_id      TEXT NOT NULL,
+                fields       TEXT NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                PRIMARY KEY (app, provider_id)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         Ok(())
     }
 
@@ -259,6 +274,11 @@ impl Database {
                         log::info!("迁移数据库从 v18 到 v19（触发凭据迁移）");
                         Self::migrate_v18_to_v19(conn)?;
                         Self::set_user_version(conn, 19)?;
+                    }
+                    19 => {
+                        log::info!("迁移数据库从 v19 到 v20（secret_refs 引用表 + 从 known_secret_targets 回填）");
+                        Self::migrate_v19_to_v20(conn)?;
+                        Self::set_user_version(conn, 20)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1576,6 +1596,83 @@ impl Database {
         .map_err(|e| AppError::Database(format!("设置 live 重写触发器失败: {e}")))?;
 
         log::info!("v18→v19: 废弃表/列已清，secrets_migration_pending=1，live_reapply_pending=1");
+        Ok(())
+    }
+
+    /// v19 -> v20 迁移（§4.3）：建 secret_refs 引用表，并从 known_secret_targets 回填，
+    /// 让升级前已有凭据的安装立即能在列表/校验/删除时零 vault 往返。
+    fn migrate_v19_to_v20(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS secret_refs (
+                app          TEXT NOT NULL,
+                provider_id  TEXT NOT NULL,
+                vault_id     TEXT NOT NULL,
+                item_id      TEXT NOT NULL,
+                fields       TEXT NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                PRIMARY KEY (app, provider_id)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("创建 secret_refs 表失败: {e}")))?;
+
+        // 从 known_secret_targets 回填（只含供应商级 target；app 级同步密钥不入名册）。
+        let raw: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'known_secret_targets'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
+        let Some(raw) = raw.filter(|s| !s.is_empty()) else {
+            return Ok(());
+        };
+        let targets: Vec<String> = serde_json::from_str(&raw).unwrap_or_default();
+        // (app, provider_id) -> 字段名集（稳定顺序）
+        let mut grouped: std::collections::BTreeMap<(String, String), Vec<String>> =
+            std::collections::BTreeMap::new();
+        for target in targets {
+            let Some(rest) = target.strip_prefix("cc-switch/v1/provider/") else {
+                continue;
+            };
+            let mut parts = rest.splitn(3, '/');
+            let (Some(app), Some(pid), Some(field_raw)) =
+                (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let field = if let Some(var) = field_raw.strip_prefix("env/") {
+                if var.is_empty() {
+                    continue;
+                }
+                format!("env.{var}")
+            } else if field_raw == "api_key" || field_raw == "base_url" {
+                field_raw.to_string()
+            } else {
+                continue;
+            };
+            let entry = grouped
+                .entry((app.to_string(), pid.to_string()))
+                .or_default();
+            if !entry.contains(&field) {
+                entry.push(field);
+            }
+        }
+
+        let now = chrono::Utc::now().timestamp();
+        for ((app, pid), fields) in grouped {
+            let item_id = format!("provider/{app}/{pid}");
+            let fields_json = serde_json::to_string(&fields)
+                .map_err(|e| AppError::Database(format!("secret_refs 回填序列化失败: {e}")))?;
+            conn.execute(
+                "INSERT OR REPLACE INTO secret_refs
+                 (app, provider_id, vault_id, item_id, fields, updated_at)
+                 VALUES (?1, ?2, '', ?3, ?4, ?5)",
+                params![app, pid, item_id, fields_json, now],
+            )
+            .map_err(|e| AppError::Database(format!("回填 secret_refs 失败: {e}")))?;
+        }
+        log::info!("v19→v20: secret_refs 已建并从 known_secret_targets 回填");
         Ok(())
     }
 
@@ -3016,6 +3113,53 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(pending, "1", "应设置凭据迁移待执行标志");
+        Ok(())
+    }
+
+    #[test]
+    fn migrate_v19_to_v20_backfills_secret_refs_from_known_targets() -> Result<(), AppError> {
+        let conn = Connection::open_in_memory()?;
+        Database::create_tables_on_conn(&conn)?;
+        // 模拟升级前已有 known_secret_targets（供应商级），回到 v19。
+        let targets = serde_json::json!([
+            "cc-switch/v1/provider/claude/p1/api_key",
+            "cc-switch/v1/provider/claude/p1/base_url",
+            "cc-switch/v1/provider/claude/p1/env/FOO",
+            "cc-switch/v1/provider/codex/c1/api_key",
+            "cc-switch/v1/app/webdav/password"
+        ])
+        .to_string();
+        conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES ('known_secret_targets', ?1)",
+            params![targets],
+        )?;
+        Database::set_user_version(&conn, 19)?;
+
+        Database::apply_schema_migrations_on_conn(&conn)?;
+        assert_eq!(Database::get_user_version(&conn)?, SCHEMA_VERSION);
+
+        // claude/p1 应回填三个字段；app 级 target 不入名册。
+        let fields: String = conn.query_row(
+            "SELECT fields FROM secret_refs WHERE app='claude' AND provider_id='p1'",
+            [],
+            |row| row.get(0),
+        )?;
+        let parsed: Vec<String> = serde_json::from_str(&fields).unwrap();
+        assert!(parsed.contains(&"api_key".to_string()));
+        assert!(parsed.contains(&"base_url".to_string()));
+        assert!(parsed.contains(&"env.FOO".to_string()));
+
+        let codex_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM secret_refs WHERE app='codex' AND provider_id='c1'",
+            [],
+            |row| row.get(0),
+        )?;
+        assert_eq!(codex_count, 1);
+
+        // app 级 target 不产生供应商引用行。
+        let total: i64 =
+            conn.query_row("SELECT COUNT(*) FROM secret_refs", [], |row| row.get(0))?;
+        assert_eq!(total, 2, "只回填供应商级引用（claude/p1 + codex/c1）");
         Ok(())
     }
 }
