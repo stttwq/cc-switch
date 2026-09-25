@@ -33,6 +33,13 @@
         <!-- reinstall all files; rewrite all registry entries; reinstall all shortcuts -->
         <Property Id="REINSTALLMODE" Value="amus" />
 
+        <!-- 关闭回滚：MSI 为回滚会在 Config.Msi 生成备份文件（*.rbf）并写其安全描述符。
+             本包为 perUser/limited（非提升），且用户会把程序装到非系统盘（如 D:），
+             而 MSI 会把该盘的 Config.Msi 重置为仅 SYSTEM+Administrators 可访问，
+             导致写 .rbf 安全描述符失败并报错误 1926（无法设置文件安全 / 错误 5）。
+             关闭回滚后不再生成 .rbf，该错误彻底消失。 -->
+        <Property Id="DisableRollback" Value="1" />
+
         <!-- Auto launch app after installation, useful for passive mode which usually used in updates -->
         <Property Id="AUTOLAUNCHAPP" Secure="yes" />
         <!-- Property to forward cli args to the launched app to not lose those of the pre-update instance -->
@@ -363,20 +370,21 @@
           <Custom Action="LaunchApplication" After="InstallFinalize">AUTOLAUNCHAPP AND NOT Installed</Custom>
         </InstallExecuteSequence>
 
-        <!-- 完全卸载时清除安装目录数据和旧默认目录；版本升级跳过。自定义目录不删除。 -->
+        <!-- 完全卸载时清除安装目录数据和旧默认目录；版本升级跳过。自定义目录不删除。
+             注意：这三个 CA 必须用 immediate。deferred 自定义操作会由 Windows Installer 生成回滚脚本
+             （Config.Msi\*.rbf），非提升安装下写该脚本的安全描述符会失败并报错误 1926；
+             immediate 不生成回滚数据，且它们本就是 Return="ignore"（无回滚语义），因此无损失。 -->
         <CustomAction
             Id="RemoveInstallData"
             Return="ignore"
             Directory="INSTALLDIR"
-            Execute="deferred"
-            Impersonate="yes"
+            Execute="immediate"
             ExeCommand="cmd.exe /c if exist &quot;[INSTALLDIR]data&quot; rmdir /s /q &quot;[INSTALLDIR]data&quot;" />
         <CustomAction
             Id="RemoveLegacyUserData"
             Return="ignore"
-            Directory="SystemFolder"
-            Execute="deferred"
-            Impersonate="yes"
+            Directory="INSTALLDIR"
+            Execute="immediate"
             ExeCommand="powershell.exe -NoProfile -ExecutionPolicy Bypass -Command &quot;$ErrorActionPreference='SilentlyContinue'; $paths=@((Join-Path $env:USERPROFILE '.cc-switch')); if ($env:HOME) { $paths += Join-Path $env:HOME '.cc-switch' }; foreach ($p in ($paths | Select-Object -Unique)) { if (Test-Path -LiteralPath $p) { Remove-Item -LiteralPath $p -Recurse -Force } }&quot;" />
         <InstallExecuteSequence>
             <Custom Action="RemoveInstallData" Before="InstallFinalize">
@@ -394,8 +402,7 @@
             Id="RemoveShellMenu"
             Return="ignore"
             Directory="INSTALLDIR"
-            Execute="deferred"
-            Impersonate="yes"
+            Execute="immediate"
             ExeCommand="cmd.exe /c reg delete &quot;HKCU\Software\Classes\Directory\shell\CCSwitchTerminal&quot; /f &amp; reg delete &quot;HKCU\Software\Classes\Directory\Background\shell\CCSwitchTerminal&quot; /f" />
         <InstallExecuteSequence>
             <Custom Action="RemoveShellMenu" Before="InstallFinalize">

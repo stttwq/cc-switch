@@ -5,6 +5,14 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.2.8] - 2026-09-25
+
+### Fixed
+
+- **Windows MSI upgrades no longer fail with error 1926 ("failed to set file security").** The installer is `perUser`/`limited` (non-elevated), and Windows Installer writes rollback backups (`Config.Msi\*.rbf`) on the drive where the app is installed. On a non-system drive, MSI resets that drive's `Config.Msi` ACL to SYSTEM + Administrators only, so the non-elevated install process cannot set the backup file's security descriptor and reports 1926 — surfacing as a permission prompt on every upgrade. Rollback is now disabled in the package (`DisableRollback`), so no `.rbf` files are created and the error is gone.
+- MSI bundling no longer fails with `CNDL0107`/`LGHT0094`: the uninstall cleanup custom action referenced an undeclared `SystemFolder` directory.
+- The three uninstall-cleanup custom actions now use `Execute="immediate"` instead of `deferred`. Deferred actions generate rollback scripts in `Config.Msi`, which is the same non-elevated path that produced 1926. These actions were already `Return="ignore"` (no rollback semantics), so nothing is lost.
+
 ## [2.2.7] - 2026-09-25
 
 ### Changed
