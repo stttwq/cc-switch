@@ -108,11 +108,11 @@ async fn run_auto_sync_upload(
     };
 
     let state = crate::store::get_app_state(app)?;
-    let secrets = state.secrets.clone();
+    let creds = crate::secrets::fetch_sync_credentials(&state.vault)?;
     let kek_cache = state.sync_kek.clone();
     let result = s3_sync::run_with_sync_lock(s3_sync::upload(
         db,
-        &secrets,
+        &creds,
         &mut sync_settings,
         &kek_cache,
     ))

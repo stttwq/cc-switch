@@ -2,6 +2,7 @@
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
+use zeroize::Zeroizing;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
@@ -26,6 +27,8 @@ pub async fn secrets_export_via_dialog<R: tauri::Runtime>(
     passphrase: String,
     state: State<'_, AppState>,
 ) -> Result<Option<Value>, String> {
+    // 口令永不落盘：立即 move 进 Zeroizing，函数返回时自动抹除内存。
+    let passphrase = Zeroizing::new(passphrase);
     let default_name = format!(
         "cc-switch-secrets-{}.json",
         chrono::Local::now().format("%Y%m%d")
@@ -42,7 +45,7 @@ pub async fn secrets_export_via_dialog<R: tauri::Runtime>(
 
     let app_version = app.package_info().version.to_string();
     let (bytes, report) =
-        crate::secrets::portable::export(state.secrets.as_ref(), &passphrase, &app_version)
+        crate::secrets::portable::export(state.secrets.as_ref(), passphrase.as_str(), &app_version)
             .await
             .map_err(|e| e.to_string())?;
 
@@ -68,6 +71,8 @@ pub async fn secrets_import_via_dialog<R: tauri::Runtime>(
     passphrase: String,
     state: State<'_, AppState>,
 ) -> Result<Option<Value>, String> {
+    // 口令永不落盘：立即 move 进 Zeroizing，函数返回时自动抹除内存。
+    let passphrase = Zeroizing::new(passphrase);
     let Some(source) = app
         .dialog()
         .file()
@@ -80,7 +85,7 @@ pub async fn secrets_import_via_dialog<R: tauri::Runtime>(
     let source_path = PathBuf::from(source.to_string());
     let bytes = std::fs::read(&source_path).map_err(|e| format!("读取便携包失败: {e}"))?;
 
-    let report = crate::secrets::portable::import(state.secrets.as_ref(), &bytes, &passphrase)
+    let report = crate::secrets::portable::import(state.secrets.as_ref(), &bytes, passphrase.as_str())
         .await
         .map_err(|e| e.to_string())?;
 

@@ -534,7 +534,7 @@ pub(crate) struct E2eRemoteInfo {
 /// 解析 v3 外层 manifest：兼容判定只依赖明文；口令可用时顺带解出设备名/时间做预览，
 /// 解不出（未设/错口令）也照常返回摘要——下载预览不该被口令挡住。
 pub(crate) async fn e2e_describe_remote(
-    secrets: &std::sync::Arc<dyn crate::secrets::SecretStore>,
+    secrets: &crate::secrets::SyncCredentials,
     outer_bytes: &[u8],
 ) -> E2eRemoteInfo {
     let outer = match parse_e2e_outer_manifest(outer_bytes) {
@@ -551,25 +551,24 @@ pub(crate) async fn e2e_describe_remote(
         }
     };
     let compatible = outer.db_compat_version == DB_COMPAT_VERSION;
-    let (device_name, created_at) =
-        match crate::secrets::sync_secrets::restore_sync_passphrase(secrets).await {
-            Ok(Some(passphrase)) => {
-                match crate::services::sync_e2e::derive_kek(&passphrase, &outer.kdf) {
-                    Ok(kek) => {
-                        match crate::services::sync_e2e::open_manifest_with_kek(outer.clone(), &kek)
-                        {
-                            Ok(opened) => (
-                                Some(opened.inner.device_name),
-                                Some(opened.inner.created_at),
-                            ),
-                            Err(_) => (None, None),
-                        }
+    let (device_name, created_at) = match secrets.e2e_passphrase.clone() {
+        Some(passphrase) => {
+            match crate::services::sync_e2e::derive_kek(&passphrase, &outer.kdf) {
+                Ok(kek) => {
+                    match crate::services::sync_e2e::open_manifest_with_kek(outer.clone(), &kek)
+                    {
+                        Ok(opened) => (
+                            Some(opened.inner.device_name),
+                            Some(opened.inner.created_at),
+                        ),
+                        Err(_) => (None, None),
                     }
-                    Err(_) => (None, None),
                 }
+                Err(_) => (None, None),
             }
-            _ => (None, None),
-        };
+        }
+        _ => (None, None),
+    };
     E2eRemoteInfo {
         device_name,
         created_at,
@@ -583,10 +582,11 @@ pub(crate) async fn e2e_describe_remote(
 /// 读取本机同步口令；未设置时给出可操作错误（口令永不上上传，方案 2.4.2）。
 /// 两个传输层共用。
 pub(crate) async fn require_sync_passphrase(
-    secrets: &std::sync::Arc<dyn crate::secrets::SecretStore>,
+    secrets: &crate::secrets::SyncCredentials,
 ) -> Result<zeroize::Zeroizing<String>, AppError> {
-    crate::secrets::sync_secrets::restore_sync_passphrase(secrets)
-        .await?
+    secrets
+        .e2e_passphrase
+        .clone()
         .ok_or_else(|| {
             localized(
                 "sync.e2e.passphrase_required",

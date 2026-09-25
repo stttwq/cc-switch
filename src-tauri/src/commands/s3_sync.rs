@@ -99,7 +99,8 @@ pub async fn s3_test_connection(
         }
         _ => None,
     };
-    s3_sync_service::check_connection(&state.secrets, &settings, override_credentials)
+    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    s3_sync_service::check_connection(&creds, &settings, override_credentials)
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({
@@ -111,13 +112,13 @@ pub async fn s3_test_connection(
 #[tauri::command]
 pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
-    let secrets = state.secrets.clone();
+    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
     let kek_cache = state.sync_kek.clone();
     let mut settings = require_enabled_s3_settings()?;
 
     let result = run_with_s3_lock(s3_sync_service::upload(
         &db,
-        &secrets,
+        &creds,
         &mut settings,
         &kek_cache,
     ))
@@ -133,7 +134,7 @@ pub async fn s3_sync_download(
     allow_rollback: Option<bool>,
 ) -> Result<Value, String> {
     let db = state.db.clone();
-    let secrets = state.secrets.clone();
+    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
     let kek_cache = state.sync_kek.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_s3_settings()?;
@@ -144,7 +145,7 @@ pub async fn s3_sync_download(
     let sync_result = run_download_with_s3_lock(
         s3_sync_service::download(
             &db,
-            &secrets,
+            &creds,
             &mut settings,
             &kek_cache,
             allow_rollback.unwrap_or(false),
@@ -184,12 +185,11 @@ pub async fn s3_sync_save_settings(
     #[allow(non_snake_case)] secretAccessKey: Option<String>,
 ) -> Result<Value, String> {
     // 三态（§5.2.5）：None = 未触碰，保持现值；Some("") = 清空并删除该条；Some(v) = 写入。
-    crate::secrets::extract_s3_credentials(
-        &state.secrets,
+    crate::secrets::store_s3_credentials(
+        &state.vault,
         accessKeyId.as_deref(),
         secretAccessKey.as_deref(),
     )
-    .await
     .map_err(|e| e.to_string())?;
 
     let existing = settings::get_s3_sync_settings();
@@ -211,9 +211,9 @@ pub async fn s3_sync_save_settings(
 
 #[tauri::command]
 pub async fn s3_sync_fetch_remote_info(state: State<'_, AppState>) -> Result<Value, String> {
-    let secrets = state.secrets.clone();
+    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
     let settings = require_enabled_s3_settings()?;
-    let info = s3_sync_service::fetch_remote_info(&secrets, &settings)
+    let info = s3_sync_service::fetch_remote_info(&creds, &settings)
         .await
         .map_err(|e| e.to_string())?;
     Ok(info.unwrap_or(json!({ "empty": true })))

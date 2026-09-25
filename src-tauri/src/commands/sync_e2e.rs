@@ -9,7 +9,7 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::error::AppError;
-use crate::secrets::sync_secrets::{extract_sync_passphrase, restore_sync_passphrase};
+use crate::secrets::{fetch_sync_credentials, store_sync_passphrase};
 use crate::settings;
 use crate::store::AppState;
 
@@ -20,8 +20,7 @@ pub async fn sync_e2e_set_passphrase(
     state: State<'_, AppState>,
     passphrase: String,
 ) -> Result<Value, String> {
-    let stored = extract_sync_passphrase(&state.secrets, Some(&passphrase))
-        .await
+    let stored = store_sync_passphrase(&state.vault, Some(&passphrase))
         .map_err(|e| e.to_string())?;
     // 口令变了（或删了）→ 缓存的 KEK 立即失效。
     state.sync_kek.invalidate();
@@ -31,9 +30,9 @@ pub async fn sync_e2e_set_passphrase(
 /// 读取本机加密状态：两传输是否启用、是否已设口令、设备级序号。
 #[tauri::command]
 pub async fn sync_e2e_get_status(state: State<'_, AppState>) -> Result<Value, String> {
-    let passphrase_set = restore_sync_passphrase(&state.secrets)
-        .await
+    let passphrase_set = fetch_sync_credentials(&state.vault)
         .map_err(|e| e.to_string())?
+        .e2e_passphrase
         .is_some();
     let webdav = settings::get_webdav_sync_settings();
     let s3 = settings::get_s3_sync_settings();
@@ -67,9 +66,9 @@ pub async fn sync_e2e_set_enabled(
     allow_insecure: Option<bool>,
 ) -> Result<Value, String> {
     if enabled
-        && restore_sync_passphrase(&state.secrets)
-            .await
+        && fetch_sync_credentials(&state.vault)
             .map_err(|e| e.to_string())?
+            .e2e_passphrase
             .is_none()
     {
         return Err(AppError::localized(
@@ -127,9 +126,8 @@ pub async fn sync_e2e_reset_remote(
     transport: String,
     confirm_passphrase: String,
 ) -> Result<Value, String> {
-    let stored = restore_sync_passphrase(&state.secrets)
-        .await
-        .map_err(|e| e.to_string())?;
+    let creds = fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let stored = creds.e2e_passphrase.clone();
     let stored = stored.ok_or_else(|| {
         AppError::localized(
             "sync.e2e.passphrase_required",
@@ -151,7 +149,7 @@ pub async fn sync_e2e_reset_remote(
         "webdav" => {
             let settings = settings::get_webdav_sync_settings()
                 .ok_or_else(|| "WebDAV 同步未配置".to_string())?;
-            crate::services::webdav_sync::reset_remote_e2e(&state.secrets, &settings)
+            crate::services::webdav_sync::reset_remote_e2e(&creds, &settings)
                 .await
                 .map_err(|e| e.to_string())?;
             if let Some(mut s) = settings::get_webdav_sync_settings() {
@@ -164,7 +162,7 @@ pub async fn sync_e2e_reset_remote(
         "s3" => {
             let settings =
                 settings::get_s3_sync_settings().ok_or_else(|| "S3 同步未配置".to_string())?;
-            crate::services::s3_sync::reset_remote_e2e(&state.secrets, &settings)
+            crate::services::s3_sync::reset_remote_e2e(&creds, &settings)
                 .await
                 .map_err(|e| e.to_string())?;
             if let Some(mut s) = settings::get_s3_sync_settings() {
@@ -193,18 +191,19 @@ pub async fn sync_e2e_delete_legacy_remote(
     state: State<'_, AppState>,
     transport: String,
 ) -> Result<Value, String> {
+    let creds = fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
     match transport.as_str() {
         "webdav" => {
             let settings = settings::get_webdav_sync_settings()
                 .ok_or_else(|| "WebDAV 同步未配置".to_string())?;
-            crate::services::webdav_sync::delete_legacy_remote(&state.secrets, &settings)
+            crate::services::webdav_sync::delete_legacy_remote(&creds, &settings)
                 .await
                 .map_err(|e| e.to_string())?;
         }
         "s3" => {
             let settings =
                 settings::get_s3_sync_settings().ok_or_else(|| "S3 同步未配置".to_string())?;
-            crate::services::s3_sync::delete_legacy_remote(&state.secrets, &settings)
+            crate::services::s3_sync::delete_legacy_remote(&creds, &settings)
                 .await
                 .map_err(|e| e.to_string())?;
         }

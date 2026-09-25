@@ -73,7 +73,7 @@ pub(super) fn add(
     }
 
     let live_config = provider.settings_config.clone();
-    strip_and_store_pi_secrets(state, &mut provider)?;
+    strip_and_store_pi_secrets(state, &mut provider, false)?;
 
     let native_inserted = if add_to_live {
         crate::pi_config::insert_pi_provider(&provider.id, &live_config)?
@@ -118,7 +118,7 @@ pub(super) fn update(
     ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
 
     let live_config = provider.settings_config.clone();
-    strip_and_store_pi_secrets(state, &mut provider)?;
+    strip_and_store_pi_secrets(state, &mut provider, true)?;
 
     // 缺陷 D-1：live 节点只留 `$CC_SWITCH_PI_<ID>_API_KEY` 引用，编辑密钥后不重投该变量
     // 就会继续解析到旧 key。次序沿用 enable：②投变量 → ③写节点；节点本就不在 models.json
@@ -269,8 +269,6 @@ fn sync_native_locked(
         let previous_name = provider.name.clone();
         let previous_config = provider.settings_config.clone();
         merge_native_config(&mut provider, config.clone());
-        let extractor =
-            SecretExtractor::new(state.secrets.as_ref(), AppType::Pi).with_db(state.db.as_ref());
         let extracted =
             SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
         let live_rewritten =
@@ -281,8 +279,13 @@ fn sync_native_locked(
         if live_rewritten != *config {
             match crate::pi_config::replace_pi_provider(id, config, &live_rewritten) {
                 Ok(()) => {
-                    if let Err(error) = futures::executor::block_on(
-                        extractor.extract_provider_secrets(&provider.id, config),
+                    // §6.6：整包写入 vault（原生 sync 保留旧值，故 merge=true）。
+                    if let Err(error) = super::store_provider_bundle(
+                        state,
+                        &AppType::Pi,
+                        &provider.id,
+                        &extracted.secrets,
+                        true,
                     ) {
                         log::warn!("Pi native extract after live rewrite failed for {id}: {error}");
                     }
@@ -296,8 +299,12 @@ fn sync_native_locked(
                 }
             }
         } else {
-            if let Err(error) = futures::executor::block_on(
-                extractor.extract_provider_secrets(&provider.id, &provider.settings_config),
+            if let Err(error) = super::store_provider_bundle(
+                state,
+                &AppType::Pi,
+                &provider.id,
+                &extracted.secrets,
+                true,
             ) {
                 log::warn!("Pi native extract failed for {id}: {error}");
                 continue;
@@ -344,12 +351,13 @@ fn strip_unsupported_pi_metadata(provider: &mut Provider) {
     provider.meta = None;
 }
 
-fn strip_and_store_pi_secrets(state: &AppState, provider: &mut Provider) -> Result<(), AppError> {
-    let extractor =
-        SecretExtractor::new(state.secrets.as_ref(), AppType::Pi).with_db(state.db.as_ref());
-    let (stripped, _) = futures::executor::block_on(
-        extractor.extract_provider_secrets(&provider.id, &provider.settings_config),
-    )?;
-    provider.settings_config = stripped;
-    Ok(())
+fn strip_and_store_pi_secrets(
+    state: &AppState,
+    provider: &mut Provider,
+    merge_existing: bool,
+) -> Result<(), AppError> {
+    let extracted =
+        SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
+    provider.settings_config = extracted.stripped;
+    super::store_provider_bundle(state, &AppType::Pi, &provider.id, &extracted.secrets, merge_existing)
 }

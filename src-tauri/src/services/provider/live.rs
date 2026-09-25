@@ -1160,8 +1160,8 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         .to_string(),
     );
 
-    // §3.1-5：从 live 文件回填也是入口之一，落 DB 前必须剥凭据。
-    super::strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
+    // §3.1-5：从 live 文件回填也是入口之一，落 DB 前必须剥凭据。导入新供应商 default，不需合并。
+    super::strip_and_store_provider_secrets(state, &app_type, &mut provider, false)?;
 
     state.db.save_provider(app_type.as_str(), &provider)?;
     state

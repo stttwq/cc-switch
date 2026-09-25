@@ -1,7 +1,7 @@
 use crate::database::Database;
 use crate::env_delivery::EnvSink;
 use crate::error::AppError;
-use crate::secrets::SecretStore;
+use crate::secrets::{LegacyWindowsVault, SecretStore, SecretVault};
 use crate::services::switch_lock::SwitchLockManager;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
@@ -57,7 +57,12 @@ impl SyncKekCache {
 pub struct AppState {
     pub db: Arc<Database>,
     pub switch_locks: SwitchLockManager,
+    /// 旧的按字段凭据存储（凭据管理器）。P1 起降级为迁移源：便携包 / 迁移 / 卸载清理
+    /// 仍直接用它；运行时读写改走 `vault`。2.4 连同 keyring 依赖一并移除。
     pub secrets: Arc<dyn SecretStore>,
+    /// 按「供应商 / 应用级组」整包读写的保险箱（§4.1）。运行时唯一读写入口。
+    /// P1 阶段由 `LegacyWindowsVault` 包 `secrets` 实现，行为仍在凭据管理器上。
+    pub vault: Arc<dyn SecretVault>,
     /// §5.3.2：整个进程共用一个 sink 实例。每次调用现取会让同一轮投递里的
     /// `check_conflict` 与 `set` 看到不同对象，冲突检测/所有权等于不存在。
     pub env_sink: Arc<dyn EnvSink>,
@@ -68,10 +73,14 @@ pub struct AppState {
 impl AppState {
     /// 创建新的应用状态
     pub fn new(db: Arc<Database>, secrets: Arc<dyn SecretStore>) -> Self {
+        // P1：用 LegacyWindowsVault 把旧 store 包成整包 vault，行为仍跑在凭据管理器上。
+        let vault: Arc<dyn SecretVault> =
+            Arc::new(LegacyWindowsVault::new(secrets.clone(), db.clone()));
         Self {
             db,
             switch_locks: SwitchLockManager::new(),
             secrets,
+            vault,
             env_sink: crate::env_delivery::default_sink(),
             sync_kek: Arc::new(SyncKekCache::default()),
         }

@@ -160,9 +160,9 @@ pub fn reveal_provider_secret_internal(
     provider_id: &str,
     field: &str,
 ) -> Result<Option<String>, AppError> {
-    let target = match field {
-        "api_key" => SecretTarget::provider_api_key(app_type.clone(), provider_id),
-        "base_url" => SecretTarget::provider_base_url(app_type.clone(), provider_id),
+    let field_key = match field {
+        "api_key" => crate::secrets::FIELD_API_KEY,
+        "base_url" => crate::secrets::FIELD_BASE_URL,
         other => {
             return Err(AppError::InvalidInput(format!(
                 "不支持的字段名 {other}，只允许 api_key / base_url"
@@ -181,7 +181,10 @@ pub fn reveal_provider_secret_internal(
     // 只记字段名，绝不记值。
     log::info!("reveal {}/{provider_id}/{field}", app_type.as_str());
 
-    let Some(value) = futures::executor::block_on(state.secrets.retrieve(&target))? else {
+    // §6.4：一次 fetch 拿整包，再取所需字段。
+    let secrets = ProviderService::fetch_provider_secrets(state, &app_type, provider_id)?;
+    let bundle = crate::secrets::SecretBundle::from_provider_secrets(&secrets);
+    let Some(value) = bundle.get(field_key) else {
         return Ok(None);
     };
 

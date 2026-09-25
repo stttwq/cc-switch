@@ -4,14 +4,12 @@
 //! primitives in [`super::webdav`]. Artifact set: `db.sql` + `skills.zip`.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::error::AppError;
-use crate::secrets::sync_secrets::restore_webdav_password;
-use crate::secrets::SecretStore;
+use crate::secrets::SyncCredentials;
 use crate::services::webdav::{
     auth_from_credentials, build_remote_url, delete_url, ensure_remote_directories, get_bytes,
     head_etag, path_segments, put_bytes, put_bytes_with_precondition, test_connection, WebDavAuth,
@@ -45,7 +43,7 @@ struct RemoteSnapshot {
 
 /// Check WebDAV connectivity and ensure remote directory structure.
 pub async fn check_connection(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
     password_override: Option<&str>,
 ) -> Result<(), AppError> {
@@ -60,7 +58,7 @@ pub async fn check_connection(
 /// Upload local snapshot (db + skills) to remote.
 pub async fn upload(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut WebDavSyncSettings,
     kek_cache: &crate::store::SyncKekCache,
 ) -> Result<Value, AppError> {
@@ -111,7 +109,7 @@ pub async fn upload(
 /// E2E v3 上传：拉远端 manifest（算 seq + 沿用盐）→ 本机 seal → 传密文三件套。
 async fn upload_e2e(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut WebDavSyncSettings,
     auth: &WebDavAuth,
     kek_cache: &crate::store::SyncKekCache,
@@ -179,7 +177,7 @@ async fn upload_e2e(
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut WebDavSyncSettings,
     kek_cache: &crate::store::SyncKekCache,
     allow_rollback: bool,
@@ -239,7 +237,7 @@ pub async fn download(
 /// E2E v3 下载：只认 v3 布局；本机开启却只找到 v2 明文快照 → 拒绝降级。
 async fn download_e2e(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut WebDavSyncSettings,
     auth: &WebDavAuth,
     kek_cache: &crate::store::SyncKekCache,
@@ -335,7 +333,7 @@ async fn get_enc_artifact(
 
 /// Fetch remote manifest info without downloading artifacts.
 pub async fn fetch_remote_info(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
 ) -> Result<Option<Value>, AppError> {
     settings.validate()?;
@@ -367,7 +365,7 @@ pub async fn fetch_remote_info(
 
 /// E2E 开关开时只认 v3：外层明文摘要判兼容，口令可用则顺带解出设备名/时间。
 async fn fetch_remote_info_e2e(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
     auth: &WebDavAuth,
 ) -> Result<Option<Value>, AppError> {
@@ -416,7 +414,7 @@ async fn delete_remote_layout(
 
 /// 停用端到端加密：删除远端 v3 三件套（口令确认由命令层做）。
 pub async fn reset_remote_e2e(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
 ) -> Result<(), AppError> {
     settings.validate()?;
@@ -433,7 +431,7 @@ pub async fn reset_remote_e2e(
 
 /// 迁移后清理：删除远端旧版 v2 明文快照（current + legacy 两布局），不需要口令。
 pub async fn delete_legacy_remote(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
 ) -> Result<(), AppError> {
     settings.validate()?;
@@ -575,14 +573,14 @@ fn remote_dir_display(settings: &WebDavSyncSettings, layout: RemoteLayout) -> St
 }
 
 async fn auth_for(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &WebDavSyncSettings,
     password_override: Option<&str>,
 ) -> Result<WebDavAuth, AppError> {
     // 表单里刚输入但尚未保存的密码优先：否则首次配置点"测试连接"必然失败。
     let password: zeroize::Zeroizing<String> = match password_override {
         Some(password) => zeroize::Zeroizing::new(password.to_string()),
-        None => restore_webdav_password(secrets).await?.unwrap_or_default(),
+        None => secrets.webdav_password.clone().unwrap_or_default(),
     };
     Ok(auth_from_credentials(&settings.username, &password))
 }

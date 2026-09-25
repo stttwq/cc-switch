@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::Provider;
-use crate::secrets::{SecretExtractor, SecretTarget};
+use crate::secrets::{ProviderSecrets, SecretExtractor, SecretTarget};
 use crate::services::mcp::McpService;
 use crate::store::AppState;
 use std::str::FromStr;
@@ -310,7 +310,7 @@ impl ProviderService {
         if app_type.is_additive_mode() {
             Self::set_provider_live_config_managed(&mut provider, add_to_live);
         }
-        strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
+        strip_and_store_provider_secrets(state, &app_type, &mut provider, false)?;
 
         // Save to database
         if let Err(e) = state.db.save_provider(app_type.as_str(), &provider) {
@@ -410,7 +410,7 @@ impl ProviderService {
             }
 
             Self::set_provider_live_config_managed(&mut provider, false);
-            strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
+            strip_and_store_provider_secrets(state, &app_type, &mut provider, false)?;
             state.db.save_provider(app_type.as_str(), &provider)?;
             state.db.delete_provider(app_type.as_str(), &original_id)?;
 
@@ -426,7 +426,7 @@ impl ProviderService {
             crate::settings::get_effective_current_provider(&state.db, &app_type)?;
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
-        strip_and_store_provider_secrets(state, &app_type, &mut provider)?;
+        strip_and_store_provider_secrets(state, &app_type, &mut provider, true)?;
 
         // 缺陷 D-1：编辑当前供应商的密钥后必须按新值重投环境变量，否则 live 里的
         // `$VAR` 引用与 Codex 的 env_key 仍解析到旧密钥。放在写 DB 之前：投递失败时
@@ -607,6 +607,7 @@ impl ProviderService {
                                 state,
                                 &app_type,
                                 &mut current_provider,
+                                true,
                             )?;
                             if let Err(e) =
                                 state.db.save_provider(app_type.as_str(), &current_provider)
@@ -813,7 +814,12 @@ impl ProviderService {
                 continue;
             };
             let mut warnings = Vec::new();
-            let Ok(pending) = Self::provider_env_pairs(state, &app_type, provider, &mut warnings)
+            // §6.1：恢复例程为尽力而为，某供应商取包失败则跳过他。
+            let Ok(secrets) = Self::fetch_provider_secrets(state, &app_type, &id) else {
+                continue;
+            };
+            let Ok(pending) =
+                Self::provider_env_pairs(&app_type, provider, &secrets, &mut warnings)
             else {
                 continue;
             };
@@ -1076,28 +1082,31 @@ impl ProviderService {
         result: &mut SwitchResult,
     ) -> Result<Vec<(String, Zeroizing<String>)>, AppError> {
         let mut warnings = Vec::new();
-        let pending = Self::provider_env_pairs(state, app_type, provider, &mut warnings)?;
+        // §6.1：入口一次性取整包，再交给纯函数映射。
+        let secrets = Self::fetch_provider_secrets(state, app_type, &provider.id)?;
+        let pending = Self::provider_env_pairs(app_type, provider, &secrets, &mut warnings)?;
         result.warnings.extend(warnings);
         Ok(pending)
     }
 
     /// 单一真源地计算「某供应商应投递的用户环境变量 (name → value)」。
     /// 切换投递与内置「打开终端」共用，保证非当前供应商也能拿到自己的密钥（§5.3.4）。
+    ///
+    /// §6.1：纯函数——不读 vault，只把已取好的整包 `secrets` 映射成待投递的环境变量。
+    /// 「取」由 [`Self::fetch_provider_secrets`] 在流程入口一次性完成（原则 1）。
     pub(crate) fn provider_env_pairs(
-        state: &AppState,
         app_type: &AppType,
         provider: &Provider,
+        secrets: &ProviderSecrets,
         warnings: &mut Vec<String>,
     ) -> Result<Vec<(String, Zeroizing<String>)>, AppError> {
-        use crate::secrets::SecretTarget;
         let mut pending: Vec<(String, Zeroizing<String>)> = Vec::new();
         match app_type {
             AppType::Claude => {
-                let key_target =
-                    SecretTarget::provider_api_key(app_type.clone(), provider.id.clone());
-                let key = futures::executor::block_on(state.secrets.get(&key_target))
-                    .ok()
-                    .flatten()
+                // 缺钥匙（整包里没有 api_key）是业务错误，交由调用方按“请先补全密钥”处理。
+                let key = secrets
+                    .api_key
+                    .clone()
                     .ok_or_else(|| AppError::Message("请先补全密钥".to_string()))?;
                 let field = provider
                     .meta
@@ -1105,19 +1114,15 @@ impl ProviderService {
                     .and_then(|m| m.api_key_field.as_deref())
                     .unwrap_or("ANTHROPIC_AUTH_TOKEN");
                 pending.push((field.to_string(), key));
-                if let Ok(Some(url)) = futures::executor::block_on(state.secrets.get(
-                    &SecretTarget::provider_base_url(app_type.clone(), provider.id.clone()),
-                )) {
+                if let Some(url) = secrets.base_url.clone() {
                     pending.push(("ANTHROPIC_BASE_URL".to_string(), url));
                 }
-                pending.extend(load_extra_env_pending(state, app_type, &provider.id));
+                // extra_env（Claude 敏感 env）已在整包里，变量名即键名。
+                for (name, value) in &secrets.extra_env {
+                    pending.push((name.clone(), value.clone()));
+                }
             }
             AppType::Codex => {
-                let key = futures::executor::block_on(state.secrets.get(
-                    &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
-                ))
-                .ok()
-                .flatten();
                 let official = provider.category.as_deref() == Some("official")
                     || crate::codex_config::is_codex_official_provider(provider);
                 let name = if official {
@@ -1125,7 +1130,7 @@ impl ProviderService {
                 } else {
                     "CC_SWITCH_CODEX_API_KEY"
                 };
-                match key {
+                match secrets.api_key.clone() {
                     Some(key) => pending.push((name.to_string(), key)),
                     None => {
                         // 无密钥供应商（header 认证 / preserved login）合法：
@@ -1134,7 +1139,7 @@ impl ProviderService {
                         // 用例锁定了"自带 http_headers 认证放行、会回落 auth.json 才拒绝"，
                         // 这里不能改成一律拒绝。
                         log::warn!(
-                            "Codex provider {} has no api_key in SecretStore; \
+                            "Codex provider {} has no api_key in vault; \
                              relying on config-carried auth",
                             provider.id
                         );
@@ -1143,19 +1148,13 @@ impl ProviderService {
                 }
             }
             AppType::Pi => {
-                match futures::executor::block_on(state.secrets.get(
-                    &SecretTarget::provider_api_key(app_type.clone(), provider.id.clone()),
-                )) {
-                    Ok(Some(api_key)) => {
+                match secrets.api_key.clone() {
+                    Some(api_key) => {
                         pending.push((crate::secrets::pi_api_key_env_name(&provider.id), api_key));
                     }
-                    Ok(None) => {
-                        log::warn!("Pi provider {} has no api_key in SecretStore", provider.id);
+                    None => {
+                        log::warn!("Pi provider {} has no api_key in vault", provider.id);
                         warnings.push(format!("pi_missing_api_key:{}", provider.id));
-                    }
-                    Err(e) => {
-                        log::warn!("Pi retrieve api_key failed for {}: {}", provider.id, e);
-                        warnings.push(format!("pi_retrieve_failed:{}", provider.id));
                     }
                 }
                 if let Some(headers) = provider
@@ -1173,30 +1172,19 @@ impl ProviderService {
                         if crate::secrets::is_literal_value(val) {
                             continue;
                         }
-                        match futures::executor::block_on(state.secrets.get(
-                            &SecretTarget::provider_env(
-                                app_type.clone(),
-                                provider.id.clone(),
-                                header_name,
-                            ),
-                        )) {
-                            Ok(Some(secret)) => {
+                        // Pi 敏感 header 存在整包 extra_env 里，键名即 header 名。
+                        match secrets.extra_env.get(header_name) {
+                            Some(secret) => {
                                 pending.push((
                                     crate::secrets::pi_header_env_name(&provider.id, header_name),
-                                    secret,
+                                    secret.clone(),
                                 ));
                             }
-                            Ok(None) => {
+                            None => {
                                 warnings.push(format!(
                                     "pi_missing_header:{}:{header_name}",
                                     provider.id
                                 ));
-                            }
-                            Err(e) => {
-                                log::warn!(
-                                    "Pi retrieve header {header_name} failed for {}: {e}",
-                                    provider.id
-                                );
                             }
                         }
                     }
@@ -1204,6 +1192,19 @@ impl ProviderService {
             }
         }
         Ok(pending)
+    }
+
+    /// §6.1：唯一调用 `state.vault.fetch` 的地方。一次往返拿整包。
+    /// 条目不存在 => 返回空 `ProviderSecrets`（让后续“缺钥匙”逻辑照旧工作）；
+    /// 锁定/断网等 => 原样上抛（`VaultError` 经 `From` 归一到本地化 `AppError`）。
+    pub(crate) fn fetch_provider_secrets(
+        state: &AppState,
+        app_type: &AppType,
+        provider_id: &str,
+    ) -> Result<ProviderSecrets, AppError> {
+        let group = crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
+        let bundle = state.vault.fetch(&group)?;
+        Ok(bundle.map(|b| b.to_provider_secrets()).unwrap_or_default())
     }
 
     pub fn adopt_env_vars(
@@ -1223,7 +1224,8 @@ impl ProviderService {
 
         // 接管 = 用我方凭据覆盖外来变量并登记所有权；值与切换投递同源。
         let mut warnings = Vec::new();
-        let pending = Self::provider_env_pairs(state, app_type, &provider, &mut warnings)?;
+        let secrets = Self::fetch_provider_secrets(state, app_type, provider_id)?;
+        let pending = Self::provider_env_pairs(app_type, &provider, &secrets, &mut warnings)?;
         let mut wrote = false;
         for name in names {
             managed.register(name, app_type.as_str(), provider_id);
@@ -1849,33 +1851,11 @@ pub(crate) fn normalize_claude_models_in_value(settings: &mut Value) -> bool {
 }
 
 pub(super) fn delete_provider_secrets(state: &AppState, app_type: &AppType, id: &str) {
-    let prefix = crate::secrets::provider_target_prefix(app_type, id);
-    let mut targets = crate::secrets::load_known_targets(state.db.as_ref()).unwrap_or_default();
-    let related: Vec<String> = targets
-        .iter()
-        .filter(|t| t.starts_with(&prefix))
-        .cloned()
-        .collect();
-    let fallback = [
-        crate::secrets::SecretTarget::provider_api_key(app_type.clone(), id).to_target_string(),
-        crate::secrets::SecretTarget::provider_base_url(app_type.clone(), id).to_target_string(),
-    ];
-    let mut to_delete = related;
-    for t in fallback {
-        if !to_delete.iter().any(|x| x == &t) {
-            to_delete.push(t);
-        }
-    }
-    for target_str in &to_delete {
-        if let Some(target) = parse_secret_target(target_str) {
-            if let Err(e) = futures::executor::block_on(state.secrets.delete(&target)) {
-                log::warn!("删除凭据失败 {target_str}: {e}");
-            }
-        }
-    }
-    targets.retain(|t| !t.starts_with(&prefix));
-    if let Err(e) = crate::secrets::save_known_targets(state.db.as_ref(), &targets) {
-        log::warn!("更新 known_secret_targets 失败: {e}");
+    // §6.6：整组删除走 vault（旧后端下 = 逐字段删 + 清 known_secret_targets）。
+    // 保持 best-effort：删除失败只告警，不阻断删供应商。
+    let group = crate::secrets::SecretGroup::provider(app_type.clone(), id.to_string());
+    if let Err(e) = state.vault.delete(&group) {
+        log::warn!("删除供应商凭据失败 {}/{id}: {e}", app_type.as_str());
     }
 }
 
@@ -1900,53 +1880,59 @@ fn parse_secret_target(target: &str) -> Option<crate::secrets::SecretTarget> {
     }
 }
 
-fn load_extra_env_pending(
-    state: &AppState,
-    app_type: &AppType,
-    provider_id: &str,
-) -> Vec<(String, Zeroizing<String>)> {
-    let prefix = format!(
-        "cc-switch/v1/provider/{}/{}/env/",
-        app_type.as_str(),
-        provider_id
-    );
-    let Ok(targets) = crate::secrets::load_known_targets(state.db.as_ref()) else {
-        return Vec::new();
-    };
-    let mut pending = Vec::new();
-    for target_str in targets {
-        let Some(var) = target_str.strip_prefix(&prefix) else {
-            continue;
-        };
-        if var.is_empty() {
-            continue;
-        }
-        let target = crate::secrets::SecretTarget::provider_env(app_type.clone(), provider_id, var);
-        if let Ok(Some(value)) = futures::executor::block_on(state.secrets.get(&target)) {
-            pending.push((var.to_string(), value));
-        }
-    }
-    pending
-}
-
+/// §6.6：抽取（纯函数）+ 整包写入 vault。
+///
+/// `merge_existing`：编辑时表单可能不回传未改字段（“保留原值”），此时先 fetch
+/// 旧整包再叠加新抽取值再整包 put，语义等同旧的“只增不删”持久化；
+/// 新增时表单自带完整值，`merge_existing=false` 直接 put（不多一次 fetch）。
 fn strip_and_store_provider_secrets(
     state: &AppState,
     app_type: &AppType,
     provider: &mut Provider,
+    merge_existing: bool,
 ) -> Result<(), AppError> {
-    let extractor =
-        SecretExtractor::new(state.secrets.as_ref(), app_type.clone()).with_db(state.db.as_ref());
     let field = provider
         .meta
         .as_ref()
         .and_then(|m| m.api_key_field.as_deref());
-    let (stripped, _) =
-        futures::executor::block_on(extractor.extract_provider_secrets_with_field(
-            &provider.id,
-            &provider.settings_config,
-            field,
-        ))?;
-    provider.settings_config = stripped;
+    let extracted = SecretExtractor::extract_with_meta(
+        &provider.id,
+        app_type,
+        &provider.settings_config,
+        field,
+    )?;
+    provider.settings_config = extracted.stripped;
+    store_provider_bundle(state, app_type, &provider.id, &extracted.secrets, merge_existing)?;
+    Ok(())
+}
+
+/// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
+fn store_provider_bundle(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    secrets: &ProviderSecrets,
+    merge_existing: bool,
+) -> Result<(), AppError> {
+    use crate::secrets::{SecretBundle, SecretGroup};
+    if let Some(key) = secrets.api_key.as_ref() {
+        // §5.5：登记进“本次会话已知密钥”，导出护栏按字面量兜底。
+        crate::secrets::scan::note_session_secret(key.as_str());
+    }
+    let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
+    let mut bundle = if merge_existing {
+        state.vault.fetch(&group)?.unwrap_or_default()
+    } else {
+        SecretBundle::new()
+    };
+    for (name, value) in SecretBundle::from_provider_secrets(secrets).iter() {
+        bundle.insert(name.clone(), value.clone());
+    }
+    if bundle.is_empty() {
+        // 无密钥可写（且无旧值）：与旧的“只增不删”行为一致，什么都不写。
+        return Ok(());
+    }
+    state.vault.put(&group, &bundle)?;
     Ok(())
 }
 
@@ -2144,5 +2130,205 @@ mod env_adopt_tests {
             ProviderService::reject_if_env_conflicts(&state, &AppType::Claude, &pending).is_ok(),
             "认领之后同一轮投递不再被拒"
         );
+    }
+}
+
+#[cfg(test)]
+mod secret_read_failure_tests {
+    //! §1.4 回归护栏：凭据后端读取失败（1Password 锁定/取消/断网）必须向上
+    //! 传播，绝不能被吞成"没有钥匙"，否则会给终端注入空钥匙。
+    use super::*;
+    use crate::secrets::{SecretStore, SecretTarget};
+    use async_trait::async_trait;
+    use std::sync::Arc;
+    use zeroize::Zeroizing;
+
+    /// 所有 `get` 一律失败，模拟 vault 锁定/断网。
+    struct FailingSecretStore;
+
+    #[async_trait]
+    impl SecretStore for FailingSecretStore {
+        async fn set(&self, _t: &SecretTarget, _v: Zeroizing<String>) -> Result<(), AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn get(&self, _t: &SecretTarget) -> Result<Option<Zeroizing<String>>, AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn delete(&self, _t: &SecretTarget) -> Result<(), AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn probe(&self) -> Result<(), AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn list_targets(&self, _prefix: &str) -> Result<Vec<String>, AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn get_target_raw(
+            &self,
+            _target_name: &str,
+        ) -> Result<Option<Zeroizing<String>>, AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+        async fn set_target_raw(&self, _target_name: &str, _value: &str) -> Result<(), AppError> {
+            Err(AppError::Message("backend locked".to_string()))
+        }
+    }
+
+    fn failing_state() -> AppState {
+        AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            Arc::new(FailingSecretStore),
+        )
+    }
+
+    #[test]
+    fn claude_env_pairs_propagate_backend_error() {
+        let state = failing_state();
+        let result = ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p");
+        assert!(
+            result.is_err(),
+            "读取失败必须传播为 Err，绝不能降级成空钥匙注入终端"
+        );
+    }
+
+    #[test]
+    fn codex_env_pairs_propagate_backend_error() {
+        let state = failing_state();
+        let result = ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "p");
+        assert!(
+            result.is_err(),
+            "Codex 读取失败必须传播为 Err，而不是当成缺钥匙告警"
+        );
+    }
+
+    #[test]
+    fn pi_env_pairs_propagate_backend_error() {
+        let state = failing_state();
+        let result = ProviderService::fetch_provider_secrets(&state, &AppType::Pi, "p");
+        assert!(
+            result.is_err(),
+            "Pi 读取失败必须传播为 Err，而不是当成缺钥匙告警"
+        );
+    }
+}
+
+#[cfg(test)]
+mod vault_call_count_tests {
+    //! §9.3 / 原则 1 的护栏：锁死每流程的 vault.fetch 往返次数。
+    use super::*;
+    use crate::secrets::{CountingVault, InMemorySecretStore, SecretStore, SecretTarget};
+    use serde_json::json;
+    use std::sync::Arc;
+
+    fn counting_state() -> (AppState, Arc<CountingVault>) {
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+        (state, counting)
+    }
+
+    #[test]
+    fn fetch_provider_secrets_is_exactly_one_fetch() {
+        let (state, counting) = counting_state();
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_api_key(AppType::Claude, "p1"),
+            "sk-1",
+        ))
+        .expect("seed");
+        counting.reset();
+        let secrets = ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1")
+            .expect("fetch");
+        assert_eq!(counting.fetch_count(), 1, "取整包只能一次往返");
+        assert_eq!(counting.put_count(), 0);
+        assert_eq!(
+            secrets.api_key.as_deref().map(String::as_str),
+            Some("sk-1")
+        );
+    }
+
+    #[test]
+    fn reveal_provider_secret_is_exactly_one_fetch() {
+        let (state, counting) = counting_state();
+        let provider = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {}}),
+            None,
+        );
+        state.db.save_provider("claude", &provider).expect("save");
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_api_key(AppType::Claude, "p1"),
+            "sk-reveal",
+        ))
+        .expect("seed");
+        counting.reset();
+        let value = crate::reveal_provider_secret_internal(
+            &state,
+            AppType::Claude,
+            "p1",
+            "api_key",
+        )
+        .expect("reveal");
+        assert_eq!(value.as_deref(), Some("sk-reveal"));
+        assert_eq!(counting.fetch_count(), 1, "显示明文只能一次往返");
+    }
+
+    #[test]
+    fn add_provider_secrets_is_put_only() {
+        let (state, counting) = counting_state();
+        let mut provider = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-x"}}),
+            None,
+        );
+        counting.reset();
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut provider, false)
+            .expect("store");
+        assert_eq!(counting.put_count(), 1, "新增 put 一次");
+        assert_eq!(counting.fetch_count(), 0, "新增不该 fetch");
+    }
+
+    #[test]
+    fn edit_provider_secrets_fetches_then_puts_and_preserves_old() {
+        let (state, counting) = counting_state();
+        let mut seed = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-old"}}),
+            None,
+        );
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut seed, false)
+            .expect("seed");
+        counting.reset();
+        // 编辑：表单未回传密钥（已剥离）→ merge=true，应保留旧值。
+        let mut edited = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {}}),
+            None,
+        );
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut edited, true)
+            .expect("edit");
+        assert_eq!(counting.fetch_count(), 1, "编辑先 fetch 一次合并");
+        assert_eq!(counting.put_count(), 1, "编辑 put 一次");
+        // 验证旧值保留（这里又会 fetch，但断言已完成）。
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("read");
+        assert_eq!(
+            secrets.api_key.as_deref().map(String::as_str),
+            Some("sk-old"),
+            "未回传的密钥应保留原值"
+        );
+    }
+
+    #[test]
+    fn delete_provider_secrets_is_one_delete() {
+        let (state, counting) = counting_state();
+        counting.reset();
+        super::delete_provider_secrets(&state, &AppType::Claude, "p1");
+        assert_eq!(counting.delete_count(), 1, "删除一次整组");
     }
 }

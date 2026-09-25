@@ -2962,10 +2962,14 @@ pub(crate) fn launch_provider_terminal(
             let enabled_provider = providers
                 .get(&enabled_id)
                 .ok_or_else(|| format!("Pi 启用供应商 {enabled_id} 不存在于配置列表"))?;
+            // §6.5：每个启用供应商 1 次 fetch（串行，避免并发触发多次授权弹窗）。
+            let secrets =
+                ProviderService::fetch_provider_secrets(state, &app_type, &enabled_id)
+                    .map_err(|e| format!("读取 Pi 供应商 {enabled_id} 凭据失败: {e}"))?;
             let pairs = ProviderService::provider_env_pairs(
-                state,
                 &app_type,
                 enabled_provider,
+                &secrets,
                 &mut warnings,
             )
             .map_err(|e| format!("读取 Pi 供应商 {enabled_id} 凭据失败: {e}"))?;
@@ -2973,7 +2977,10 @@ pub(crate) fn launch_provider_terminal(
         }
         all_pairs
     } else {
-        ProviderService::provider_env_pairs(state, &app_type, provider, &mut warnings)
+        // §6.1/6.5：入口一次 fetch，再交给纯函数。
+        let secrets = ProviderService::fetch_provider_secrets(state, &app_type, &provider.id)
+            .map_err(|e| format!("读取供应商凭据失败: {e}"))?;
+        ProviderService::provider_env_pairs(&app_type, provider, &secrets, &mut warnings)
             .map_err(|e| format!("读取供应商凭据失败: {e}"))?
     };
     for warning in warnings {

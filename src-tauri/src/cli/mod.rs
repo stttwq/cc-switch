@@ -271,9 +271,18 @@ pub fn env_command_core(
     let provider = resolve_provider(state, &app_type, provider_id)?;
 
     let mut warnings: Vec<String> = Vec::new();
-    let pending = ProviderService::provider_env_pairs(state, &app_type, &provider, &mut warnings)
+    // §6.1/6.5：入口一次 fetch，再交给纯函数。锁定/断网与缺密钥都归一到 fail-closed。
+    let secrets = ProviderService::fetch_provider_secrets(state, &app_type, &provider.id)
         .map_err(|e| {
-        // provider_env_pairs 的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
+            AppError::localized(
+                "ccs_missing_key",
+                e.to_string(),
+                format!("Failed to read credentials for provider '{}': {}", provider.id, e),
+            )
+        })?;
+    let pending = ProviderService::provider_env_pairs(&app_type, &provider, &secrets, &mut warnings)
+        .map_err(|e| {
+        // 纯函数的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
         AppError::localized(
             "ccs_missing_key",
             e.to_string(),

@@ -9,6 +9,7 @@ mod store;
 pub mod sync_secrets;
 mod target;
 mod types;
+mod vault;
 
 pub use extractor::{
     hydrate, load_known_targets, provider_target_prefix, save_known_targets, SecretExtractor,
@@ -24,9 +25,14 @@ pub use store::{
     InMemorySecretStore, SecretError, SecretStore, UnsupportedSecretStore, WindowsSecretStore,
 };
 pub use sync_secrets::{
-    extract_s3_credentials, extract_webdav_password, restore_s3_credentials,
-    restore_webdav_password,
+    fetch_sync_credentials, store_s3_credentials, store_sync_passphrase, store_webdav_password,
+    SyncCredentials,
 };
 pub use target::SecretTarget;
 pub use types::Extracted;
 pub use types::ProviderSecrets;
+pub use vault::{
+    CountingVault, InMemoryVault, LegacyWindowsVault, SecretBundle, SecretGroup, SecretVault,
+    VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX, FIELD_BASE_URL,
+    FIELD_ENV_PREFIX,
+};

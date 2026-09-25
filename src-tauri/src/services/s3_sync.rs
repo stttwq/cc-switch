@@ -4,14 +4,12 @@
 //! primitives in [`super::s3`]. Artifact set: `db.sql` + `skills.zip`.
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use chrono::Utc;
 use serde_json::Value;
 
 use crate::error::AppError;
-use crate::secrets::sync_secrets::restore_s3_credentials;
-use crate::secrets::SecretStore;
+use crate::secrets::SyncCredentials;
 use crate::services::s3::{self, S3Credentials};
 use crate::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
 
@@ -34,7 +32,7 @@ pub(crate) fn sync_mutex() -> &'static tokio::sync::Mutex<()> {
 
 /// Check S3 connectivity by issuing a HEAD request against the bucket.
 pub async fn check_connection(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &S3SyncSettings,
     credentials_override: Option<(&str, &str)>,
 ) -> Result<(), AppError> {
@@ -46,7 +44,7 @@ pub async fn check_connection(
 /// Upload local snapshot (db + skills) to remote S3.
 pub async fn upload(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut S3SyncSettings,
     kek_cache: &crate::store::SyncKekCache,
 ) -> Result<Value, AppError> {
@@ -94,7 +92,7 @@ pub async fn upload(
 
 async fn upload_e2e(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut S3SyncSettings,
     creds: &S3Credentials,
     kek_cache: &crate::store::SyncKekCache,
@@ -167,7 +165,7 @@ async fn upload_e2e(
 /// Download remote snapshot and apply to local database + skills.
 pub async fn download(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut S3SyncSettings,
     kek_cache: &crate::store::SyncKekCache,
     allow_rollback: bool,
@@ -227,7 +225,7 @@ pub async fn download(
 /// E2E v3 下载：只认 v3 key；本机开启却只有 v2 明文快照 → 拒绝降级。
 async fn download_e2e(
     db: &crate::database::Database,
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &mut S3SyncSettings,
     creds: &S3Credentials,
     kek_cache: &crate::store::SyncKekCache,
@@ -314,7 +312,7 @@ async fn get_enc_object(creds: &S3Credentials, key: &str, name: &str) -> Result<
 
 /// 停用端到端加密：删除远端 v3 三件套（口令确认由命令层做）。
 pub async fn reset_remote_e2e(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &S3SyncSettings,
 ) -> Result<(), AppError> {
     settings.validate()?;
@@ -328,7 +326,7 @@ pub async fn reset_remote_e2e(
 
 /// 迁移后清理：删除远端旧版 v2 明文快照，不需要口令。
 pub async fn delete_legacy_remote(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &S3SyncSettings,
 ) -> Result<(), AppError> {
     settings.validate()?;
@@ -341,7 +339,7 @@ pub async fn delete_legacy_remote(
 
 /// Fetch remote manifest info without downloading artifacts.
 pub async fn fetch_remote_info(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &S3SyncSettings,
 ) -> Result<Option<Value>, AppError> {
     settings.validate()?;
@@ -422,7 +420,7 @@ fn persist_sync_success(
 // ─── Download & verify ───────────────────────────────────────
 
 async fn download_and_verify(
-    _secrets: &Arc<dyn SecretStore>,
+    _secrets: &SyncCredentials,
     settings: &S3SyncSettings,
     creds: &S3Credentials,
     artifact_name: &str,
@@ -484,7 +482,7 @@ fn s3_dir_display(settings: &S3SyncSettings) -> String {
 }
 
 async fn creds_for(
-    secrets: &Arc<dyn SecretStore>,
+    secrets: &SyncCredentials,
     settings: &S3SyncSettings,
     credentials_override: Option<(&str, &str)>,
 ) -> Result<S3Credentials, AppError> {
@@ -494,7 +492,8 @@ async fn creds_for(
             (access_key_id.to_string(), secret_access_key.to_string())
         }
         None => {
-            let (access_key_id, secret_access_key) = restore_s3_credentials(secrets).await?;
+            let (access_key_id, secret_access_key) =
+                (secrets.s3_access_key_id.clone(), secrets.s3_secret_access_key.clone());
             (
                 access_key_id.map(|key| key.to_string()).unwrap_or_default(),
                 secret_access_key
