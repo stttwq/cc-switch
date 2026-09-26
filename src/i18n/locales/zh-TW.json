@@ -1820,6 +1820,7 @@
     "saved": "1Password 設定已儲存",
     "migrate": "遷移到 1Password",
     "migrateConfirm": "將把認證管理員裡的所有 cc-switch 憑證讀出、寫入 1Password、校驗無誤後從認證管理員刪除並切換後端。繼續？",
-    "migrateDone": "已遷移 {{groups}} 個項目、{{fields}} 個欄位。後端已切換到 1Password。"
+    "migrateDone": "已遷移 {{groups}} 個項目、{{fields}} 個欄位。後端已切換到 1Password。",
+    "migrateRestart": "遷移完成。需要重新啟動應用以切換後端並剝離 live 設定檔裡的明文金鑰。現在重新啟動？"
   }
 }

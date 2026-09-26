@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { settingsApi } from "@/lib/api/settings";
 
 interface OnePasswordStatus {
   installed: boolean;
@@ -138,7 +139,12 @@ export function OnePasswordSection() {
           fields: report.migratedFields,
         }),
       );
-      await refreshStatus();
+      // 运行时保险箱在启动时构造；切后端 + 剥离 live 明文需重启生效。
+      if (window.confirm(t("onepassword.migrateRestart"))) {
+        await settingsApi.restart();
+      } else {
+        await refreshStatus();
+      }
     } catch (error) {
       toast.error(String(error));
     } finally {

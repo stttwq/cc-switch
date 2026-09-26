@@ -2907,25 +2907,36 @@ fn wsl_distro_from_path(path: &Path) -> Option<String> {
 }
 
 /// 「打开终端」：设好该供应商凭据环境后，落入带环境的交互式 shell（不自动跑 CLI）。
+/// §6.5：async + spawn_blocking——fetch 可能调 op（阻塞、等解锁），不能在 IPC 线程上跑。
 #[tauri::command]
-pub fn open_provider_terminal(
+pub async fn open_provider_terminal(
     state: State<'_, crate::store::AppState>,
     app: String,
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
 ) -> Result<bool, String> {
-    launch_provider_terminal(state.inner(), app, providerId, cwd, false)
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_provider_terminal(&state, app, providerId, cwd, false)
+    })
+    .await
+    .map_err(|e| format!("打开终端任务失败: {e}"))?
 }
 
 /// 「运行 X」：设好凭据后，按 app 直接起对应 CLI（claude/codex/pi）。P3 新增入口。
 #[tauri::command]
-pub fn run_provider_cli(
+pub async fn run_provider_cli(
     state: State<'_, crate::store::AppState>,
     app: String,
     #[allow(non_snake_case)] providerId: String,
     cwd: Option<String>,
 ) -> Result<bool, String> {
-    launch_provider_terminal(state.inner(), app, providerId, cwd, true)
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        launch_provider_terminal(&state, app, providerId, cwd, true)
+    })
+    .await
+    .map_err(|e| format!("运行 CLI 任务失败: {e}"))?
 }
 
 /// 共用内核：GUI 命令与 CLI（`ccs open`）都走这里，只吃 `&AppState`，

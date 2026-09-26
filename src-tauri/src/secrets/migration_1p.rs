@@ -206,6 +206,10 @@ pub fn migrate_to_onepassword(
     settings.onepassword = Some(op);
     crate::settings::update_settings(settings)?;
 
+    // 切到 1Password 后必须重写一次 live（剥掉 Codex auth.json / Claude settings.json 里的
+    // 明文钥匙）。置标志，重启时（新进程用 OnePasswordVault）执行 reapply。
+    let _ = state.db.set_setting("live_reapply_pending", "1");
+
     // 删除凭据管理器条目（§7 步骤 7）。best-effort：删失败只告警，不回滚（1P 已是真源）。
     #[cfg(target_os = "windows")]
     for target in &written_targets {

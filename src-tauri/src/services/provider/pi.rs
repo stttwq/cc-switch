@@ -202,12 +202,13 @@ pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
     Ok(())
 }
 
-/// §5.3.1：把凭据管理器里的 baseUrl 合入待写入 models.json 的节点。
+/// §5.3.1：把保险箱里的 baseUrl 合入待写入 models.json 的节点。
 /// DB 行已剥掉 baseUrl，只有 live 侧需要它（Pi CLI 不支持 baseUrl 的环境变量引用）。
+/// 走 vault 整包读（§6.1）：1Password 模式下从 1P 取，凭据管理器模式从 cred manager 取。
 fn hydrate_pi_base_url_for_live(state: &AppState, provider: &Provider) -> Result<Value, AppError> {
     let mut config = provider.settings_config.clone();
-    let target = crate::secrets::SecretTarget::provider_base_url(AppType::Pi, provider.id.clone());
-    if let Some(url) = futures::executor::block_on(state.secrets.get(&target))? {
+    let secrets = ProviderService::fetch_provider_secrets(state, &AppType::Pi, &provider.id)?;
+    if let Some(url) = secrets.base_url {
         if let Some(obj) = config.as_object_mut() {
             obj.insert("baseUrl".to_string(), Value::String(url.to_string()));
         }

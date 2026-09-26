@@ -1820,6 +1820,7 @@
     "saved": "1Password settings saved",
     "migrate": "Migrate to 1Password",
     "migrateConfirm": "This reads every cc-switch credential from Windows Credential Manager, writes it to 1Password, verifies it, then deletes it from Credential Manager and switches the backend. Continue?",
-    "migrateDone": "Migrated {{groups}} item(s), {{fields}} field(s). Backend switched to 1Password."
+    "migrateDone": "Migrated {{groups}} item(s), {{fields}} field(s). Backend switched to 1Password.",
+    "migrateRestart": "Migration complete. The app must restart to switch the backend and strip plaintext from live config files. Restart now?"
   }
 }

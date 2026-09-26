@@ -1820,6 +1820,7 @@
     "saved": "1Password 設定を保存しました",
     "migrate": "1Password に移行",
     "migrateConfirm": "資格情報マネージャー内のすべての cc-switch 資格情報を読み取り、1Password に書き込み、検証後に資格情報マネージャーから削除してバックエンドを切り替えます。続行しますか？",
-    "migrateDone": "{{groups}} 件、{{fields}} フィールドを移行しました。バックエンドを 1Password に切り替えました。"
+    "migrateDone": "{{groups}} 件、{{fields}} フィールドを移行しました。バックエンドを 1Password に切り替えました。",
+    "migrateRestart": "移行が完了しました。バックエンドを切り替え、live 設定ファイルの平文キーを除去するにはアプリの再起動が必要です。今すぐ再起動しますか？"
   }
 }
