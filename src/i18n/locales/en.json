@@ -717,6 +717,7 @@
       "description": "Strict mode: when on, a provider's key is not written to user environment variables (HKCU\\Environment); it is injected via \"Open Terminal\" or the command line instead. Non-strict apps keep normal delivery.",
       "strictMode": "Strict delivery mode",
       "strictModeHint": "When on, keys are no longer written to user environment variables and are injected only via cc-switch's \"Open Terminal\" or ccs env.",
+      "onepasswordForced": "While using 1Password, keys are never written to system environment variables (readable by same-user processes). Strict delivery is enforced; keys are injected only into terminals launched by cc-switch or via ccs env.",
       "strictModeActive": "For strict apps, CLIs launched elsewhere (claude / codex / pi) will not find the key and will fail for missing credentials. Launch them from cc-switch's \"Open Terminal\", or use the \"Copy activation command\" below to activate via ccs env in your own shell.",
       "enabledToast": "Global strict delivery mode enabled; delivered keys were removed from user environment variables",
       "disabledToast": "Strict delivery mode disabled; normal delivery resumes on the next provider switch",

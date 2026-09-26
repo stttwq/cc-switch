@@ -1140,6 +1140,7 @@ pub fn run() {
             commands::onepassword_save_config,
             commands::onepassword_test_fetch,
             commands::onepassword_migrate,
+            commands::secret_backend_name,
             commands::webdav_test_connection,
             commands::webdav_sync_upload,
             commands::webdav_sync_download,

@@ -139,3 +139,9 @@ pub async fn onepassword_migrate(state: State<'_, AppState>) -> Result<Value, St
     .map_err(|e| format!("迁移任务失败: {e}"))?
     .map_err(|e| e.to_string())
 }
+
+/// 轻量查询当前凭据后端标识（不调 op）。前端据此置灰/隐藏相关区块。
+#[tauri::command]
+pub async fn secret_backend_name(_state: State<'_, AppState>) -> Result<String, String> {
+    Ok(crate::settings::get_secret_backend())
+}

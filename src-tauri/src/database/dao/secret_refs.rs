@@ -69,4 +69,13 @@ impl Database {
             None => Ok(None),
         }
     }
+
+    /// secret_refs 行数（诊断用）。
+    pub fn count_secret_refs(&self) -> Result<i64, AppError> {
+        let conn = lock_conn!(self.conn);
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM secret_refs", [], |row| row.get(0))
+            .map_err(|e| AppError::Database(format!("统计 secret_refs 失败: {e}")))?;
+        Ok(count)
+    }
 }

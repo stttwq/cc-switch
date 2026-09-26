@@ -717,6 +717,7 @@
       "description": "严格模式：切换供应商时不把密钥写入用户环境变量（HKCU\\Environment），改由「打开终端」或命令行注入。非严格的应用仍照常写入。",
       "strictMode": "严格投递模式",
       "strictModeHint": "开启后不再把密钥写入用户环境变量，只经 cc-switch「打开终端」或 ccs env 注入。",
+      "onepasswordForced": "使用 1Password 时，钥匙绝不写入系统环境变量（注册表同账号程序可读）。严格投递已强制开启；钥匙仅注入 cc-switch 拉起的终端或经 ccs env 注入。",
       "strictModeActive": "已开启严格的应用从别处启动的 claude / codex / pi 将读不到密钥（会因缺少凭据而报错），须从 cc-switch「打开终端」启动，或按下方「复制激活命令」在自己的 shell 里用 ccs env 激活。",
       "enabledToast": "已开启全局严格投递模式，并从用户环境变量收回了已投递的密钥",
       "disabledToast": "已关闭严格投递模式，下次切换供应商时恢复常规投递",

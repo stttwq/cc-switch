@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -33,6 +33,15 @@ export function SecretsPortableSection() {
   const { t } = useTranslation();
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState<"export" | "import" | null>(null);
+  const [backend, setBackend] = useState<string>("windows");
+
+  useEffect(() => {
+    invoke<string>("secret_backend_name")
+      .then(setBackend)
+      .catch(() => setBackend("windows"));
+  }, []);
+  // D9：1Password 自带跨设备同步，导出=把钥匙搬出保险箱 → 隐藏导出，保留导入。
+  const isOnePassword = backend === "onepassword";
 
   const tooShort =
     passphrase.length > 0 && passphrase.length < MIN_PASSPHRASE_CHARS;
@@ -131,19 +140,21 @@ export function SecretsPortableSection() {
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="outline"
-          size="sm"
-          disabled={busy !== null}
-          onClick={runExport}
-        >
-          {busy === "export" ? (
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-          ) : (
-            <Download className="mr-2 h-4 w-4" />
-          )}
-          {t("secretsPortable.export")}
-        </Button>
+        {!isOnePassword && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy !== null}
+            onClick={runExport}
+          >
+            {busy === "export" ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Download className="mr-2 h-4 w-4" />
+            )}
+            {t("secretsPortable.export")}
+          </Button>
+        )}
         <Button
           variant="outline"
           size="sm"

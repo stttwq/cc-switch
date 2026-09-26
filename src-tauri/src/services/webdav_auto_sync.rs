@@ -107,6 +107,13 @@ async fn run_auto_sync_upload(
         None => return Ok(()),
     };
 
+    // D4/§6.9：1Password 后端下后台自动同步会周期性触发解锁弹窗，不可接受。
+    // 跳过本轮（不弹窗）；手动同步照常（用户主动，可解锁）。
+    if crate::settings::is_onepassword_backend() {
+        log::debug!("1Password 模式：跳过 WebDAV 自动同步（请手动同步）");
+        return Ok(());
+    }
+
     let state = crate::store::get_app_state(app)?;
     let creds = crate::secrets::fetch_sync_credentials(&state.vault)?;
     let kek_cache = state.sync_kek.clone();

@@ -5,9 +5,28 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.2.9] - 2026-09-25
+## [2.3.0] - 2026-09-26
 
 ### Added
+
+- 新增可选的 **1Password 凭据后端**：运行时通过本机 1Password CLI（`op`）按需取钥匙，
+  本地数据库/内存/凭据管理器/注册表都不再留任何钥匙明文。
+  - 设置 → 高级 → 1Password：显示状态（安装/登录/op 版本/路径/签名校验）、选择账户与
+    vault、测试取钥匙、一键「迁移到 1Password」。
+  - 迁移向导把凭据管理器里的 `cc-switch/*` 条目读出 → 写入 1Password → 回读校验 →
+    删除凭据管理器条目并清理注册表投递；先写后删、可中断可重跑。
+  - `op.exe` 默认校验 Authenticode 签名（主体须为 AgileBits），失败拒用。
+  - 1Password 模式下强制严格投递（钥匙绝不写 `HKCU\Environment`）；后台自动同步跳过
+    （避免周期性解锁弹窗），手动同步照常；便携包导出隐藏（1Password 自带跨设备同步）。
+
+### Changed
+
+- 凭据读写重构为「按供应商/应用整包」一次往返（`SecretVault`），列表加载与切换在
+  1Password 模式下不再逐字段触发解锁。
+- 新增本地 `secret_refs` 引用表（只存字段名，不存值）：列表徽标、缺钥匙校验、删除定位
+  全查该表，零后端往返。
+- 凭据后端读取失败（锁定/断网/取消授权）一律明确报错，绝不静默降级为「没有钥匙」。
+
 
 - **Encrypted credential bundle for moving credentials between machines.** Credentials live only in Windows Credential Manager and are never part of the WebDAV/S3 payload, so uninstalling deletes them for good — "uninstall + reinstall + sync" used to lose every API key and base URL permanently. Settings → Advanced → Credential manager maintenance now offers **Export credentials** / **Import credentials**: every `cc-switch/*` entry is sealed into one file with a passphrase (20-character minimum) using the same Argon2id + XChaCha20-Poly1305 construction as end-to-end sync, in a format of its own so the two payloads cannot be mistaken for each other. On import the bundle wins over local values and entries that exist only locally are kept. Neither plaintext credentials nor the passphrase ever appear in the file.
 

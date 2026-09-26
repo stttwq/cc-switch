@@ -110,6 +110,7 @@ fn build_bundle(
     known_secrets: &[String],
     log_tail: Option<Vec<String>>,
     known_targets: usize,
+    backend_info: &str,
 ) -> String {
     // P2 分级：诊断列出严格范围，不能只读裸 bool（仅按应用档会误报未开启）。
     let strict = if crate::settings::is_global_strict_mode() {
@@ -135,6 +136,7 @@ fn build_bundle(
         crate::database::SCHEMA_VERSION
     ));
     out.push_str(&format!("- 严格投递模式: {strict}\n"));
+    out.push_str(&format!("- 凭据后端: {backend_info}\n"));
     out.push_str(&format!("- 已登记密钥目标数: {known_targets}\n"));
     out.push_str(&format!(
         "- 迁移标记: {}\n",
@@ -170,8 +172,29 @@ pub async fn get_diagnostics_bundle(state: State<'_, AppState>) -> Result<String
     let known_targets = crate::secrets::load_known_targets(state.db.as_ref())
         .map(|v| v.len())
         .unwrap_or(0);
+    // 凭据后端概要（不含值）：后端名 + 1P 状态/版本/路径 + secret_refs 行数。
+    let backend = crate::settings::get_secret_backend();
+    let backend_info = if backend == "onepassword" {
+        let verify = crate::settings::onepassword_verify_signature();
+        let probe = crate::secrets::onepassword_probe(
+            crate::settings::get_onepassword_op_path().as_deref(),
+            verify,
+        );
+        format!(
+            "1password (installed={}, signedIn={}, version={}, refs={})",
+            probe.installed,
+            probe.signed_in,
+            probe.version.as_deref().unwrap_or("?"),
+            state.db.count_secret_refs().unwrap_or(0)
+        )
+    } else {
+        format!(
+            "windows-credential-manager (refs={})",
+            state.db.count_secret_refs().unwrap_or(0)
+        )
+    };
     // 目标名计数与已脱敏的日志尾拼成纯文本；整段绝不含明文密钥、供应商名或完整 Base URL。
-    Ok(build_bundle(&secrets, tail, known_targets))
+    Ok(build_bundle(&secrets, tail, known_targets, &backend_info))
 }
 
 #[cfg(test)]
@@ -214,7 +237,7 @@ mod tests {
     fn build_bundle_omits_missing_log_and_counts() {
         // 无日志尾时写"(无日志)"，且整段不出现传入的密钥明文。
         let secrets = vec!["TOPSECRET-abcdef123456".to_string()];
-        let text = build_bundle(&secrets, None, 7);
+        let text = build_bundle(&secrets, None, 7, "windows-credential-manager (refs=0)");
         assert!(text.contains("(无日志)"));
         assert!(text.contains("版本:"));
         assert!(text.contains("数据库 schema:"));

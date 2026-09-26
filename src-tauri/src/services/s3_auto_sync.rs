@@ -107,6 +107,12 @@ async fn run_auto_sync_upload(
         None => return Ok(()),
     };
 
+    // D4/§6.9：1Password 后端下跳过后台自动同步（避免周期性解锁弹窗）；手动同步照常。
+    if crate::settings::is_onepassword_backend() {
+        log::debug!("1Password 模式：跳过 S3 自动同步（请手动同步）");
+        return Ok(());
+    }
+
     let state = crate::store::get_app_state(app)?;
     let creds = crate::secrets::fetch_sync_credentials(&state.vault)?;
     let kek_cache = state.sync_kek.clone();

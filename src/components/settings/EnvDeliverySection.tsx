@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
@@ -27,6 +28,14 @@ export function EnvDeliverySection() {
   const { data: settings } = useSettingsQuery();
   const [busy, setBusy] = useState(false);
   const [shell, setShell] = useState<Shell>("powershell");
+  const [backend, setBackend] = useState<string>("windows");
+
+  useEffect(() => {
+    invoke<string>("secret_backend_name")
+      .then(setBackend)
+      .catch(() => setBackend("windows"));
+  }, []);
+  const isOnePassword = backend === "onepassword";
 
   const isGlobal = settings?.envDeliveryStrictMode ?? false;
   const perAppList = settings?.envDeliveryStrictApps ?? [];
@@ -101,59 +110,69 @@ export function EnvDeliverySection() {
         </p>
       </div>
 
-      {/* 三态选择 */}
-      <div className="flex items-center justify-between gap-4">
-        <span className="text-sm">{t("settings.envDelivery.modeLabel")}</span>
-        {busy && (
-          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
-        )}
-      </div>
-      <div className="flex flex-wrap gap-2">
-        {(["off", "perApp", "global"] as StrictMode[]).map((m) => (
-          <button
-            key={m}
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              m === "global"
-                ? selectGlobal()
-                : m === "off"
-                  ? selectOff()
-                  : perAppList.length === 0 && toggleApp("claude")
-            }
-            className={`rounded-md border px-3 py-1 text-sm ${
-              mode === m
-                ? "border-primary bg-primary/10"
-                : "border-border hover:bg-muted"
-            }`}
-          >
-            {t(`settings.envDelivery.mode.${m}`)}
-          </button>
-        ))}
-      </div>
-
-      {/* 按应用多选 */}
-      {mode === "perApp" && (
-        <div className="flex flex-wrap items-center gap-4 pl-1">
-          {STRICT_APPS.map((app) => (
-            <label key={app} className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={isAppStrict(app)}
-                disabled={busy}
-                onChange={() => toggleApp(app)}
-              />
-              {t(`settings.envDelivery.app.${app}`)}
-            </label>
-          ))}
-        </div>
-      )}
-
-      {anyStrict && (
-        <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+      {/* §6.8：1Password 模式下严格投递被强制，置灰开关并说明。 */}
+      {isOnePassword ? (
+        <div className="flex items-start gap-2 rounded-lg bg-cyan-500/10 p-3 text-xs text-cyan-700 dark:text-cyan-400">
           <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
-          <span>{t("settings.envDelivery.strictModeActive")}</span>
+          <span>{t("settings.envDelivery.onepasswordForced")}</span>
         </div>
+      ) : (
+        <>
+          {/* 三态选择 */}
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-sm">{t("settings.envDelivery.modeLabel")}</span>
+            {busy && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {(["off", "perApp", "global"] as StrictMode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  m === "global"
+                    ? selectGlobal()
+                    : m === "off"
+                      ? selectOff()
+                      : perAppList.length === 0 && toggleApp("claude")
+                }
+                className={`rounded-md border px-3 py-1 text-sm ${
+                  mode === m
+                    ? "border-primary bg-primary/10"
+                    : "border-border hover:bg-muted"
+                }`}
+              >
+                {t(`settings.envDelivery.mode.${m}`)}
+              </button>
+            ))}
+          </div>
+
+          {/* 按应用多选 */}
+          {mode === "perApp" && (
+            <div className="flex flex-wrap items-center gap-4 pl-1">
+              {STRICT_APPS.map((app) => (
+                <label key={app} className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={isAppStrict(app)}
+                    disabled={busy}
+                    onChange={() => toggleApp(app)}
+                  />
+                  {t(`settings.envDelivery.app.${app}`)}
+                </label>
+              ))}
+            </div>
+          )}
+
+          {anyStrict && (
+            <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-xs text-amber-700 dark:text-amber-400">
+              <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>{t("settings.envDelivery.strictModeActive")}</span>
+            </div>
+          )}
+        </>
       )}
 
       {/* P1：复制激活命令，把 ccs env shim 接入用户自己的 shell */}

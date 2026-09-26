@@ -26,6 +26,12 @@ impl SyncKekCache {
         passphrase: &str,
         kdf: &crate::services::sync_e2e::KdfParams,
     ) -> Result<Arc<crate::services::sync_e2e::Kek>, AppError> {
+        // D6：1Password 模式下不缓存 KEK（与“CCS 一把不留”一致），每次现取口令现派生。
+        if crate::settings::is_onepassword_backend() {
+            return Ok(Arc::new(crate::services::sync_e2e::derive_kek(
+                passphrase, kdf,
+            )?));
+        }
         // 边界：缓存只按盐命中。若口令在别的设备被改并随凭据漫游过来、而远端盐未变，
         // 本机要等到重启或本地重设口令（`invalidate`）才会用新口令重派生。
         if let Some(cached) = self.locked().as_ref() {

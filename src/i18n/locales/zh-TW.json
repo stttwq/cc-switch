@@ -717,6 +717,7 @@
       "description": "嚴格模式：開啟後不把供應商密鑰寫入使用者環境變數（HKCU\\Environment），改由「開啟終端機」或命令列注入。非嚴格的應用仍照常寫入。",
       "strictMode": "嚴格投遞模式",
       "strictModeHint": "開啟後不再把密鑰寫入使用者環境變數，只經 cc-switch「開啟終端機」或 ccs env 注入。",
+      "onepasswordForced": "使用 1Password 時，密鑰絕不寫入系統環境變數（登錄檔同帳號程式可讀）。嚴格投遞已強制開啟；密鑰僅注入 cc-switch 拉起的終端機或經 ccs env 注入。",
       "strictModeActive": "已開啟嚴格的應用從別處啟動的 claude / codex / pi 將讀不到密鑰（會因缺少憑證而報錯），須從 cc-switch「開啟終端機」啟動，或按下方「複製啟用命令」在自己的 shell 裡用 ccs env 啟用。",
       "enabledToast": "已開啟全域嚴格投遞模式，並從使用者環境變數收回已投遞的密鑰",
       "disabledToast": "已關閉嚴格投遞模式，下次切換供應商時恢復常規投遞",
