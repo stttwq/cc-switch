@@ -280,14 +280,9 @@ fn sync_native_locked(
         if live_rewritten != *config {
             match crate::pi_config::replace_pi_provider(id, config, &live_rewritten) {
                 Ok(()) => {
-                    // §6.6：整包写入 vault（原生 sync 保留旧值，故 merge=true）。
-                    if let Err(error) = super::store_provider_bundle(
-                        state,
-                        &AppType::Pi,
-                        &provider.id,
-                        &extracted.secrets,
-                        true,
-                    ) {
+                    if let Err(error) =
+                        persist_pi_sync_secrets(state, &provider.id, &extracted.secrets)
+                    {
                         log::warn!("Pi native extract after live rewrite failed for {id}: {error}");
                     }
                     provider.settings_config = extracted.stripped;
@@ -300,13 +295,7 @@ fn sync_native_locked(
                 }
             }
         } else {
-            if let Err(error) = super::store_provider_bundle(
-                state,
-                &AppType::Pi,
-                &provider.id,
-                &extracted.secrets,
-                true,
-            ) {
+            if let Err(error) = persist_pi_sync_secrets(state, &provider.id, &extracted.secrets) {
                 log::warn!("Pi native extract failed for {id}: {error}");
                 continue;
             }
@@ -361,4 +350,18 @@ fn strip_and_store_pi_secrets(
         SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
     provider.settings_config = extracted.stripped;
     super::store_provider_bundle(state, &AppType::Pi, &provider.id, &extracted.secrets, merge_existing)
+}
+
+/// 原生 sync（启动重建 DB）专用：1Password 模式下不写 vault（§6.7 启动不取钥匙）。
+/// 秘密已在 1P（迁移时写入），原生 sync 只同步 DB 元数据；否则每次启动都会因
+/// 从 models.json 重抽 baseUrl 而触发 op / 解锁。凭据管理器模式照常写（本地快）。
+fn persist_pi_sync_secrets(
+    state: &AppState,
+    provider_id: &str,
+    secrets: &crate::secrets::ProviderSecrets,
+) -> Result<(), AppError> {
+    if crate::settings::is_onepassword_backend() {
+        return Ok(());
+    }
+    super::store_provider_bundle(state, &AppType::Pi, provider_id, secrets, true)
 }

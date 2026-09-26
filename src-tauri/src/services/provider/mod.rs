@@ -110,6 +110,34 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
     Ok(failures)
 }
 
+/// §6.7：1Password 模式下的启动 live 明文剥离（key-free，不走 switch/backfill/hydrate，
+/// 不触发任何 op / 解锁）。只重写当前 Claude/Codex 的 live 文件，剥掉残留明文
+/// （如 Codex auth.json 里的 OPENAI_API_KEY）。Pi 的 models.json 本就只含引用，不处理。
+pub fn strip_current_live_plaintext(state: &AppState) -> Result<(), AppError> {
+    for app_type in [AppType::Claude, AppType::Codex] {
+        let id = match crate::settings::get_effective_current_provider(&state.db, &app_type) {
+            Ok(Some(id)) => id,
+            Ok(None) => continue,
+            Err(e) => {
+                log::warn!("读当前供应商失败 {}: {e}", app_type.as_str());
+                continue;
+            }
+        };
+        match state.db.get_provider_by_id(&id, app_type.as_str()) {
+            Ok(Some(provider)) => {
+                if let Err(e) =
+                    live::write_live_with_common_config_for_state(state, &app_type, &provider)
+                {
+                    log::warn!("剥离 live 明文失败 {}/{id}: {e}", app_type.as_str());
+                }
+            }
+            Ok(None) => {}
+            Err(e) => log::warn!("读供应商 {}/{id} 失败: {e}", app_type.as_str()),
+        }
+    }
+    Ok(())
+}
+
 pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
     let mut targets = crate::secrets::load_known_targets(state.db.as_ref())?;
     let mut expected = Vec::new();
@@ -1921,17 +1949,23 @@ fn store_provider_bundle(
     merge_existing: bool,
 ) -> Result<(), AppError> {
     use crate::secrets::{SecretBundle, SecretGroup};
+    let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
+    let new_bundle = SecretBundle::from_provider_secrets(secrets);
+    // §6.2：本次抽取无新密钥（如切换时回填、live 已剥钥）→ 无需写入，
+    // 直接返回（既不 fetch 也不 put）。否则 1Password 模式下每次切换都会白白触发解锁。
+    if new_bundle.is_empty() {
+        return Ok(());
+    }
     if let Some(key) = secrets.api_key.as_ref() {
         // §5.5：登记进“本次会话已知密钥”，导出护栏按字面量兜底。
         crate::secrets::scan::note_session_secret(key.as_str());
     }
-    let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
     let mut bundle = if merge_existing {
         state.vault.fetch(&group)?.unwrap_or_default()
     } else {
         SecretBundle::new()
     };
-    for (name, value) in SecretBundle::from_provider_secrets(secrets).iter() {
+    for (name, value) in new_bundle.iter() {
         bundle.insert(name.clone(), value.clone());
     }
     if bundle.is_empty() {
@@ -2305,7 +2339,7 @@ mod vault_call_count_tests {
     }
 
     #[test]
-    fn edit_provider_secrets_fetches_then_puts_and_preserves_old() {
+    fn edit_provider_secrets_without_new_key_is_noop_and_preserves_old() {
         let (state, counting) = counting_state();
         let mut seed = Provider::from_parts(
             "p1".to_string(),
@@ -2316,7 +2350,7 @@ mod vault_call_count_tests {
         super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut seed, false)
             .expect("seed");
         counting.reset();
-        // 编辑：表单未回传密钥（已剥离）→ merge=true，应保留旧值。
+        // 编辑：表单未回传密钥（已剥离）→ 无新密钥 → 不写（不 fetch 不 put），旧值保留。
         let mut edited = Provider::from_parts(
             "p1".to_string(),
             "P1".to_string(),
@@ -2325,15 +2359,48 @@ mod vault_call_count_tests {
         );
         super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut edited, true)
             .expect("edit");
-        assert_eq!(counting.fetch_count(), 1, "编辑先 fetch 一次合并");
-        assert_eq!(counting.put_count(), 1, "编辑 put 一次");
-        // 验证旧值保留（这里又会 fetch，但断言已完成）。
+        assert_eq!(counting.fetch_count(), 0, "无新密钥不该 fetch");
+        assert_eq!(counting.put_count(), 0, "无新密钥不该 put");
+        // 验证旧值保留（这里才 fetch）。
         let secrets =
             ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("read");
         assert_eq!(
             secrets.api_key.as_deref().map(String::as_str),
             Some("sk-old"),
             "未回传的密钥应保留原值"
+        );
+    }
+
+    #[test]
+    fn edit_provider_secrets_with_new_key_merges() {
+        let (state, counting) = counting_state();
+        let mut seed = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-old", "ANTHROPIC_BASE_URL": "https://old"}}),
+            None,
+        );
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut seed, false)
+            .expect("seed");
+        counting.reset();
+        // 编辑：只改 api_key（新值），base_url 未回传 → merge 保留旧 base_url。
+        let mut edited = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-new"}}),
+            None,
+        );
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut edited, true)
+            .expect("edit");
+        assert_eq!(counting.fetch_count(), 1, "有新密钥时先 fetch 合并");
+        assert_eq!(counting.put_count(), 1, "有新密钥时 put");
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("read");
+        assert_eq!(secrets.api_key.as_deref().map(String::as_str), Some("sk-new"));
+        assert_eq!(
+            secrets.base_url.as_deref().map(String::as_str),
+            Some("https://old"),
+            "未回传的 base_url 应被 merge 保留"
         );
     }
 
