@@ -750,8 +750,6 @@ pub fn op_version(op_path: &Path) -> Option<String> {
 }
 
 /// 供 §4.2 构造：读取 1Password 设置并定位 op。缺任一项则返回错误。
-// 尚未接入 AppState 构造（P4 切后端时用）。
-#[allow(dead_code)]
 pub fn from_settings() -> Result<OnePasswordVault, VaultError> {
     let op_path = locate_op(crate::settings::get_onepassword_op_path().as_deref())
         .ok_or(VaultError::NotInstalled)?;
@@ -764,6 +762,28 @@ pub fn from_settings() -> Result<OnePasswordVault, VaultError> {
     let vault = crate::settings::get_onepassword_vault()
         .ok_or_else(|| VaultError::Other("1Password vault 未配置".to_string()))?;
     Ok(OnePasswordVault::new(op_path, account, vault))
+}
+
+/// §4.2 / §6.7：按当前 `secret_backend` 设置构造运行时保险箱。
+/// - `onepassword`：构 OnePasswordVault；构造失败（op 未装/签名不信任/未配置）
+///   用 UnavailableVault 占位，让 App 仍能打开（启动不取钥匙，§6.7）。
+/// - 其它（缺省 windows）：包旧 store 的 LegacyWindowsVault。
+pub fn build_runtime_vault(
+    store: std::sync::Arc<dyn crate::secrets::SecretStore>,
+    db: std::sync::Arc<crate::database::Database>,
+) -> std::sync::Arc<dyn SecretVault> {
+    use crate::secrets::vault::{LegacyWindowsVault, UnavailableVault};
+    if crate::settings::is_onepassword_backend() {
+        match from_settings() {
+            Ok(v) => std::sync::Arc::new(v),
+            Err(e) => {
+                log::warn!("1Password 后端构造失败（code={}），App 照常打开，取钥匙将报错", e.code());
+                std::sync::Arc::new(UnavailableVault::new(e))
+            }
+        }
+    } else {
+        std::sync::Arc::new(LegacyWindowsVault::new(store, db))
+    }
 }
 
 #[cfg(test)]

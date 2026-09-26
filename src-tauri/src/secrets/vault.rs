@@ -402,6 +402,15 @@ const APP_SYNC_FIELDS: &[(&str, &str, &str)] = &[
     (FIELD_APP_E2E_PASSPHRASE, "sync", "passphrase"),
 ];
 
+/// 把应用级 target 的 `(<app>, <field>)`（如 `("webdav","password")`）映射成 AppSync
+/// 整包字段名（如 `app.webdav_password`）。迁移向导用。
+pub fn app_sync_bundle_field(app: &str, field: &str) -> Option<&'static str> {
+    APP_SYNC_FIELDS
+        .iter()
+        .find(|(_, a, f)| *a == app && *f == field)
+        .map(|(label, _, _)| *label)
+}
+
 fn store_err(e: AppError) -> VaultError {
     VaultError::Other(e.to_string())
 }
@@ -610,6 +619,44 @@ impl SecretVault for LegacyWindowsVault {
 
     fn backend_name(&self) -> &'static str {
         "windows-credential-manager"
+    }
+}
+
+/// 后端不可用时的占位实现（§6.7）：构造 OnePasswordVault 失败（op 未装/签名不信任）时
+/// 用它代替，让 App 仍能正常打开、浏览；任何取钥匙操作明确失败（绝不静默降级）。
+pub struct UnavailableVault {
+    error: VaultError,
+}
+
+impl UnavailableVault {
+    pub fn new(error: VaultError) -> Self {
+        Self { error }
+    }
+}
+
+impl SecretVault for UnavailableVault {
+    fn fetch(&self, _group: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
+        Err(self.error.clone())
+    }
+
+    fn put(&self, _group: &SecretGroup, _bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
+        Err(self.error.clone())
+    }
+
+    fn delete(&self, _group: &SecretGroup) -> Result<(), VaultError> {
+        Err(self.error.clone())
+    }
+
+    fn status(&self) -> VaultStatus {
+        match &self.error {
+            VaultError::NotInstalled => VaultStatus::NotInstalled,
+            VaultError::NotSignedIn => VaultStatus::NotSignedIn,
+            other => VaultStatus::Unknown(other.code().to_string()),
+        }
+    }
+
+    fn backend_name(&self) -> &'static str {
+        "1password-unavailable"
     }
 }
 

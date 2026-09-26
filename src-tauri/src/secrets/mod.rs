@@ -2,6 +2,7 @@ pub mod cleanup;
 mod extractor;
 pub mod legacy;
 pub mod migration;
+mod migration_1p;
 mod onepassword;
 pub mod portable;
 mod rules;
@@ -34,10 +35,12 @@ pub use types::Extracted;
 pub use types::ProviderSecrets;
 pub use vault::{
     CountingVault, InMemoryVault, LegacyWindowsVault, SecretBundle, SecretGroup, SecretVault,
-    VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX, FIELD_BASE_URL,
-    FIELD_ENV_PREFIX,
+    UnavailableVault, VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX,
+    FIELD_BASE_URL, FIELD_ENV_PREFIX,
 };
 pub use onepassword::{
-    list_accounts, list_vaults, locate_op, op_version, probe as onepassword_probe, verify_op_signature,
-    OnePasswordVault, OpAccount, OpProbe, OpVault,
+    build_runtime_vault, from_settings as onepassword_from_settings, list_accounts, list_vaults,
+    locate_op, op_version, probe as onepassword_probe, verify_op_signature, OnePasswordVault,
+    OpAccount, OpProbe, OpVault,
 };
+pub use migration_1p::{migrate_to_onepassword, MigrationReport as OnePasswordMigrationReport};

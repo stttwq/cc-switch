@@ -201,7 +201,11 @@ fn build_state() -> Result<AppState, AppError> {
                 format!("Credential store unavailable: {e}"),
             )
         })?);
-        Ok(AppState::new(db, secrets))
+        let mut state = AppState::new(db, secrets);
+        // §4.2：运行时保险箱按 secret_backend 选择（ccs env / 右键终端也需走 1P）。
+        state.vault =
+            crate::secrets::build_runtime_vault(state.secrets.clone(), state.db.clone());
+        Ok(state)
     }
     #[cfg(not(windows))]
     {

@@ -1816,6 +1816,9 @@
     "verifySignature": "校驗 op.exe 簽章（建議）",
     "testFetch": "測試取金鑰",
     "testOk": "1Password 可達且已解鎖。",
-    "saved": "1Password 設定已儲存"
+    "saved": "1Password 設定已儲存",
+    "migrate": "遷移到 1Password",
+    "migrateConfirm": "將把認證管理員裡的所有 cc-switch 憑證讀出、寫入 1Password、校驗無誤後從認證管理員刪除並切換後端。繼續？",
+    "migrateDone": "已遷移 {{groups}} 個項目、{{fields}} 個欄位。後端已切換到 1Password。"
   }
 }

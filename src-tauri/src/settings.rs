@@ -818,6 +818,10 @@ pub fn env_delivery_strict_mode_enabled() -> bool {
 /// 2.2 方案 P2：某 app 的有效严格性。全局开→所有 app 严格（兼容老语义）；
 /// 否则看该 app 是否在"按应用"列表里。投递/预检/清理按此逐 app 决策。
 pub fn strict_for(app: &AppType) -> bool {
+    // §6.8：1Password 后端下恒为严格——钥匙绝不写 `HKCU\Environment`（同账号程序可读）。
+    if is_onepassword_backend() {
+        return true;
+    }
     get_settings().is_strict_for(app)
 }
 
@@ -841,6 +845,14 @@ pub fn is_global_strict_mode() -> bool {
 /// 置严格投递模式总开关。true=全局严格；false=完全关闭（同时清空"按应用"列表，
 /// 避免残留导致回显歧义）。与按应用列表的互斥由归一化在写路径强制。
 pub fn set_env_delivery_strict_mode(enabled: bool) -> Result<(), AppError> {
+    // §6.8：1Password 后端下不允许关闭严格投递（钥匙绝不能回写注册表）。
+    if !enabled && is_onepassword_backend() {
+        return Err(AppError::localized(
+            "env_delivery.strict_locked_1p",
+            "使用 1Password 时无法关闭严格投递",
+            "Strict delivery cannot be disabled while using 1Password",
+        ));
+    }
     mutate_settings(|settings| {
         settings.env_delivery_strict_mode = enabled;
         if !enabled {
@@ -851,6 +863,14 @@ pub fn set_env_delivery_strict_mode(enabled: bool) -> Result<(), AppError> {
 
 /// 置"按应用"严格集合（P2 分级）。写该列表时强制全局 bool=false，由归一化维持互斥。
 pub fn set_env_delivery_strict_apps(apps: Vec<String>) -> Result<(), AppError> {
+    // §6.8：1Password 后端下恒全局严格，不允许降为"按应用"（那会把部分 app 降为非严格）。
+    if is_onepassword_backend() {
+        return Err(AppError::localized(
+            "env_delivery.strict_locked_1p",
+            "使用 1Password 时无法按应用放宽严格投递",
+            "Per-app strict relaxation is unavailable while using 1Password",
+        ));
+    }
     mutate_settings(|settings| {
         settings.env_delivery_strict_mode = false;
         settings.env_delivery_strict_apps = Some(apps);
@@ -1168,8 +1188,6 @@ pub fn get_secret_backend() -> String {
 }
 
 /// 是否已切到 1Password 后端。
-// 尚未接入构造/投递判定（P4 用）。
-#[allow(dead_code)]
 pub fn is_onepassword_backend() -> bool {
     get_secret_backend() == "onepassword"
 }

@@ -1816,6 +1816,9 @@
     "verifySignature": "Verify op.exe signature (recommended)",
     "testFetch": "Test fetch",
     "testOk": "1Password is reachable and unlocked.",
-    "saved": "1Password settings saved"
+    "saved": "1Password settings saved",
+    "migrate": "Migrate to 1Password",
+    "migrateConfirm": "This reads every cc-switch credential from Windows Credential Manager, writes it to 1Password, verifies it, then deletes it from Credential Manager and switches the backend. Continue?",
+    "migrateDone": "Migrated {{groups}} item(s), {{fields}} field(s). Backend switched to 1Password."
   }
 }

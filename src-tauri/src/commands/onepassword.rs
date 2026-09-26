@@ -123,3 +123,19 @@ pub async fn onepassword_test_fetch(_state: State<'_, AppState>) -> Result<Value
     .map_err(|e| format!("测试取钥匙任务失败: {e}"))?
     .map_err(|e| e.to_string())
 }
+
+/// 迁移向导（§7）：把凭据管理器里的 cc-switch 条目迁到 1Password，校验后删除并切后端。
+/// 需先在设置里选好 account/vault。会触发解锁弹窗。
+#[tauri::command]
+pub async fn onepassword_migrate(state: State<'_, AppState>) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let vault = crate::secrets::onepassword_from_settings()
+            .map_err(crate::error::AppError::from)?;
+        let report = crate::secrets::migrate_to_onepassword(&state, &vault)?;
+        Ok::<Value, crate::error::AppError>(json!(report))
+    })
+    .await
+    .map_err(|e| format!("迁移任务失败: {e}"))?
+    .map_err(|e| e.to_string())
+}

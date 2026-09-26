@@ -41,7 +41,7 @@ export function OnePasswordSection() {
   const [vault, setVault] = useState<string>("");
   const [verifySignature, setVerifySignature] = useState(true);
   const [busy, setBusy] = useState<
-    "status" | "accounts" | "vaults" | "save" | "test" | null
+    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | null
   >(null);
 
   const refreshStatus = useCallback(async () => {
@@ -114,6 +114,29 @@ export function OnePasswordSection() {
     try {
       await invoke("onepassword_test_fetch");
       toast.success(t("onepassword.testOk"));
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const migrate = async () => {
+    if (!window.confirm(t("onepassword.migrateConfirm"))) return;
+    setBusy("migrate");
+    try {
+      const report = await invoke<{
+        migratedGroups: number;
+        migratedFields: number;
+        deletedTargets: number;
+      }>("onepassword_migrate");
+      toast.success(
+        t("onepassword.migrateDone", {
+          groups: report.migratedGroups,
+          fields: report.migratedFields,
+        }),
+      );
+      await refreshStatus();
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -267,6 +290,22 @@ export function OnePasswordSection() {
             <KeyRound className="mr-2 h-4 w-4" />
           )}
           {t("onepassword.testFetch")}
+        </Button>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={
+            busy !== null ||
+            !account ||
+            !vault ||
+            status?.backend === "onepassword"
+          }
+          onClick={migrate}
+        >
+          {busy === "migrate" ? (
+            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+          ) : null}
+          {t("onepassword.migrate")}
         </Button>
       </div>
     </div>

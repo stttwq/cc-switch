@@ -1816,6 +1816,9 @@
     "verifySignature": "校验 op.exe 签名（推荐）",
     "testFetch": "测试取钥匙",
     "testOk": "1Password 可达且已解锁。",
-    "saved": "1Password 设置已保存"
+    "saved": "1Password 设置已保存",
+    "migrate": "迁移到 1Password",
+    "migrateConfirm": "将把凭据管理器里的所有 cc-switch 凭据读出、写入 1Password、校验无误后从凭据管理器删除并切换后端。继续？",
+    "migrateDone": "已迁移 {{groups}} 个条目、{{fields}} 个字段。后端已切换到 1Password。"
   }
 }

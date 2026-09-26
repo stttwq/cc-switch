@@ -514,66 +514,88 @@ pub fn run() {
                 }
             }
 
-            let secrets: Arc<dyn crate::secrets::SecretStore> = loop {
-                let store = Arc::new(match crate::secrets::WindowsSecretStore::new() {
-                    Ok(store) => store,
+            // §6.7：1Password 后端下启动不阻断、不做凭据管理器 probe。
+            // 仍构造 WindowsSecretStore 作为迁移源（便携包/迁移向导用）。
+            let backend_is_1p = crate::settings::is_onepassword_backend();
+            let secrets: Arc<dyn crate::secrets::SecretStore> = if backend_is_1p {
+                match crate::secrets::WindowsSecretStore::new() {
+                    Ok(store) => Arc::new(store),
                     Err(e) => {
-                        log::error!("创建凭据存储失败: {e}");
-                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
-                            log::info!("用户选择退出程序");
-                            std::process::exit(1);
-                        }
-                        continue;
+                        log::warn!("1P 模式下构造凭据管理器迁移源失败（不影响运行）: {e}");
+                        Arc::new(crate::secrets::UnsupportedSecretStore)
                     }
-                });
-                let probe_result = match tokio::runtime::Runtime::new() {
-                    Ok(rt) => rt.block_on(crate::secrets::SecretStore::probe(&*store)),
-                    Err(e) => Err(AppError::Config(format!("创建 tokio runtime 失败: {e}"))),
-                };
-                match probe_result {
-                    Ok(()) => break store,
-                    Err(e) => {
-                        log::error!("凭据管理器自检失败: {e}");
-                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
-                            log::info!("用户选择退出程序");
-                            std::process::exit(1);
+                }
+            } else {
+                loop {
+                    let store = Arc::new(match crate::secrets::WindowsSecretStore::new() {
+                        Ok(store) => store,
+                        Err(e) => {
+                            log::error!("创建凭据存储失败: {e}");
+                            if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                                log::info!("用户选择退出程序");
+                                std::process::exit(1);
+                            }
+                            continue;
+                        }
+                    });
+                    let probe_result = match tokio::runtime::Runtime::new() {
+                        Ok(rt) => rt.block_on(crate::secrets::SecretStore::probe(&*store)),
+                        Err(e) => Err(AppError::Config(format!("创建 tokio runtime 失败: {e}"))),
+                    };
+                    match probe_result {
+                        Ok(()) => break store as Arc<dyn crate::secrets::SecretStore>,
+                        Err(e) => {
+                            log::error!("凭据管理器自检失败: {e}");
+                            if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                                log::info!("用户选择退出程序");
+                                std::process::exit(1);
+                            }
                         }
                     }
                 }
             };
-            let app_state = AppState::new(db, secrets);
+            // §4.2：运行时保险箱按 secret_backend 设置选择（凭据管理器 / 1Password）。
+            let mut app_state = AppState::new(db, secrets);
+            app_state.vault = crate::secrets::build_runtime_vault(
+                app_state.secrets.clone(),
+                app_state.db.clone(),
+            );
 
-            // §6.1：DB init 只做纯 SQL，凭据迁移在 AppState::new（含 probe）之后
-            // 用同一份已探测通过的 store 触发；§6.3 的明文残留清理紧随其后。
-            // 失败按 §6.6 走「重试 / 退出」阻断对话框，不提供跳过。
-            loop {
-                match app_state
-                    .db
-                    .run_credential_migration_if_pending(app_state.secrets.as_ref())
-                {
-                    Ok(true) => {
-                        crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
-                        break;
-                    }
-                    Ok(false) => break,
-                    Err(e) => {
-                        log::error!("凭据迁移失败: {e}");
-                        if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
-                            log::info!("用户选择退出程序");
-                            std::process::exit(1);
+            // §6.1：DB init 只做纯 SQL，凭据迁移在 AppState::new 之后用同一份 store 触发；
+            // §6.3 的明文残留清理紧随其后。失败按 §6.6 走「重试 / 退出」阻断对话框。
+            // §6.7：1Password 模式下跳过——这类迁移把 DB 明文写进凭据管理器，方向与 1P 相反；
+            // 1P 下的钥匙导入由迁移向导（cred manager → 1Password）完成。
+            if !backend_is_1p {
+                loop {
+                    match app_state
+                        .db
+                        .run_credential_migration_if_pending(app_state.secrets.as_ref())
+                    {
+                        Ok(true) => {
+                            crate::secrets::cleanup::cleanup_auto_deletable_plaintext();
+                            break;
+                        }
+                        Ok(false) => break,
+                        Err(e) => {
+                            log::error!("凭据迁移失败: {e}");
+                            if !show_secrets_probe_error_dialog(app.handle(), &e.to_string()) {
+                                log::info!("用户选择退出程序");
+                                std::process::exit(1);
+                            }
                         }
                     }
                 }
-            }
 
-            // settings.json 里的 WebDAV / S3 明文残留：无条件扫一次（幂等 no-op）。
-            // 已清过 pending 标志的老用户不会再走上面的迁移批次，靠这条收掉明文。
-            if let Ok(rt) = tokio::runtime::Runtime::new() {
-                if let Err(e) = rt.block_on(crate::secrets::migration::sweep_plaintext_app_settings(
-                    &app_state.db,
-                    app_state.secrets.as_ref(),
-                )) {
-                    log::warn!("settings.json 明文凭据清扫失败: {e}");
+                // settings.json 里的 WebDAV / S3 明文残留：无条件扫一次（幂等 no-op）。
+                if let Ok(rt) = tokio::runtime::Runtime::new() {
+                    if let Err(e) = rt.block_on(
+                        crate::secrets::migration::sweep_plaintext_app_settings(
+                            &app_state.db,
+                            app_state.secrets.as_ref(),
+                        ),
+                    ) {
+                        log::warn!("settings.json 明文凭据清扫失败: {e}");
+                    }
                 }
             }
 
@@ -1117,6 +1139,7 @@ pub fn run() {
             commands::onepassword_list_vaults,
             commands::onepassword_save_config,
             commands::onepassword_test_fetch,
+            commands::onepassword_migrate,
             commands::webdav_test_connection,
             commands::webdav_sync_upload,
             commands::webdav_sync_download,
