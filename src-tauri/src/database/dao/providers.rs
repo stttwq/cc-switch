@@ -310,13 +310,106 @@ impl Database {
     }
 
     pub fn delete_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {
-        let conn = lock_conn!(self.conn);
-        conn.execute(
+        let mut conn = lock_conn!(self.conn);
+        let tx = conn
+            .transaction()
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.execute(
             "DELETE FROM providers WHERE id = ?1 AND app_type = ?2",
             params![id, app_type],
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
+        // F1-2（D3-A）：删除供应商时端点行一并删除（引用随主行，不留孤儿）
+        tx.execute(
+            "DELETE FROM provider_endpoints WHERE provider_id = ?1 AND app = ?2",
+            params![id, app_type],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        tx.commit().map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
+    }
+
+    // ─── provider_endpoints（F1-2 / §7 D3-A）：非敏感 base_url 端点表 ───
+
+    /// upsert 端点行（覆盖写）。base_url 是非秘密配置，该表随云同步。
+    pub fn upsert_provider_endpoint(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+        base_url: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        conn.execute(
+            "INSERT INTO provider_endpoints (app, provider_id, base_url, updated_at)
+             VALUES (?1, ?2, ?3, ?4)
+             ON CONFLICT(app, provider_id) DO UPDATE SET
+                 base_url = excluded.base_url,
+                 updated_at = excluded.updated_at",
+            params![app_type, provider_id, base_url, now],
+        )
+        .map_err(|e| AppError::Database(format!("写入 provider_endpoints 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 读取端点行；无则 `None`（0 次 vault 往返）。
+    pub fn get_provider_endpoint(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<Option<String>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let base_url: Option<String> = conn
+            .query_row(
+                "SELECT base_url FROM provider_endpoints WHERE app = ?1 AND provider_id = ?2",
+                params![app_type, provider_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|e| AppError::Database(format!("读取 provider_endpoints 失败: {e}")))?;
+        Ok(base_url)
+    }
+
+    /// 删除某供应商的端点行。
+    pub fn delete_provider_endpoint(
+        &self,
+        app_type: &str,
+        provider_id: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "DELETE FROM provider_endpoints WHERE app = ?1 AND provider_id = ?2",
+            params![app_type, provider_id],
+        )
+        .map_err(|e| AppError::Database(format!("删除 provider_endpoints 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// F1-2：端点回填待办清单——`secret_refs` 已登记 `base_url` 的**真实迁移行**
+    /// （vault_id 非空，排除 v20 从名册回填的占位行）但端点表还没有的 `(app, provider_id)`。
+    /// 只查本地表，0 次 vault 往返。
+    pub fn list_endpoint_backfill_pending(&self) -> Result<Vec<(String, String)>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(
+                "SELECT r.app, r.provider_id FROM secret_refs r
+                 WHERE r.vault_id != ''
+                   AND r.fields LIKE '%\"base_url\"%'
+                   AND NOT EXISTS (
+                       SELECT 1 FROM provider_endpoints e
+                       WHERE e.app = r.app AND e.provider_id = r.provider_id
+                   )
+                 ORDER BY r.app, r.provider_id",
+            )
+            .map_err(|e| AppError::Database(format!("查询端点回填待办失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|e| AppError::Database(format!("查询端点回填待办失败: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(format!("读取端点回填待办失败: {e}")))?;
+        Ok(rows)
     }
 
     pub fn set_current_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {

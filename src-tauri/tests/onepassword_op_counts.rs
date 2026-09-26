@@ -33,10 +33,8 @@ fn set_onepassword_backend() {
 
 /// Codex 切换（含「切走回填」）：fetch = 0、put = 0。
 ///
-/// 当前失败原因（P0-1/P0-8）：回填会从 live 提取 base_url 剥进 vault（fetch+put），
-/// 写 live 从凭据管理器读 base_url。F1-2 落地后 base_url 走端点表，切换 0 次 op。
+/// F1-2 落地后 base_url 走端点表，切换 0 次 op。
 #[test]
-#[ignore = "F1-2 后启用"]
 fn onepassword_codex_switch_is_zero_op() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
@@ -86,6 +84,14 @@ fn onepassword_codex_switch_is_zero_op() {
 
     // 被测流程：b → a 的完整切换（含对 a 的切走回填）。
     ProviderService::switch(&state, AppType::Codex, "a").expect("switch back to a");
+
+    // P0-1 验收：切换后的 config.toml 含 base_url（来自端点表 / 懒迁移）。
+    let config_text =
+        std::fs::read_to_string(cc_switch_lib::get_codex_config_path()).expect("read config.toml");
+    assert!(
+        config_text.contains("https://a.example/v1"),
+        "config.toml 必须含 base_url，实际：{config_text}"
+    );
 
     assert_eq!(
         counting.fetch_count(),

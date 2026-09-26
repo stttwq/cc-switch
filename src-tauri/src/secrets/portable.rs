@@ -721,7 +721,8 @@ mod tests {
         assert_eq!(report.app_secrets, 1, "webdav 密码属应用级");
 
         use crate::secrets::{SecretGroup, SecretVault};
-        // 供应商组：pi/jm 的 api_key + base_url 合并进一个条目。
+        // 供应商组：pi/jm 的 api_key 合并进一个条目（F1-2：非敏感 base_url
+        // 拆到本地端点表，不进 vault）。
         let jm = vault
             .fetch(&SecretGroup::provider(AppType::Pi, "jm"))
             .expect("fetch")
@@ -730,9 +731,13 @@ mod tests {
             jm.get("api_key").map(|v| v.to_string()),
             Some("sk-pi-jm-literal".into())
         );
+        assert!(jm.get("base_url").is_none(), "非敏感 base_url 不进 vault");
         assert_eq!(
-            jm.get("base_url").map(|v| v.to_string()),
-            Some("https://a.example/v1".into())
+            state
+                .db
+                .get_provider_endpoint("pi", "jm")
+                .expect("endpoint"),
+            Some("https://a.example/v1".to_string())
         );
         // AppSync 组。
         let sync = vault
@@ -772,8 +777,18 @@ mod tests {
 
         import_to_vault(&state, &bytes, GOOD).await.expect("first");
         let second = import_to_vault(&state, &bytes, GOOD).await.expect("second");
-        assert_eq!(second.unchanged, 4, "同值重导全部 unchanged");
-        assert_eq!(second.imported, 0);
+        // F1-2：base_url 在 vault 侧已拆空，重导时按「新增」计（值仍落在端点表）；
+        // 其余三个字段同值计 unchanged。
+        assert_eq!(second.unchanged, 3, "vault 侧同值字段全部 unchanged");
+        assert_eq!(second.imported, 1, "base_url 在 vault 侧按新增计");
         assert_eq!(second.overwritten, 0);
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("pi", "jm")
+                .expect("endpoint"),
+            Some("https://a.example/v1".to_string()),
+            "端点表值幂等"
+        );
     }
 }

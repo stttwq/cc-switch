@@ -1821,6 +1821,11 @@
     "migrate": "1Password に移行",
     "migrateConfirm": "資格情報マネージャー内のすべての cc-switch 資格情報を読み取り、1Password に書き込み、検証後に資格情報マネージャーから削除してバックエンドを切り替えます。続行しますか？",
     "migrateDone": "{{groups}} 件、{{fields}} フィールドを移行しました。バックエンドを 1Password に切り替えました。",
-    "restartRequiredBanner": "1Password に切り替わり、旧バックエンドは無効になりました。切り替えを完了するため CC Switch を今すぐ再起動してください。"
+    "restartRequiredBanner": "1Password に切り替わり、旧バックエンドは無効になりました。切り替えを完了するため CC Switch を今すぐ再起動してください。",
+    "backfillPending": "{{count}} 件のプロバイダーエンドポイント（base_url）がまだボールトに保存されています。読み取るには 1Password へのアクセスが必要です。バックフィルすれば解除不要になります。",
+    "backfillAction": "エンドポイントをバックフィル",
+    "backfillProgress": "エンドポイントをバックフィル中…（{{done}}/{{total}}、1 件約 7 秒、解除を要求する場合があります）",
+    "backfillDone": "エンドポイントのバックフィル完了：{{backfilled}} 件をローカルのエンドポイント表へ移行しました。",
+    "backfillDoneWithFailures": "エンドポイントのバックフィル完了：{{backfilled}} 件成功、{{failed}} 件失敗（後で再試行できます。切り替え時は自動的に遅延移行されます）。"
   }
 }

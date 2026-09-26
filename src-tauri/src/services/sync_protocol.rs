@@ -71,6 +71,8 @@ pub(crate) fn should_trigger_auto_sync_for_table(table: &str) -> bool {
             | "skill_repos"
             | "profiles"
             | "settings"
+            // F1-2（D3-A）：非敏感 base_url 端点表，属共享配置（非秘密，换设备也需要）
+            | "provider_endpoints"
     )
 }
 
@@ -791,6 +793,8 @@ mod tests {
             "skill_repos",
             "profiles",
             "settings",
+            // F1-2（D3-A）：端点表属共享配置，应触发自动上传
+            "provider_endpoints",
         ] {
             assert!(
                 should_trigger_auto_sync_for_table(table),
@@ -804,8 +808,6 @@ mod tests {
             "provider_health",
             "session_log_sync",
             "model_pricing",
-            // schema v19 已 DROP（§7.1 / D9），出现在清单里只会误导后来人
-            "provider_endpoints",
             "proxy_config",
         ] {
             assert!(

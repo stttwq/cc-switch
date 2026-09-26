@@ -805,14 +805,27 @@ pub(crate) fn write_live_snapshot(
             if let Some(obj) = live_auth.as_object_mut() {
                 obj.remove("OPENAI_API_KEY");
             }
-            let base_url = futures::executor::block_on(state.secrets.retrieve(
-                &crate::secrets::SecretTarget::provider_base_url(
-                    AppType::Codex,
-                    provider.id.clone(),
-                ),
-            ))
-            .ok()
-            .flatten();
+            // F1-2（D3-A）：base_url 从端点表 / vault 懒迁移读取，不再走旧凭据存储。
+            let base_url = super::resolve_base_url(state, &AppType::Codex, &provider.id)?;
+            // refs 表明该供应商有 base_url 却解析不到（1Password 未解锁 / 条目丢失）时
+            // **切换失败**——绝不写出缺 base_url 的 config.toml（Codex 无法工作）。
+            let refs_have_base_url = state
+                .db
+                .get_secret_ref_fields(AppType::Codex.as_str(), &provider.id)?
+                .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+            if base_url.is_none() && refs_have_base_url {
+                return Err(AppError::localized(
+                    "provider.base_url_unresolved",
+                    format!(
+                        "无法读取供应商「{}」的 base_url（可能 1Password 尚未解锁），已取消切换",
+                        provider.name
+                    ),
+                    format!(
+                        "Cannot resolve base_url for provider \"{}\" (1Password may be locked); switch cancelled",
+                        provider.name
+                    ),
+                ));
+            }
             let sanitized_config = if let Some(config_text) = config_str {
                 let sanitized =
                     super::codex_sanitizer::sanitize_codex_config_for_live_write_with_base_url(

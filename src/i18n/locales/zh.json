@@ -1821,6 +1821,11 @@
     "migrate": "迁移到 1Password",
     "migrateConfirm": "将把凭据管理器里的所有 cc-switch 凭据读出、写入 1Password、校验无误后从凭据管理器删除并切换后端。继续？",
     "migrateDone": "已迁移 {{groups}} 个条目、{{fields}} 个字段。后端已切换到 1Password。",
-    "restartRequiredBanner": "已切换到 1Password，旧后端已停用，请立即重启 CC Switch 完成切换。"
+    "restartRequiredBanner": "已切换到 1Password，旧后端已停用，请立即重启 CC Switch 完成切换。",
+    "backfillPending": "检测到 {{count}} 个供应商的端点（base_url）还保存在保险箱中，读取时需要访问 1Password。回填后读取不再需要解锁。",
+    "backfillAction": "回填端点",
+    "backfillProgress": "端点回填中…（{{done}}/{{total}}，每个约 7 秒，会请求解锁）",
+    "backfillDone": "端点回填完成：{{backfilled}} 个已迁移到本地端点表。",
+    "backfillDoneWithFailures": "端点回填完成：{{backfilled}} 个成功，{{failed}} 个失败（可稍后重试，切换时会自动懒迁移）。"
   }
 }

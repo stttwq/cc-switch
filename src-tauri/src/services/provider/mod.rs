@@ -1236,9 +1236,20 @@ impl ProviderService {
         app_type: &AppType,
         provider_id: &str,
     ) -> Result<ProviderSecrets, AppError> {
-        let group = crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
-        let bundle = state.vault.fetch(&group)?;
-        Ok(bundle.map(|b| b.to_provider_secrets()).unwrap_or_default())
+        let group =
+            crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
+        let bundle = state.vault.fetch(&group);
+        let mut secrets = bundle.map(|b| b.map(|b| b.to_provider_secrets()).unwrap_or_default())?;
+        // F1-2（D3-A）：端点表命中时覆盖 vault 侧的 base_url（vault 里的可能是
+        // 拆分前的旧副本）。端点表未命中且 vault 也没有时保持 None。
+        // Claude 终端注入 ANTHROPIC_BASE_URL 的行为不变。
+        if let Ok(Some(url)) = state
+            .db
+            .get_provider_endpoint(app_type.as_str(), provider_id)
+        {
+            secrets.base_url = Some(Zeroizing::new(url));
+        }
+        Ok(secrets)
     }
 
     pub fn adopt_env_vars(
@@ -1696,9 +1707,7 @@ impl ProviderService {
                     .get_secret_ref_fields(app_type.as_str(), id)
                     .ok()
                     .flatten()
-                    .is_some_and(|fields| {
-                        fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY)
-                    })
+                    .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY))
             });
             if !stored {
                 return Err(AppError::localized(
@@ -1726,16 +1735,23 @@ impl ProviderService {
                 });
 
         if need_base_url && incoming.base_url.is_none() && !has_model_level_base_url {
-            // §6.6/4.3：改查 secret_refs 字段名。
+            // F1-2（D3-A）：端点表**或** secret_refs 任一命中即视为已有 base_url
+            //（非敏感 base_url 已搬到端点表，refs 只兜底拆分前的历史数据）。
             let stored = candidate_ids.iter().any(|id| {
                 state
                     .db
-                    .get_secret_ref_fields(app_type.as_str(), id)
+                    .get_provider_endpoint(app_type.as_str(), id)
                     .ok()
                     .flatten()
-                    .is_some_and(|fields| {
-                        fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL)
-                    })
+                    .is_some()
+                    || state
+                        .db
+                        .get_secret_ref_fields(app_type.as_str(), id)
+                        .ok()
+                        .flatten()
+                        .is_some_and(|fields| {
+                            fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL)
+                        })
             });
             if !stored {
                 return Err(AppError::localized(
@@ -1942,11 +1958,22 @@ fn strip_and_store_provider_secrets(
         field,
     )?;
     provider.settings_config = extracted.stripped;
-    store_provider_bundle(state, app_type, &provider.id, &extracted.secrets, merge_existing)?;
+    store_provider_bundle(
+        state,
+        app_type,
+        &provider.id,
+        &extracted.secrets,
+        merge_existing,
+    )?;
     Ok(())
 }
 
 /// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
+///
+/// F1-2（§7 D3-A）：`base_url` 先按 [`is_credential_bearing_url`] 拆分——非敏感的
+/// 写本地端点表 `provider_endpoints`（随云同步，读取 0 次 op），并从准备写入 vault
+/// 的整包里去掉；敏感 URL（userinfo / 敏感 query 参数）保持整包语义仍存 vault。
+/// 拆分后若 vault 整包没有新内容（例如只改了端点）→ **不 fetch 也不 put**。
 pub(crate) fn store_provider_bundle(
     state: &AppState,
     app_type: &AppType,
@@ -1956,7 +1983,16 @@ pub(crate) fn store_provider_bundle(
 ) -> Result<(), AppError> {
     use crate::secrets::{SecretBundle, SecretGroup};
     let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
-    let new_bundle = SecretBundle::from_provider_secrets(secrets);
+    let mut new_bundle = SecretBundle::from_provider_secrets(secrets);
+    // F1-2：非敏感 base_url 落端点表；vault 整包不再托管它。
+    if let Some(url) = secrets.base_url.as_ref() {
+        if !crate::secrets::is_credential_bearing_url(url.as_str()) {
+            state
+                .db
+                .upsert_provider_endpoint(app_type.as_str(), provider_id, url.as_str())?;
+            new_bundle.remove(crate::secrets::FIELD_BASE_URL);
+        }
+    }
     // §6.2：本次抽取无新密钥（如切换时回填、live 已剥钥）→ 无需写入，
     // 直接返回（既不 fetch 也不 put）。否则 1Password 模式下每次切换都会白白触发解锁。
     if new_bundle.is_empty() {
@@ -1971,6 +2007,15 @@ pub(crate) fn store_provider_bundle(
     } else {
         SecretBundle::new()
     };
+    // F1-2：merge 回来的旧整包若还托管着 base_url（拆分前的历史数据），而本次
+    // 明确传入了非敏感 base_url，则从 vault 侧一并去掉——之后 vault 不再是
+    // base_url 的读取来源（端点表优先）。未传 base_url 时保留旧值（表单“保留原值”）。
+    if secrets.base_url.is_some()
+        && new_bundle.get(crate::secrets::FIELD_BASE_URL).is_none()
+        && merge_existing
+    {
+        bundle.remove(crate::secrets::FIELD_BASE_URL);
+    }
     for (name, value) in new_bundle.iter() {
         bundle.insert(name.clone(), value.clone());
     }
@@ -1988,6 +2033,46 @@ pub(crate) fn store_provider_bundle(
         &vref.fields,
     )?;
     Ok(())
+}
+
+/// F1-2（§7 D3-A）：base_url 统一读取入口。
+///
+/// 1. 端点表命中 → 直接返回（0 次 op）；
+/// 2. `secret_refs` 登记了 `base_url` → fetch 一次；若是非敏感 URL，顺手写入
+///    端点表（懒迁移，之后都是 0 次 op）；vault 里的旧副本留给回填 / 后续 put 清理；
+/// 3. 都没有 → `None`。
+pub(crate) fn resolve_base_url(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+) -> Result<Option<Zeroizing<String>>, AppError> {
+    if let Some(url) = state
+        .db
+        .get_provider_endpoint(app_type.as_str(), provider_id)?
+    {
+        return Ok(Some(Zeroizing::new(url)));
+    }
+    let registered = state
+        .db
+        .get_secret_ref_fields(app_type.as_str(), provider_id)?
+        .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+    if !registered {
+        return Ok(None);
+    }
+    let group = crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
+    let Some(bundle) = state.vault.fetch(&group)? else {
+        return Ok(None);
+    };
+    let Some(url) = bundle.get(crate::secrets::FIELD_BASE_URL) else {
+        return Ok(None);
+    };
+    if !crate::secrets::is_credential_bearing_url(url.as_str()) {
+        // 懒迁移：非敏感 URL 落端点表，之后读取都是 0 次 op。
+        state
+            .db
+            .upsert_provider_endpoint(app_type.as_str(), provider_id, url.as_str())?;
+    }
+    Ok(Some(url.clone()))
 }
 
 /// F1-5：1Password 模式下的导入明文清理（P0-5 / 原则 3）。
@@ -2034,7 +2119,9 @@ pub(crate) fn scrub_imported_plaintext_via_vault(
                     store_provider_bundle(state, &app_type, &id, &extracted.secrets, true)
                 {
                     pending.push(key.clone());
-                    log::warn!("1P 模式导入清理：{key} 写 vault 失败（可能锁定），保留明文待重试: {e}");
+                    log::warn!(
+                        "1P 模式导入清理：{key} 写 vault 失败（可能锁定），保留明文待重试: {e}"
+                    );
                     continue;
                 }
             }
@@ -2127,7 +2214,13 @@ mod required_secret_tests {
         // §4.3：存在性现由 secret_refs 判定。
         state
             .db
-            .upsert_secret_ref(app.as_str(), "bare", "", "provider/claude/bare", &["api_key".to_string()])
+            .upsert_secret_ref(
+                app.as_str(),
+                "bare",
+                "",
+                "provider/claude/bare",
+                &["api_key".to_string()],
+            )
             .expect("upsert ref");
         assert!(check(&state, &app, &bare).is_ok(), "已存凭据必须放行编辑");
 
@@ -2188,7 +2281,13 @@ mod required_secret_tests {
         // 端点已在保险箱里→ §4.3 存在性由 secret_refs 判定。
         state
             .db
-            .upsert_secret_ref(app.as_str(), "pi-stored", "", "provider/pi/pi-stored", &["base_url".to_string()])
+            .upsert_secret_ref(
+                app.as_str(),
+                "pi-stored",
+                "",
+                "provider/pi/pi-stored",
+                &["base_url".to_string()],
+            )
             .expect("upsert ref");
         let stored = provider_with("pi-stored", None, json!({"apiKey": "k"}));
         assert!(check(&state, &app, &stored).is_ok());
@@ -2378,25 +2477,18 @@ mod vault_call_count_tests {
         ))
         .expect("seed");
         counting.reset();
-        let secrets = ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1")
-            .expect("fetch");
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
         assert_eq!(counting.fetch_count(), 1, "取整包只能一次往返");
         assert_eq!(counting.put_count(), 0);
-        assert_eq!(
-            secrets.api_key.as_deref().map(String::as_str),
-            Some("sk-1")
-        );
+        assert_eq!(secrets.api_key.as_deref().map(String::as_str), Some("sk-1"));
     }
 
     #[test]
     fn reveal_provider_secret_is_exactly_one_fetch() {
         let (state, counting) = counting_state();
-        let provider = Provider::from_parts(
-            "p1".to_string(),
-            "P1".to_string(),
-            json!({"env": {}}),
-            None,
-        );
+        let provider =
+            Provider::from_parts("p1".to_string(), "P1".to_string(), json!({"env": {}}), None);
         state.db.save_provider("claude", &provider).expect("save");
         futures::executor::block_on(state.secrets.store(
             &SecretTarget::provider_api_key(AppType::Claude, "p1"),
@@ -2404,13 +2496,9 @@ mod vault_call_count_tests {
         ))
         .expect("seed");
         counting.reset();
-        let value = crate::reveal_provider_secret_internal(
-            &state,
-            AppType::Claude,
-            "p1",
-            "api_key",
-        )
-        .expect("reveal");
+        let value =
+            crate::reveal_provider_secret_internal(&state, AppType::Claude, "p1", "api_key")
+                .expect("reveal");
         assert_eq!(value.as_deref(), Some("sk-reveal"));
         assert_eq!(counting.fetch_count(), 1, "显示明文只能一次往返");
     }
@@ -2444,12 +2532,8 @@ mod vault_call_count_tests {
             .expect("seed");
         counting.reset();
         // 编辑：表单未回传密钥（已剥离）→ 无新密钥 → 不写（不 fetch 不 put），旧值保留。
-        let mut edited = Provider::from_parts(
-            "p1".to_string(),
-            "P1".to_string(),
-            json!({"env": {}}),
-            None,
-        );
+        let mut edited =
+            Provider::from_parts("p1".to_string(), "P1".to_string(), json!({"env": {}}), None);
         super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut edited, true)
             .expect("edit");
         assert_eq!(counting.fetch_count(), 0, "无新密钥不该 fetch");
@@ -2489,7 +2573,10 @@ mod vault_call_count_tests {
         assert_eq!(counting.put_count(), 1, "有新密钥时 put");
         let secrets =
             ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("read");
-        assert_eq!(secrets.api_key.as_deref().map(String::as_str), Some("sk-new"));
+        assert_eq!(
+            secrets.api_key.as_deref().map(String::as_str),
+            Some("sk-new")
+        );
         assert_eq!(
             secrets.base_url.as_deref().map(String::as_str),
             Some("https://old"),
@@ -2511,10 +2598,12 @@ mod onepassword_scrub_tests {
     //! F1-5 回归（P0-5）：1P 模式下导入明文只进 vault，凭据管理器零触碰；
     //! vault 写入失败时保留明文并记 pending。
     use super::*;
-    use crate::secrets::{GuardedSecretStore, InMemorySecretStore, InMemoryVault, SecretGroup, SecretVault};
+    use crate::secrets::{
+        GuardedSecretStore, InMemorySecretStore, InMemoryVault, SecretGroup, SecretVault,
+    };
     use serial_test::serial;
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use std::sync::Mutex;
 
     /// 记录调用次数的存储包装：守卫拦截时调用数必须为 0。
@@ -2603,11 +2692,9 @@ mod onepassword_scrub_tests {
     fn onepassword_state() -> (AppState, Arc<InMemoryVault>, Arc<CountingStore>) {
         let counting = Arc::new(CountingStore::new());
         // 守卫恒开：任何对凭据管理器的调用都应让断言失败。
-        let guarded: Arc<dyn crate::secrets::SecretStore> =
-            Arc::new(GuardedSecretStore::with_predicate(
-                counting.clone(),
-                Arc::new(|| true),
-            ));
+        let guarded: Arc<dyn crate::secrets::SecretStore> = Arc::new(
+            GuardedSecretStore::with_predicate(counting.clone(), Arc::new(|| true)),
+        );
         let db = Arc::new(crate::database::Database::memory().expect("memory db"));
         let mut state = AppState::new(db, guarded);
         let vault = Arc::new(InMemoryVault::new());
@@ -2671,11 +2758,9 @@ mod onepassword_scrub_tests {
     fn scrub_keeps_plaintext_and_marks_pending_when_vault_write_fails() {
         let _home = TempHome::new("fail");
         let counting = Arc::new(CountingStore::new());
-        let guarded: Arc<dyn crate::secrets::SecretStore> =
-            Arc::new(GuardedSecretStore::with_predicate(
-                counting.clone(),
-                Arc::new(|| true),
-            ));
+        let guarded: Arc<dyn crate::secrets::SecretStore> = Arc::new(
+            GuardedSecretStore::with_predicate(counting.clone(), Arc::new(|| true)),
+        );
         let db = Arc::new(crate::database::Database::memory().expect("memory db"));
         let mut state = AppState::new(db, guarded);
         // vault 一律失败（模拟 1P 锁定 / 断网）。
@@ -2777,5 +2862,214 @@ mod onepassword_edit_rollback_tests {
             .expect("secret_refs 行必须仍在");
         assert!(fields.iter().any(|f| f == "api_key"));
         let _ = vault;
+    }
+}
+
+#[cfg(test)]
+mod onepassword_endpoint_tests {
+    //! F1-2 回归（P0-1 / §7 D3-A）：非敏感 base_url 存本地端点表（0 次 op 读取），
+    //! 敏感 URL 仍存 vault；resolve_base_url 端点表优先 + 懒迁移。
+    use super::*;
+    use crate::secrets::{
+        CountingVault, InMemorySecretStore, InMemoryVault, SecretGroup, SecretVault,
+    };
+    use std::sync::Arc;
+
+    fn state_with_counting_vault() -> (AppState, Arc<InMemoryVault>, Arc<CountingVault>) {
+        let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store,
+        );
+        let vault = Arc::new(InMemoryVault::new());
+        let counting = Arc::new(CountingVault::new(vault.clone()));
+        state.vault = counting.clone();
+        (state, vault, counting)
+    }
+
+    #[test]
+    fn non_sensitive_base_url_goes_to_endpoint_table() {
+        let (state, vault, _) = state_with_counting_vault();
+        let secrets = ProviderSecrets::new()
+            .with_api_key("sk-1")
+            .with_base_url("https://api.example.com");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+
+        // 端点表有值；vault 整包只剩 api_key；refs 不含 base_url。
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p1")
+                .expect("endpoint"),
+            Some("https://api.example.com".to_string())
+        );
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Codex, "p1".to_string()))
+            .expect("fetch")
+            .expect("条目存在");
+        assert!(bundle.contains(crate::secrets::FIELD_API_KEY));
+        assert!(
+            !bundle.contains(crate::secrets::FIELD_BASE_URL),
+            "非敏感 base_url 不应进 vault"
+        );
+        let fields = state
+            .db
+            .get_secret_ref_fields("codex", "p1")
+            .expect("refs")
+            .expect("非空");
+        assert!(!fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+    }
+
+    #[test]
+    fn sensitive_base_url_stays_in_vault() {
+        let (state, vault, _) = state_with_counting_vault();
+        let secrets = ProviderSecrets::new()
+            .with_api_key("sk-1")
+            .with_base_url("https://user:pass@api.example.com");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p1")
+                .expect("endpoint"),
+            None,
+            "带 userinfo 的 URL 不进端点表"
+        );
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Codex, "p1".to_string()))
+            .expect("fetch")
+            .expect("条目存在");
+        assert_eq!(
+            bundle
+                .get(crate::secrets::FIELD_BASE_URL)
+                .map(|v| v.to_string()),
+            Some("https://user:pass@api.example.com".into())
+        );
+    }
+
+    #[test]
+    fn endpoint_only_update_skips_vault() {
+        let (state, _, counting) = state_with_counting_vault();
+        // 先放一个旧整包进 vault（模拟拆分前的历史数据），端点表为空。
+        let mut old = crate::secrets::SecretBundle::new();
+        old.insert(
+            crate::secrets::FIELD_API_KEY.to_string(),
+            Zeroizing::new("sk-old".to_string()),
+        );
+        old.insert(
+            crate::secrets::FIELD_BASE_URL.to_string(),
+            Zeroizing::new("https://old.example.com".to_string()),
+        );
+        counting
+            .put(
+                &SecretGroup::provider(AppType::Codex, "p1".to_string()),
+                &old,
+            )
+            .expect("seed");
+        counting.reset();
+
+        // 只更新端点（api_key 未回传，merge 保留旧值）。
+        let secrets = ProviderSecrets::new().with_base_url("https://new.example.com");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
+
+        assert_eq!(counting.fetch_count(), 0, "端点更新不应 fetch vault");
+        assert_eq!(counting.put_count(), 0, "端点更新不应 put vault");
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p1")
+                .expect("endpoint"),
+            Some("https://new.example.com".to_string())
+        );
+    }
+
+    #[test]
+    fn resolve_base_url_prefers_endpoint_and_lazy_migrates() {
+        let (state, vault, counting) = state_with_counting_vault();
+
+        // 情形 1：端点表命中 → 0 次 op。
+        state
+            .db
+            .upsert_provider_endpoint("codex", "p1", "https://from-table.example.com")
+            .expect("seed endpoint");
+        let url = resolve_base_url(&state, &AppType::Codex, "p1").expect("resolve");
+        assert_eq!(
+            url.map(|u| u.to_string()),
+            Some("https://from-table.example.com".to_string())
+        );
+        assert_eq!(counting.fetch_count(), 0, "端点表命中必须 0 次 fetch");
+
+        // 情形 2：端点表没有、vault 有（拆分前历史数据）→ fetch 1 次 + 懒迁移落端点表。
+        let mut bundle = crate::secrets::SecretBundle::new();
+        bundle.insert(
+            crate::secrets::FIELD_BASE_URL.to_string(),
+            Zeroizing::new("https://lazy.example.com".to_string()),
+        );
+        vault
+            .put(
+                &SecretGroup::provider(AppType::Codex, "p2".to_string()),
+                &bundle,
+            )
+            .expect("seed vault");
+        state
+            .db
+            .upsert_secret_ref(
+                "codex",
+                "p2",
+                "v",
+                "i2",
+                &[crate::secrets::FIELD_BASE_URL.to_string()],
+            )
+            .expect("seed ref");
+        counting.reset();
+        let url = resolve_base_url(&state, &AppType::Codex, "p2").expect("resolve");
+        assert_eq!(counting.fetch_count(), 1, "懒迁移首次读取 fetch 1 次");
+        assert_eq!(
+            url.map(|u| u.to_string()),
+            Some("https://lazy.example.com".to_string())
+        );
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p2")
+                .expect("endpoint"),
+            Some("https://lazy.example.com".to_string()),
+            "懒迁移应写端点表"
+        );
+        // 情形 3：懒迁移完成后 → 0 次 op。
+        counting.reset();
+        let url = resolve_base_url(&state, &AppType::Codex, "p2").expect("resolve");
+        assert_eq!(counting.fetch_count(), 0, "懒迁移后读取 0 次 fetch");
+        assert_eq!(
+            url.map(|u| u.to_string()),
+            Some("https://lazy.example.com".to_string())
+        );
+
+        // 情形 4：都没有 → None。
+        let none = resolve_base_url(&state, &AppType::Codex, "missing").expect("resolve");
+        assert!(none.is_none());
+    }
+
+    #[test]
+    fn delete_provider_cascades_endpoint_row() {
+        let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store,
+        );
+        state
+            .db
+            .upsert_provider_endpoint("codex", "p1", "https://x")
+            .expect("seed");
+        state.db.delete_provider("codex", "p1").expect("delete");
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p1")
+                .expect("endpoint"),
+            None,
+            "删除供应商应级联删除端点行"
+        );
     }
 }

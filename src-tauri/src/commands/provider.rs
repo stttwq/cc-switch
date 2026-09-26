@@ -4,7 +4,6 @@ use tauri::{Manager, State};
 use crate::app_config::AppType;
 use crate::error::AppError;
 use crate::provider::{Provider, ProviderForFrontend, SecretHint, SecretStatus};
-use crate::secrets::SecretTarget;
 use crate::services::{ProviderService, ProviderSortUpdate, SwitchResult};
 use crate::store::AppState;
 use std::str::FromStr;
@@ -51,23 +50,22 @@ fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -
         .unwrap_or_default()
         .unwrap_or_default();
     let api_present = fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY);
-    let has_base_url = fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL);
 
-    // base_url 允许回显（§5.2.2，编辑表单与卡片要显示）；确认存在后读一次值。
-    // 值仍从旧 store 读（D3 待定：base_url 是否也进 1Password），不走 vault 整包。
-    let base_url = if has_base_url {
-        let target = SecretTarget::provider_base_url(app_type.clone(), provider_id);
-        futures::executor::block_on(state.secrets.retrieve(&target))
-            .ok()
-            .flatten()
-            .map(|url| url.to_string())
-    } else {
-        None
-    };
+    // F1-2（D3-A）：base_url 只读端点表——列表必须 0 次 op，不触发懒迁移。
+    // 端点表没有但 secret_refs 有 `base_url` 时返回空值（前端按「待回填」提示），
+    // 编辑/揭示路径会走懒迁移补上。
+    let base_url = state
+        .db
+        .get_provider_endpoint(app_type.as_str(), provider_id)
+        .ok()
+        .flatten();
 
     let extra_env = fields
         .iter()
-        .filter_map(|f| f.strip_prefix(crate::secrets::FIELD_ENV_PREFIX).map(str::to_string))
+        .filter_map(|f| {
+            f.strip_prefix(crate::secrets::FIELD_ENV_PREFIX)
+                .map(str::to_string)
+        })
         .filter(|k| !k.is_empty())
         .collect();
 
@@ -324,6 +322,7 @@ pub fn update_providers_sort_order(
 mod tests {
     use super::*;
     use crate::database::Database;
+    use crate::secrets::SecretTarget;
     use std::sync::Arc;
     use zeroize::Zeroizing;
 
@@ -349,7 +348,10 @@ mod tests {
             )
             .expect("upsert ref");
         let status = load_secret_status(&state, &AppType::Claude, "p1");
-        assert!(status.api_key.present, "secret_refs 含 api_key 就判为已配置");
+        assert!(
+            status.api_key.present,
+            "secret_refs 含 api_key 就判为已配置"
+        );
         assert_eq!(status.extra_env, vec!["FOO".to_string()]);
     }
 
@@ -381,18 +383,26 @@ mod tests {
                 &["api_key".to_string(), "base_url".to_string()],
             )
             .expect("upsert ref");
-        // base_url 值存在旧 store（不走 vault）。
-        futures::executor::block_on(state.secrets.set(
-            &SecretTarget::provider_base_url(AppType::Claude, "p1".to_string()),
-            Zeroizing::new("https://x".to_string()),
-        ))
-        .expect("seed base_url");
+        // F1-2：base_url 走端点表（0 次 op）；refs 有但端点表没有 → 待回填，返回空值。
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://x")
+            .expect("seed endpoint");
         counting.reset();
 
         let status = load_secret_status(&state, &AppType::Claude, "p1");
         assert!(status.api_key.present);
         assert_eq!(status.base_url.as_deref(), Some("https://x"));
         assert_eq!(counting.fetch_count(), 0, "列表不该调 vault.fetch");
+
+        // 端点表没有（待回填）→ 返回空值，也不触发 vault 往返。
+        state
+            .db
+            .delete_provider_endpoint("claude", "p1")
+            .expect("delete endpoint");
+        let status = load_secret_status(&state, &AppType::Claude, "p1");
+        assert_eq!(status.base_url, None, "待回填的 base_url 列表返回空");
+        assert_eq!(counting.fetch_count(), 0);
     }
 
     fn state_with_provider(id: &str) -> AppState {

@@ -58,6 +58,41 @@ pub fn is_sensitive_config_key(name: &str) -> bool {
         || SENSITIVE_CONTAINS.iter().any(|c| upper.contains(c))
 }
 
+/// F1-2（§7 D3）：URL 是否携带凭据——带 userinfo（`scheme://user[:pass]@host`）
+/// 或 query 参数名命中 [`is_sensitive_config_key`] 的 URL 视为秘密，仍存 vault；
+/// 其余 base_url 一律进本地端点表。
+///
+/// 不引入 `url` crate：userinfo 判定只需在 `//` 后、第一个 `/` 前找 `@`
+/// （host 与 path 中合法的 `@` 都不会落在这个窗口里）；query 解析按 `&` 切分。
+pub fn is_credential_bearing_url(url: &str) -> bool {
+    // userinfo：定位 authority 段（`//` 之后到第一个 `/?#`）
+    let authority = match url.find("://") {
+        Some(scheme_end) => {
+            let rest = &url[scheme_end + 3..];
+            let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+            &rest[..end]
+        }
+        // 无 scheme 的相对/畸形 URL 没有可靠的 authority 边界，按保守处理：
+        // 找不到 `@` 就是非敏感；有 `@` 交给 query/userinfo 规则兜底判定
+        None => url,
+    };
+    if authority.contains('@') {
+        return true;
+    }
+
+    // query 参数名：`?` 之后按 `&` 切分，取 `=` 前的参数名（可带 URL 编码，
+    // 但敏感参数名的字母数字下划线部分编码后仍会命中 contains 规则）
+    let Some(query_start) = url.find('?') else {
+        return false;
+    };
+    let query = &url[query_start + 1..];
+    let query = query.split('#').next().unwrap_or(query);
+    query.split('&').any(|pair| {
+        let name = pair.split('=').next().unwrap_or(pair);
+        !name.is_empty() && is_sensitive_config_key(name)
+    })
+}
+
 /// Check if a Pi apiKey or header value is a literal (not a variable reference)
 /// Literals: plain text, or escaped variables ($$VAR, $!VAR)
 /// Not literals: $VAR, !command
@@ -169,6 +204,44 @@ mod tests {
         assert!(!is_sensitive_config_key("includeCoAuthoredBy"));
         assert!(!is_sensitive_config_key("CLAUDE_CODE_MAX_OUTPUT_TOKENS"));
         assert!(!is_sensitive_config_key("awsAuthRefresh"));
+    }
+
+    #[test]
+    fn test_is_credential_bearing_url() {
+        // 带 userinfo → 秘密
+        assert!(is_credential_bearing_url(
+            "https://user:pass@api.example.com"
+        ));
+        assert!(is_credential_bearing_url("https://user@api.example.com/v1"));
+        // query 参数名命中敏感键 → 秘密
+        assert!(is_credential_bearing_url(
+            "https://api.example.com/v1?api_key=x&model=m"
+        ));
+        assert!(is_credential_bearing_url(
+            "https://api.example.com/?token=abc"
+        ));
+        assert!(is_credential_bearing_url(
+            "https://api.example.com/?apikey=x"
+        ));
+        // 裸 `key` 参数名不在 is_sensitive_config_key 名单里（避免对其它配置键误伤），
+        // 按 F1-2 方案口径不视为携带凭据
+        assert!(!is_credential_bearing_url(
+            "https://api.example.com?key=sk-123"
+        ));
+        // 普通 URL → 非敏感（进端点表）
+        assert!(!is_credential_bearing_url("https://api.anthropic.com"));
+        assert!(!is_credential_bearing_url(
+            "https://api.example.com/v1?model=claude"
+        ));
+        assert!(!is_credential_bearing_url("http://localhost:8080/v1"));
+        assert!(!is_credential_bearing_url(""));
+        // path/query 里的 `@` 不算 userinfo
+        assert!(!is_credential_bearing_url(
+            "https://api.example.com/v1/@user"
+        ));
+        assert!(!is_credential_bearing_url(
+            "https://api.example.com/?email=a@b.com"
+        ));
     }
 
     #[test]

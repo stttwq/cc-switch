@@ -1821,6 +1821,11 @@
     "migrate": "Migrate to 1Password",
     "migrateConfirm": "This reads every cc-switch credential from Windows Credential Manager, writes it to 1Password, verifies it, then deletes it from Credential Manager and switches the backend. Continue?",
     "migrateDone": "Migrated {{groups}} item(s), {{fields}} field(s). Backend switched to 1Password.",
-    "restartRequiredBanner": "Switched to 1Password; the old backend is retired. Please restart CC Switch now to finish."
+    "restartRequiredBanner": "Switched to 1Password; the old backend is retired. Please restart CC Switch now to finish.",
+    "backfillPending": "{{count}} provider endpoint(s) (base_url) are still stored in the vault; reading them requires 1Password access. Backfill them to read without unlocking.",
+    "backfillAction": "Backfill endpoints",
+    "backfillProgress": "Backfilling endpoints… ({{done}}/{{total}}, ~7s each, may request unlock)",
+    "backfillDone": "Endpoint backfill complete: {{backfilled}} migrated to the local endpoint table.",
+    "backfillDoneWithFailures": "Endpoint backfill complete: {{backfilled}} succeeded, {{failed}} failed (you can retry later; switching falls back to lazy migration)."
   }
 }

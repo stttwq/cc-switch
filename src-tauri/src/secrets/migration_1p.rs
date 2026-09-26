@@ -166,14 +166,41 @@ pub fn migrate_to_onepassword(
             continue;
         }
 
+        // F1-2（§7 D3-A / F2-1）：非敏感 base_url 直接写本地端点表，**不进 1P**——
+        // Codex / Pi 本来就把 URL 明文写进各自的配置文件，放 vault 挡不住文件泄露，
+        // 只会让每次切换多 7 秒并弹解锁。敏感 URL（userinfo / 敏感 query 参数）仍走 1P。
+        let mut vault_bundle = SecretBundle::new();
+        for (field, value) in bundle.iter() {
+            if field == crate::secrets::FIELD_BASE_URL
+                && !crate::secrets::is_credential_bearing_url(value.as_str())
+            {
+                if let SecretGroup::Provider { app, provider_id } = &pending.group {
+                    state
+                        .db
+                        .upsert_provider_endpoint(app.as_str(), provider_id, value.as_str())?;
+                    report.migrated_fields += 1;
+                }
+            } else {
+                vault_bundle.insert(field.clone(), value.clone());
+            }
+        }
+
+        // 拆分后 vault 侧没有要写的字段（例如这组只有 base_url）→ 跳过写 1P，
+        // 也不建 refs（端点表才是 base_url 的读取来源）。
+        if vault_bundle.is_empty() {
+            report.migrated_groups += 1;
+            written_targets.extend(pending.fields.values().cloned());
+            continue;
+        }
+
         // 写入 1Password（vault_item_conflict 时 put 内部按标题复用覆盖）。
-        let vref = vault.put(&pending.group, &bundle)?;
+        let vref = vault.put(&pending.group, &vault_bundle)?;
 
         // 校验：回读逐字段比对。
         let fetched = vault
             .fetch(&pending.group)?
             .ok_or_else(|| AppError::Message("迁移校验失败：写入后回读不到条目".to_string()))?;
-        for (field, value) in bundle.iter() {
+        for (field, value) in vault_bundle.iter() {
             let ok = fetched.get(field).map(|v| v.as_str()) == Some(value.as_str());
             if !ok {
                 return Err(AppError::localized(
@@ -193,7 +220,7 @@ pub fn migrate_to_onepassword(
             &vref.fields,
         )?;
         report.migrated_groups += 1;
-        report.migrated_fields += bundle.len();
+        report.migrated_fields += vault_bundle.len();
         written_targets.extend(pending.fields.values().cloned());
     }
 
@@ -291,7 +318,7 @@ mod tests {
 
         // provider 组迁移成功（AppSync 在非 Windows 下没进 known_targets，不强求）。
         assert!(report.migrated_groups >= 1);
-        // 1P 里能读回。
+        // 1P 里能读回（F1-2：非敏感 base_url 不进 1P，只落端点表）。
         let got = vault
             .fetch(&SecretGroup::provider(AppType::Claude, "p1"))
             .unwrap()
@@ -300,9 +327,14 @@ mod tests {
             got.get("api_key").map(|v| v.to_string()),
             Some("sk-1".into())
         );
+        assert!(
+            got.get("base_url").is_none(),
+            "非敏感 base_url 不应进 vault"
+        );
+        // base_url 已写端点表。
         assert_eq!(
-            got.get("base_url").map(|v| v.to_string()),
-            Some("https://x".into())
+            state.db.get_provider_endpoint("claude", "p1").unwrap(),
+            Some("https://x".to_string())
         );
         // secret_refs 已登记。
         let fields = state

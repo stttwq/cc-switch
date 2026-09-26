@@ -482,7 +482,8 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "skills migration snapshot should preserve legacy app mapping"
     );
 
-    // v19 DROP 废弃表：升级完成后不应再存在
+    // v19 DROP 废弃表：升级完成后不应再存在。
+    // （provider_endpoints 也在 v19 被 DROP，但 v21 会以新结构重建，见下方断言。）
     for table in [
         "proxy_config",
         "provider_health",
@@ -493,7 +494,6 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
         "usage_daily_rollups",
         "session_log_sync",
         "session_usage_dedup",
-        "provider_endpoints",
     ] {
         let exists: i64 = conn
             .query_row(
@@ -504,6 +504,16 @@ fn migration_from_v3_8_schema_v1_to_current_schema_v3() {
             .expect("check dropped table");
         assert_eq!(exists, 0, "{table} should be dropped by v19");
     }
+
+    // v21 重建的 provider_endpoints 是新结构（F1-2 端点表），与旧版（id/url）不同
+    assert!(
+        Database::has_column(&conn, "provider_endpoints", "base_url").expect("check column"),
+        "provider_endpoints should be recreated by v21 with base_url"
+    );
+    assert!(
+        !Database::has_column(&conn, "provider_endpoints", "url").expect("check column"),
+        "provider_endpoints should not have the legacy url column"
+    );
 }
 
 #[test]
@@ -595,6 +605,7 @@ fn create_tables_does_not_rebuild_v19_dropped_tables() {
         "mcp_servers",
         "profiles",
         "prompts",
+        "provider_endpoints",
         "providers",
         "secret_refs",
         "settings",
@@ -603,7 +614,6 @@ fn create_tables_does_not_rebuild_v19_dropped_tables() {
     ];
     assert_eq!(names, expected);
     for dropped in [
-        "provider_endpoints",
         "proxy_config",
         "provider_health",
         "proxy_request_logs",

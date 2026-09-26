@@ -151,6 +151,27 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 21. provider_endpoints 表（F1-2 / §7 D3-A）：非敏感 base_url 存本地并随云同步。
+        //     注意 v19 曾 DROP 过旧版同名表（不同结构），这里 CREATE IF NOT EXISTS
+        //     既服务全新库，也承接 v20→v21 迁移（全新库 v19 会先 DROP 掉这张表）。
+        Self::create_provider_endpoints_table_on_conn(conn)?;
+
+        Ok(())
+    }
+
+    /// 创建 provider_endpoints 表（F1-2 / D3-A）。
+    fn create_provider_endpoints_table_on_conn(conn: &Connection) -> Result<(), AppError> {
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS provider_endpoints (
+                app          TEXT NOT NULL,
+                provider_id  TEXT NOT NULL,
+                base_url     TEXT NOT NULL,
+                updated_at   INTEGER NOT NULL,
+                PRIMARY KEY (app, provider_id)
+            )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
 
@@ -279,6 +300,11 @@ impl Database {
                         log::info!("迁移数据库从 v19 到 v20（secret_refs 引用表 + 从 known_secret_targets 回填）");
                         Self::migrate_v19_to_v20(conn)?;
                         Self::set_user_version(conn, 20)?;
+                    }
+                    20 => {
+                        log::info!("迁移数据库从 v20 到 v21（provider_endpoints 端点表，非敏感 base_url 存本地）");
+                        Self::migrate_v20_to_v21(conn)?;
+                        Self::set_user_version(conn, 21)?;
                     }
                     _ => {
                         return Err(AppError::Database(format!(
@@ -1673,6 +1699,14 @@ impl Database {
             .map_err(|e| AppError::Database(format!("回填 secret_refs 失败: {e}")))?;
         }
         log::info!("v19→v20: secret_refs 已建并从 known_secret_targets 回填");
+        Ok(())
+    }
+
+    /// v20 -> v21 迁移（F1-2 / §7 D3-A）：建 provider_endpoints 端点表。
+    /// 非敏感 base_url 从 vault 改存本地表（随云同步），存量数据由回填命令懒迁移。
+    fn migrate_v20_to_v21(conn: &Connection) -> Result<(), AppError> {
+        Self::create_provider_endpoints_table_on_conn(conn)?;
+        log::info!("v20→v21: provider_endpoints 已建");
         Ok(())
     }
 

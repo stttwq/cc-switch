@@ -58,6 +58,7 @@ import { EditProviderDialog } from "@/components/providers/EditProviderDialog";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
+import { EndpointBackfillBanner } from "@/components/EndpointBackfillBanner";
 import UnifiedMcpPanel from "@/components/mcp/UnifiedMcpPanel";
 import PromptPanel, {
   type PromptPanelHandle,
@@ -1013,6 +1014,8 @@ function App() {
           }}
         />
       )}
+      {/* F1-2（D3-A）：存量 base_url 端点回填提示（vault → 本地端点表） */}
+      <EndpointBackfillBanner />
 
       <header
         className="fixed z-50 w-full transition-all duration-300 bg-background/80 backdrop-blur-md"

@@ -248,10 +248,9 @@ mod op_count_tests {
         assert_eq!(counting.fetch_count(), 0, "状态查询必须 0 次 fetch");
     }
 
-    /// 保存一次 S3 设置（双字段）当前是 2×(fetch+put)；F1-1 的
-    /// `update_app_sync` 改为一次 fetch → 一次 put 后启用。
+    /// 保存一次 S3 设置（双字段）= 1×(fetch+put)：F1-1 的
+    /// `update_app_sync` 一次 fetch → 一次 put。
     #[test]
-    #[ignore = "F1-1 后启用"]
     fn store_s3_credentials_is_one_roundtrip() {
         let counting = counting();
         store_s3_credentials(

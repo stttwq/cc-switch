@@ -3,7 +3,7 @@
 //! 所有会调 `op` 的命令都是 async + `spawn_blocking`（`op` 是阻塞子进程，可能等解锁）。
 
 use serde_json::{json, Value};
-use tauri::State;
+use tauri::{Emitter, State};
 
 use crate::secrets;
 use crate::store::AppState;
@@ -137,8 +137,8 @@ pub async fn onepassword_test_fetch(_state: State<'_, AppState>) -> Result<Value
 pub async fn onepassword_migrate(state: State<'_, AppState>) -> Result<Value, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let vault = crate::secrets::onepassword_from_settings()
-            .map_err(crate::error::AppError::from)?;
+        let vault =
+            crate::secrets::onepassword_from_settings().map_err(crate::error::AppError::from)?;
         let report = crate::secrets::migrate_to_onepassword(&state, &vault)?;
         Ok::<Value, crate::error::AppError>(json!(report))
     })
@@ -151,4 +151,73 @@ pub async fn onepassword_migrate(state: State<'_, AppState>) -> Result<Value, St
 #[tauri::command]
 pub async fn secret_backend_name(_state: State<'_, AppState>) -> Result<String, String> {
     Ok(crate::settings::get_secret_backend())
+}
+
+/// F1-2：端点回填待办数量（0 次 op，只查本地表）。
+/// 大于 0 时前端在 1Password 区 / 主界面横幅提示「回填端点」。
+#[tauri::command]
+pub async fn secrets_endpoint_backfill_status(state: State<'_, AppState>) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pending = state.db.list_endpoint_backfill_pending()?;
+        Ok::<_, crate::error::AppError>(json!({ "pending": pending.len() }))
+    })
+    .await
+    .map_err(|e| format!("端点回填状态任务失败: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// F1-2：存量端点回填——把 vault 里托管的非敏感 base_url 逐个搬到端点表。
+/// 每组 1 次 fetch（1P 模式会请求解锁，约 7 秒/个），完成后读取全部 0 次 op。
+/// 逐个上报 `secrets-backfill-progress` 事件；单项失败不中断，记入 failed 清单。
+#[tauri::command]
+pub async fn secrets_backfill_endpoints(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    use crate::app_config::AppType;
+    use std::str::FromStr;
+
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let pending = state.db.list_endpoint_backfill_pending()?;
+        let total = pending.len();
+        let mut backfilled = 0usize;
+        let mut failed: Vec<String> = Vec::new();
+        for (app_str, id) in pending.iter() {
+            let done = backfilled + failed.len();
+            let _ = app_handle.emit(
+                "secrets-backfill-progress",
+                serde_json::json!({ "done": done, "total": total }),
+            );
+            let Ok(app) = AppType::from_str(app_str) else {
+                failed.push(format!("{app_str}/{id}"));
+                continue;
+            };
+            match crate::services::provider::resolve_base_url(&state, &app, id) {
+                Ok(Some(_)) => backfilled += 1,
+                Ok(None) => {
+                    // vault 里没有该条目的 base_url（可能条目已删）：无从回填，记为失败
+                    // 让用户感知；refs 行保持原样。
+                    failed.push(format!("{app_str}/{id}"));
+                }
+                Err(e) => {
+                    log::warn!("端点回填失败 {app_str}/{id}: {e}");
+                    failed.push(format!("{app_str}/{id}"));
+                }
+            }
+        }
+        let _ = app_handle.emit(
+            "secrets-backfill-progress",
+            serde_json::json!({ "done": total, "total": total }),
+        );
+        Ok::<_, crate::error::AppError>(serde_json::json!({
+            "total": total,
+            "backfilled": backfilled,
+            "failed": failed,
+        }))
+    })
+    .await
+    .map_err(|e| format!("端点回填任务失败: {e}"))?
+    .map_err(|e| e.to_string())
 }

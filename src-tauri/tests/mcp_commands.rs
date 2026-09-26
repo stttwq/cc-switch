@@ -70,13 +70,15 @@ fn import_default_config_claude_persists_provider() {
         stored_key.as_deref().map(|key| key.as_str()),
         Some("test-key")
     );
-    let stored_url = futures::executor::block_on(state.secrets.get(
-        &cc_switch_lib::secrets::SecretTarget::provider_base_url(AppType::Claude, "default"),
-    ))
-    .expect("read base url from secret store");
+    // F1-2（D3-A）：非敏感 base_url 存本地端点表，不再进凭据管理器。
+    let stored_url = state
+        .db
+        .get_provider_endpoint(AppType::Claude.as_str(), "default")
+        .expect("read base url from endpoint table");
     assert_eq!(
-        stored_url.as_deref().map(|url| url.as_str()),
-        Some("https://api.test")
+        stored_url.as_deref(),
+        Some("https://api.test"),
+        "base_url 应落在端点表"
     );
 
     // 验证数据已持久化到数据库（v3.7.0+ 使用 SQLite 而非 config.json）
