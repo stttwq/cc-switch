@@ -635,10 +635,96 @@ impl SecretStore for InMemorySecretStore {
     }
 }
 
+/// F0-2 守卫版凭据存储（施工方案 §3 原则 4）：1Password 模式下凭据管理器只是迁移源，
+/// 运行时任何经由 `AppState.secrets` 的读写都必须立刻失败——不能靠「代码审查时注意」。
+///
+/// - 判定在**调用时**进行：迁移前 `secret_backend` 仍是 windows，迁移向导照常读写；
+///   迁移提交切后端后守卫自动生效（顺带实现了「1P 模式拒绝再次执行迁移」的一半）。
+/// - 只记方法名，不记 target 与值（原则 3.1-8）。
+/// - `LegacyWindowsVault` 持有的是**未包装**的原始存储（Windows 模式运行时需要）；
+///   迁移向导与卸载清理自行构造 `WindowsSecretStore`，不经过 `AppState.secrets`。
+pub struct GuardedSecretStore {
+    inner: Arc<dyn SecretStore>,
+    /// 守卫判定（默认读全局设置 `is_onepassword_backend()`）；测试注入自己的判定，
+    /// 避免污染全局设置文件。
+    guarded: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+
+impl GuardedSecretStore {
+    pub fn new(inner: Arc<dyn SecretStore>) -> Self {
+        let guarded: Arc<dyn Fn() -> bool + Send + Sync> =
+            Arc::new(crate::settings::is_onepassword_backend);
+        Self { inner, guarded }
+    }
+
+    /// 测试注入判定。
+    #[cfg(test)]
+    pub(crate) fn with_predicate(
+        inner: Arc<dyn SecretStore>,
+        guarded: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        Self { inner, guarded }
+    }
+
+    fn check(&self, method: &str) -> Result<(), AppError> {
+        if (self.guarded)() {
+            log::error!("1Password 模式下误用凭据管理器，已被守卫拦截: {method}");
+            return Err(AppError::localized(
+                "onepassword.cred_manager_blocked",
+                "已切换到 1Password 后端，禁止再读写凭据管理器（如持续出现请反馈）",
+                "Credential Manager access is blocked while using the 1Password backend",
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl SecretStore for GuardedSecretStore {
+    async fn set(&self, target: &SecretTarget, value: Zeroizing<String>) -> Result<(), AppError> {
+        self.check("set")?;
+        self.inner.set(target, value).await
+    }
+
+    async fn get(&self, target: &SecretTarget) -> Result<Option<Zeroizing<String>>, AppError> {
+        self.check("get")?;
+        self.inner.get(target).await
+    }
+
+    async fn delete(&self, target: &SecretTarget) -> Result<(), AppError> {
+        self.check("delete")?;
+        self.inner.delete(target).await
+    }
+
+    async fn probe(&self) -> Result<(), AppError> {
+        self.check("probe")?;
+        self.inner.probe().await
+    }
+
+    async fn list_targets(&self, prefix: &str) -> Result<Vec<String>, AppError> {
+        self.check("list_targets")?;
+        self.inner.list_targets(prefix).await
+    }
+
+    async fn get_target_raw(
+        &self,
+        target_name: &str,
+    ) -> Result<Option<Zeroizing<String>>, AppError> {
+        self.check("get_target_raw")?;
+        self.inner.get_target_raw(target_name).await
+    }
+
+    async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+        self.check("set_target_raw")?;
+        self.inner.set_target_raw(target_name, value).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]
     async fn test_in_memory_store_roundtrip() {
@@ -857,5 +943,61 @@ mod tests {
             .expect("get after delete")
             .is_none());
         // guard 的 Drop 会再删一次：幂等，且 panic 路径也能清干净
+    }
+
+    /// F0-2 自测：守卫开启时所有方法一律失败，且底层存储零调用。
+    #[tokio::test]
+    async fn guarded_store_blocks_all_methods_when_active() {
+        let inner = Arc::new(InMemorySecretStore::new());
+        let active = Arc::new(AtomicBool::new(true));
+        let flag = active.clone();
+        let store = GuardedSecretStore::with_predicate(
+            inner.clone(),
+            Arc::new(move || flag.load(Ordering::SeqCst)),
+        );
+        let target = SecretTarget::provider_api_key(AppType::Claude, "p1");
+
+        assert!(store
+            .set(&target, Zeroizing::new("v".into()))
+            .await
+            .is_err());
+        assert!(store.get(&target).await.is_err());
+        assert!(store.delete(&target).await.is_err());
+        assert!(store.probe().await.is_err());
+        assert!(store.list_targets("cc-switch/").await.is_err());
+        assert!(store.get_target_raw("cc-switch/x").await.is_err());
+        assert!(store.set_target_raw("cc-switch/x", "v").await.is_err());
+        // 底层存储未被触碰。
+        assert!(
+            futures::executor::block_on(inner.get(&target))
+                .unwrap()
+                .is_none(),
+            "守卫拦截时不得落到内层存储"
+        );
+    }
+
+    /// F0-2 自测：守卫关闭时完全透传。
+    #[tokio::test]
+    async fn guarded_store_passes_through_when_inactive() {
+        let inner = Arc::new(InMemorySecretStore::new());
+        let active = Arc::new(AtomicBool::new(false));
+        let flag = active.clone();
+        let store = GuardedSecretStore::with_predicate(
+            inner.clone(),
+            Arc::new(move || flag.load(Ordering::SeqCst)),
+        );
+        let target = SecretTarget::provider_api_key(AppType::Claude, "p1");
+        store
+            .set(&target, Zeroizing::new("sk-1".into()))
+            .await
+            .expect("透传 set");
+        assert_eq!(
+            futures::executor::block_on(inner.get(&target))
+                .unwrap()
+                .as_deref()
+                .map(|v| v.as_str()),
+            Some("sk-1"),
+            "守卫关闭时应落到内层存储"
+        );
     }
 }

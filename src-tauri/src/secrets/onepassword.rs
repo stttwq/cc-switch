@@ -10,7 +10,7 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +36,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `op` 调用的内部错误：把「条目不存在」与其它分类错误分开，
 /// 让 `fetch` 能把不存在翻译成 `Ok(None)`。
-enum RunErr {
+pub(crate) enum RunErr {
     /// 条目不存在（退出码非零 + not-found 关键字，§12.12）。
     NotFound,
     /// 其它分类错误。
@@ -84,10 +84,7 @@ pub fn locate_op(configured: Option<&str>) -> Option<PathBuf> {
     // 3) 常见安装路径。
     for var in ["LOCALAPPDATA", "ProgramFiles", "ProgramFiles(x86)"] {
         if let Ok(base) = std::env::var(var) {
-            for rel in [
-                "Microsoft\\WinGet\\Links\\op.exe",
-                "1Password CLI\\op.exe",
-            ] {
+            for rel in ["Microsoft\\WinGet\\Links\\op.exe", "1Password CLI\\op.exe"] {
                 let candidate = Path::new(&base).join(rel);
                 if candidate.is_file() {
                     return Some(candidate);
@@ -110,7 +107,7 @@ fn strip_unc(path: PathBuf) -> PathBuf {
 
 /// 1Password 后端（生产唯一实现）。
 pub struct OnePasswordVault {
-    op_path: PathBuf,
+    runner: Arc<dyn OpRunner>,
     account: String,
     vault: String,
 }
@@ -119,26 +116,32 @@ pub struct OnePasswordVault {
 static OP_LOCK: Mutex<()> = Mutex::new(());
 
 impl OnePasswordVault {
-    pub fn new(
-        op_path: PathBuf,
-        account: impl Into<String>,
-        vault: impl Into<String>,
-    ) -> Self {
+    pub fn new(op_path: PathBuf, account: impl Into<String>, vault: impl Into<String>) -> Self {
         Self {
-            op_path,
+            runner: Arc::new(ProcessOpRunner::new(op_path)),
             account: account.into(),
             vault: vault.into(),
         }
     }
 
-    pub fn op_path(&self) -> &Path {
-        &self.op_path
+    /// 测试注入构造：用 `FakeOpRunner` 脚本化 `op` 行为（F0-1）。
+    #[cfg(test)]
+    pub(crate) fn with_runner(
+        runner: Arc<dyn OpRunner>,
+        account: impl Into<String>,
+        vault: impl Into<String>,
+    ) -> Self {
+        Self {
+            runner,
+            account: account.into(),
+            vault: vault.into(),
+        }
     }
 
     /// 执行一次 `op`（§5.2）。`stdin` 需要时以管道写入后立即关闭。
     /// 返回 stdout（`Zeroizing`，解析后立刻丢弃，永不写日志）。
     fn run_op(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-        exec_op(&self.op_path, args, stdin)
+        self.runner.run(args, stdin)
     }
 
     fn base_read_args<'a>(&'a self, title: &'a str) -> Vec<&'a str> {
@@ -155,6 +158,31 @@ impl OnePasswordVault {
             "json",
             "--no-color",
         ]
+    }
+}
+
+/// `op` 调用抽象（F0-1）：`OnePasswordVault` 经它执行 `op`，生产实现是
+/// [`ProcessOpRunner`]（真实子进程），测试用 `FakeOpRunner` 脚本化——
+/// put 原子性、item_id 优先、「命令行不含任何值」这些关键性质由此可单测。
+pub(crate) trait OpRunner: Send + Sync {
+    /// 执行一次 `op`；`stdin` 需要时以管道写入。返回 stdout（含秘密，永不写日志）。
+    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr>;
+}
+
+/// 生产实现：真实拉起 `op` 子进程（复用 [`exec_op`]）。
+struct ProcessOpRunner {
+    op_path: PathBuf,
+}
+
+impl ProcessOpRunner {
+    fn new(op_path: PathBuf) -> Self {
+        Self { op_path }
+    }
+}
+
+impl OpRunner for ProcessOpRunner {
+    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+        exec_op(&self.op_path, args, stdin)
     }
 }
 
@@ -319,13 +347,18 @@ pub fn list_vaults(op_path: &Path, account: &str) -> Result<Vec<OpVault>, VaultE
     let out = exec_op(
         op_path,
         &[
-            "vault", "list", "--account", account, "--format", "json", "--no-color",
+            "vault",
+            "list",
+            "--account",
+            account,
+            "--format",
+            "json",
+            "--no-color",
         ],
         None,
     )
     .map_err(RunErr::into_vault)?;
-    serde_json::from_slice(&out)
-        .map_err(|e| VaultError::Other(format!("parse vaults failed: {e}")))
+    serde_json::from_slice(&out).map_err(|e| VaultError::Other(format!("parse vaults failed: {e}")))
 }
 
 /// 启动页状态探测（不需解锁）：定位 op + 版本 + 是否已登录。
@@ -805,7 +838,10 @@ pub fn build_runtime_vault(
         match from_settings() {
             Ok(v) => std::sync::Arc::new(v),
             Err(e) => {
-                log::warn!("1Password 后端构造失败（code={}），App 照常打开，取钥匙将报错", e.code());
+                log::warn!(
+                    "1Password 后端构造失败（code={}），App 照常打开，取钥匙将报错",
+                    e.code()
+                );
                 std::sync::Arc::new(UnavailableVault::new(e))
             }
         }
@@ -818,6 +854,101 @@ pub fn build_runtime_vault(
 mod tests {
     use super::*;
     use crate::app_config::AppType;
+    use std::collections::VecDeque;
+    use std::sync::Mutex;
+
+    /// F0-1 测试替身：按脚本顺序返回预设结果，并记录每次调用的 args 与 stdin
+    /// （args 断言用：任何调用的命令行里不得出现 bundle 中的值）。
+    pub(crate) struct FakeOpRunner {
+        script: Mutex<VecDeque<Result<Vec<u8>, RunErr>>>,
+        calls: Mutex<Vec<RecordedCall>>,
+    }
+
+    /// 一次被记录的 `op` 调用。
+    pub(crate) struct RecordedCall {
+        pub(crate) args: Vec<String>,
+        pub(crate) stdin: Option<Vec<u8>>,
+    }
+
+    impl FakeOpRunner {
+        pub(crate) fn new(script: Vec<Result<Vec<u8>, RunErr>>) -> Self {
+            Self {
+                script: Mutex::new(script.into_iter().collect()),
+                calls: Mutex::new(Vec::new()),
+            }
+        }
+
+        /// 第 n 次（0 起）调用的 args 与 stdin。
+        pub(crate) fn call(&self, index: usize) -> (Vec<String>, Option<Vec<u8>>) {
+            let call = &self.calls.lock().unwrap()[index];
+            (call.args.clone(), call.stdin.clone())
+        }
+
+        pub(crate) fn call_count(&self) -> usize {
+            self.calls.lock().unwrap().len()
+        }
+
+        /// 断言辅助：所有已记录调用的 args 拼接文本。
+        fn all_args_text(&self) -> String {
+            self.calls
+                .lock()
+                .unwrap()
+                .iter()
+                .map(|c| c.args.join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        }
+
+        /// F1-1 验收：任何调用的 args 里不出现 bundle 中任何值。
+        #[allow(dead_code)]
+        pub(crate) fn assert_args_contain_none_of(&self, values: &[&str]) {
+            let text = self.all_args_text();
+            for value in values {
+                assert!(
+                    !text.contains(value),
+                    "命令行参数中出现了秘密值（违反 §12.3）"
+                );
+            }
+        }
+    }
+
+    impl OpRunner for FakeOpRunner {
+        fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+            self.calls.lock().unwrap().push(RecordedCall {
+                args: args.iter().map(|s| s.to_string()).collect(),
+                stdin: stdin.map(|b| b.to_vec()),
+            });
+            self.script
+                .lock()
+                .unwrap()
+                .pop_front()
+                .map(|r| r.map(Zeroizing::new))
+                .unwrap_or_else(|| Err(RunErr::Vault(VaultError::Other("脚本耗尽".into()))))
+        }
+    }
+
+    /// 用 FakeOpRunner 构造被测 vault 的便捷函数。
+    fn vault_with(script: Vec<Result<Vec<u8>, RunErr>>) -> (OnePasswordVault, Arc<FakeOpRunner>) {
+        let runner = Arc::new(FakeOpRunner::new(script));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x");
+        (vault, runner)
+    }
+
+    #[test]
+    fn fake_runner_records_calls_and_replays_script() {
+        // F0-1 自测：替身按脚本返回、按序记录。
+        let (vault, runner) = vault_with(vec![
+            Ok(br#"{"id":"i1","fields":[]}"#.to_vec()),
+            Err(RunErr::NotFound),
+        ]);
+        assert!(vault.fetch(&SecretGroup::AppSync).unwrap().is_some());
+        assert!(vault.fetch(&SecretGroup::AppSync).unwrap().is_none());
+        assert_eq!(runner.call_count(), 2);
+        let (args, stdin) = runner.call(0);
+        assert_eq!(args[0], "item");
+        assert_eq!(args[1], "get");
+        assert!(stdin.is_none());
+    }
 
     #[test]
     fn item_title_maps_group() {
@@ -846,9 +977,18 @@ mod tests {
         }"#;
         let bundle = parse_item_bundle(json).expect("parse");
         assert_eq!(bundle.len(), 3);
-        assert_eq!(bundle.get("api_key").map(|v| v.to_string()), Some("sk-real".into()));
-        assert_eq!(bundle.get("base_url").map(|v| v.to_string()), Some("https://x".into()));
-        assert_eq!(bundle.get("env.FOO").map(|v| v.to_string()), Some("foo".into()));
+        assert_eq!(
+            bundle.get("api_key").map(|v| v.to_string()),
+            Some("sk-real".into())
+        );
+        assert_eq!(
+            bundle.get("base_url").map(|v| v.to_string()),
+            Some("https://x".into())
+        );
+        assert_eq!(
+            bundle.get("env.FOO").map(|v| v.to_string()),
+            Some("foo".into())
+        );
         assert!(bundle.get("cc-switch-schema").is_none());
         assert!(bundle.get("username").is_none());
     }
@@ -991,8 +1131,8 @@ mod tests {
     #[test]
     #[ignore = "需解锁的 1Password + 测试 vault（环境变量）"]
     fn real_op_roundtrip() {
-        let account = std::env::var("CC_SWITCH_OP_TEST_ACCOUNT")
-            .expect("设 CC_SWITCH_OP_TEST_ACCOUNT");
+        let account =
+            std::env::var("CC_SWITCH_OP_TEST_ACCOUNT").expect("设 CC_SWITCH_OP_TEST_ACCOUNT");
         let vault = std::env::var("CC_SWITCH_OP_TEST_VAULT").expect("设 CC_SWITCH_OP_TEST_VAULT");
         let op_path = locate_op(None).expect("定位 op.exe");
         let v = OnePasswordVault::new(op_path, account, vault);
@@ -1021,8 +1161,14 @@ mod tests {
 
         // get
         let got = v.fetch(&group).expect("fetch").expect("exists");
-        assert_eq!(got.get(FIELD_API_KEY).map(|x| x.to_string()), Some("sk-roundtrip".into()));
-        assert_eq!(got.get("env.FOO").map(|x| x.to_string()), Some("foo1".into()));
+        assert_eq!(
+            got.get(FIELD_API_KEY).map(|x| x.to_string()),
+            Some("sk-roundtrip".into())
+        );
+        assert_eq!(
+            got.get("env.FOO").map(|x| x.to_string()),
+            Some("foo1".into())
+        );
 
         // edit（改值 + 添字段）
         let mut b2 = SecretBundle::new();
@@ -1032,8 +1178,14 @@ mod tests {
         v.put(&group, &b2).expect("edit");
 
         let got2 = v.fetch(&group).expect("fetch2").expect("exists2");
-        assert_eq!(got2.get(FIELD_API_KEY).map(|x| x.to_string()), Some("sk-updated".into()));
-        assert_eq!(got2.get(FIELD_BASE_URL).map(|x| x.to_string()), Some("https://x".into()));
+        assert_eq!(
+            got2.get(FIELD_API_KEY).map(|x| x.to_string()),
+            Some("sk-updated".into())
+        );
+        assert_eq!(
+            got2.get(FIELD_BASE_URL).map(|x| x.to_string()),
+            Some("https://x".into())
+        );
 
         // delete
         v.delete(&group).expect("delete");

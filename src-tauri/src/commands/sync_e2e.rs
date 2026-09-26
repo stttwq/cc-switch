@@ -20,8 +20,8 @@ pub async fn sync_e2e_set_passphrase(
     state: State<'_, AppState>,
     passphrase: String,
 ) -> Result<Value, String> {
-    let stored = store_sync_passphrase(&state.vault, Some(&passphrase))
-        .map_err(|e| e.to_string())?;
+    let stored =
+        store_sync_passphrase(&state.vault, Some(&passphrase)).map_err(|e| e.to_string())?;
     // 口令变了（或删了）→ 缓存的 KEK 立即失效。
     state.sync_kek.invalidate();
     Ok(json!({ "stored": stored, "cleared": passphrase.is_empty() }))
@@ -30,7 +30,15 @@ pub async fn sync_e2e_set_passphrase(
 /// 读取本机加密状态：两传输是否启用、是否已设口令、设备级序号。
 #[tauri::command]
 pub async fn sync_e2e_get_status(state: State<'_, AppState>) -> Result<Value, String> {
-    let passphrase_set = fetch_sync_credentials(&state.vault)
+    sync_e2e_status_core(&state.vault)
+}
+
+/// `sync_e2e_get_status` 的可测核心（F0-3）：只依赖 vault，便于用 `CountingVault`
+/// 断言「读状态 0 次 op」。F3-1 将把口令判定改为查 `secret_refs`（彻底不 fetch）。
+pub(crate) fn sync_e2e_status_core(
+    vault: &std::sync::Arc<dyn crate::secrets::SecretVault>,
+) -> Result<Value, String> {
+    let passphrase_set = fetch_sync_credentials(vault)
         .map_err(|e| e.to_string())?
         .e2e_passphrase
         .is_some();
@@ -217,4 +225,42 @@ pub async fn sync_e2e_delete_legacy_remote(
         }
     }
     Ok(json!({ "deleted": true }))
+}
+
+#[cfg(test)]
+mod op_count_tests {
+    //! F0-3 次数断言（§9.3）：状态查询 0 次 op；保存 S3 设置 fetch=1、put=1。
+    use crate::secrets::{store_s3_credentials, CountingVault, InMemoryVault, SecretVault};
+    use std::sync::Arc;
+
+    fn counting() -> Arc<CountingVault> {
+        let inner: Arc<dyn SecretVault> = Arc::new(InMemoryVault::new());
+        Arc::new(CountingVault::new(inner))
+    }
+
+    /// `sync_e2e_get_status` 只为判断「口令是否已设」就 fetch 整包 → 展开设置页
+    /// 就可能触发解锁。F3-1 改查 secret_refs 后启用本断言。
+    #[test]
+    #[ignore = "F3-1 后启用"]
+    fn sync_e2e_status_is_zero_fetch() {
+        let counting = counting();
+        super::sync_e2e_status_core(&(counting.clone() as Arc<dyn SecretVault>)).expect("status");
+        assert_eq!(counting.fetch_count(), 0, "状态查询必须 0 次 fetch");
+    }
+
+    /// 保存一次 S3 设置（双字段）当前是 2×(fetch+put)；F1-1 的
+    /// `update_app_sync` 改为一次 fetch → 一次 put 后启用。
+    #[test]
+    #[ignore = "F1-1 后启用"]
+    fn store_s3_credentials_is_one_roundtrip() {
+        let counting = counting();
+        store_s3_credentials(
+            &(counting.clone() as Arc<dyn SecretVault>),
+            Some("AKIA123"),
+            Some("secret456"),
+        )
+        .expect("store");
+        assert_eq!(counting.fetch_count(), 1, "两个字段一次 fetch");
+        assert_eq!(counting.put_count(), 1, "两个字段一次 put");
+    }
 }

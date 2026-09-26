@@ -52,11 +52,14 @@ pub use prompt::Prompt;
 pub use provider::{Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
-    provider::{reapply_current_codex_official_live, reapply_live_after_migration},
+    provider::{
+        import_default_config, reapply_current_codex_official_live, reapply_live_after_migration,
+        reapply_pi_live, strip_current_live_plaintext,
+    },
     skill::{migrate_skills_to_ssot, ImportSkillSelection},
     ConfigService, McpService, PromptService, ProviderService, SkillService,
 };
-pub use settings::{update_settings, AppSettings};
+pub use settings::{get_settings_for_frontend, update_settings, AppSettings};
 pub use store::AppState;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
@@ -518,13 +521,18 @@ pub fn run() {
             // 仍构造 WindowsSecretStore 作为迁移源（便携包/迁移向导用）。
             let backend_is_1p = crate::settings::is_onepassword_backend();
             let secrets: Arc<dyn crate::secrets::SecretStore> = if backend_is_1p {
-                match crate::secrets::WindowsSecretStore::new() {
-                    Ok(store) => Arc::new(store),
-                    Err(e) => {
-                        log::warn!("1P 模式下构造凭据管理器迁移源失败（不影响运行）: {e}");
-                        Arc::new(crate::secrets::UnsupportedSecretStore)
-                    }
-                }
+                let raw: Arc<dyn crate::secrets::SecretStore> =
+                    match crate::secrets::WindowsSecretStore::new() {
+                        Ok(store) => Arc::new(store),
+                        Err(e) => {
+                            log::warn!("1P 模式下构造凭据管理器迁移源失败（不影响运行）: {e}");
+                            Arc::new(crate::secrets::UnsupportedSecretStore)
+                        }
+                    };
+                // F0-2：1P 模式下包守卫（§3 原则 4）。迁移向导在 secret_backend 仍为
+                // windows 时照常读写（守卫判定在调用时进行）；切后端后任何运行时
+                // 误用凭据管理器的路径立即失败。
+                Arc::new(crate::secrets::GuardedSecretStore::new(raw))
             } else {
                 loop {
                     let store = Arc::new(match crate::secrets::WindowsSecretStore::new() {
@@ -602,13 +610,16 @@ pub fn run() {
             // 历史条目名找回：只装过中间开发版的机器上，凭据存在 `<user>.<规范名>`
             // 下，规范名查不到就会误报「需要密钥」。必须在 live 重写与投递之前做，
             // 否则那一步读不到凭据。跑完记一次标志，后续启动不再扫。
-            if app_state
-                .db
-                .get_setting("legacy_secret_recovery")
-                .ok()
-                .flatten()
-                .as_deref()
-                != Some("1")
+            // 1Password 模式跳过：它读写的是凭据管理器，1P 下凭据管理器只是迁移源
+            // （守卫会拦），且 1P 条目与旧命名无关。
+            if !backend_is_1p
+                && app_state
+                    .db
+                    .get_setting("legacy_secret_recovery")
+                    .ok()
+                    .flatten()
+                    .as_deref()
+                    != Some("1")
             {
                 if let Ok(rt) = tokio::runtime::Runtime::new() {
                     match rt.block_on(crate::secrets::legacy::recover_legacy_named_secrets(
