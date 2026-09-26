@@ -475,12 +475,10 @@ impl ProviderService {
             }
         }
 
-        // Save to database
-        if let Err(e) = state.db.save_provider(app_type.as_str(), &provider) {
-            // §5.4：写 DB 失败 → best-effort 撤掉刚写入的凭据条目，不留孤儿。
-            delete_provider_secrets(state, &app_type, &provider.id);
-            return Err(e);
-        }
+        // Save to database。F1-3（P0-3）：编辑路径不做凭据回滚——该条目本来就存在，
+        // 删光等于把用户已有的全部钥匙丢掉。vault 里已是新值、DB 还是旧行，暂时
+        // 不一致但没有丢失，用户重新保存即可恢复一致。（新增路径的归档回滚见 `add`。）
+        state.db.save_provider(app_type.as_str(), &provider)?;
 
         if is_current {
             write_live_with_common_config_for_state(state, &app_type, &provider)?;
@@ -2702,5 +2700,82 @@ mod onepassword_scrub_tests {
         let config = row.expect("存在").settings_config.to_string();
         assert!(config.contains("sk-keep-1"), "失败行必须保留明文: {config}");
         assert!(counting.count() == 0);
+    }
+}
+
+#[cfg(test)]
+mod onepassword_edit_rollback_tests {
+    //! F1-3 回归（P0-3）：编辑供应商时 DB 写失败不得删除该供应商已有的钥匙。
+    use super::*;
+    use crate::secrets::{InMemorySecretStore, InMemoryVault};
+    use std::sync::Arc;
+
+    /// 用 SQLite 触发器注入 `save_provider` 的 UPDATE 失败：
+    /// 只拦 UPDATE，不影响前置的 SELECT 校验路径。
+    fn block_provider_updates(state: &AppState) -> Result<(), AppError> {
+        let conn = crate::database::lock_conn!(state.db.conn);
+        conn.execute_batch(
+            "CREATE TRIGGER block_provider_update BEFORE UPDATE ON providers
+             BEGIN SELECT RAISE(ABORT, 'injected update failure'); END;",
+        )
+        .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    #[test]
+    fn update_keeps_old_secrets_when_save_provider_fails() {
+        let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store,
+        );
+        let vault = Arc::new(InMemoryVault::new());
+        state.vault = vault.clone();
+
+        // 旧供应商已存有 api_key + extra_env（vault 与 secret_refs 均有）。
+        let mut seed = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            serde_json::json!({
+                "env": {"ANTHROPIC_AUTH_TOKEN": "sk-old", "OPENROUTER_API_KEY": "or-old"}
+            }),
+            None,
+        );
+        super::strip_and_store_provider_secrets(&state, &AppType::Claude, &mut seed, false)
+            .expect("seed");
+        state
+            .db
+            .save_provider(AppType::Claude.as_str(), &seed)
+            .expect("seed db row");
+
+        // 注入 save_provider 失败，再编辑（表单不回传密钥 → merge 语义）。
+        block_provider_updates(&state).expect("create trigger");
+        let edited = Provider::from_parts(
+            "p1".to_string(),
+            "P1 renamed".to_string(),
+            serde_json::json!({"env": {}}),
+            None,
+        );
+        let result = ProviderService::update(&state, AppType::Claude, None, edited);
+        assert!(result.is_err(), "注入失败后 update 必须报错");
+
+        // 关键断言：旧钥匙与 extra_env 仍可 fetch 到，secret_refs 行仍在。
+        let secrets = ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1")
+            .expect("旧钥匙仍可读取");
+        assert_eq!(
+            secrets.api_key.as_deref().map(String::as_str),
+            Some("sk-old"),
+            "编辑失败不得删掉已有 api_key"
+        );
+        assert!(
+            secrets.extra_env.contains_key("OPENROUTER_API_KEY"),
+            "编辑失败不得删掉已有 extra_env"
+        );
+        let fields = state
+            .db
+            .get_secret_ref_fields("claude", "p1")
+            .expect("refs")
+            .expect("secret_refs 行必须仍在");
+        assert!(fields.iter().any(|f| f == "api_key"));
+        let _ = vault;
     }
 }
