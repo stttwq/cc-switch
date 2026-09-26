@@ -114,6 +114,14 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
 /// 不触发任何 op / 解锁）。只重写当前 Claude/Codex 的 live 文件，剥掉残留明文
 /// （如 Codex auth.json 里的 OPENAI_API_KEY）。Pi 的 models.json 本就只含引用，不处理。
 pub fn strip_current_live_plaintext(state: &AppState) -> Result<(), AppError> {
+    // Codex：key-free 剥离 auth.json 残留明文（1P 模式下 Codex 靠 config.toml env_key，
+    // auth.json 里的明文一律是遗留）。不比对 vault、不取钥匙、不解锁。
+    match crate::codex_config::strip_codex_apikey_plaintext_for_onepassword() {
+        Ok(true) => log::info!("✓ 已剥离 Codex auth.json 残留明文"),
+        Ok(false) => {}
+        Err(e) => log::warn!("剥离 Codex auth.json 明文失败: {e}"),
+    }
+    // Claude/Codex：重写当前 live 文件（settings.json / config.toml），op-free。
     for app_type in [AppType::Claude, AppType::Codex] {
         let id = match crate::settings::get_effective_current_provider(&state.db, &app_type) {
             Ok(Some(id)) => id,

@@ -631,19 +631,18 @@ pub fn run() {
                 }
             }
 
-            match app_state.db.get_setting("live_reapply_pending") {
-                Ok(Some(flag)) if flag == "1" => {
-                    if backend_is_1p {
-                        // §6.7：1Password 模式下启动不取钥匙。不跑 op-heavy 的全量 reapply
-                        // （switch/backfill/hydrate 会触发 op 并阻塞主线程），只做 key-free 明文剥离。
-                        log::info!("1Password 模式：启动只做 key-free live 明文剥离（不走全量 reapply）");
-                        if let Err(e) =
-                            crate::services::provider::strip_current_live_plaintext(&app_state)
-                        {
-                            log::warn!("live 明文剥离异常: {e}");
-                        }
-                        let _ = app_state.db.set_setting("live_reapply_pending", "0");
-                    } else {
+            if backend_is_1p {
+                // §6.7/6.8：1Password 模式下每次启动都做一次 key-free 明文剥离（幂等，
+                // 不取钥匙、不解锁），确保 Codex auth.json 等不残留明文；并清 pending 标志。
+                if let Err(e) =
+                    crate::services::provider::strip_current_live_plaintext(&app_state)
+                {
+                    log::warn!("live 明文剥离异常: {e}");
+                }
+                let _ = app_state.db.set_setting("live_reapply_pending", "0");
+            } else {
+                match app_state.db.get_setting("live_reapply_pending") {
+                    Ok(Some(flag)) if flag == "1" => {
                         log::info!("检测到 live_reapply_pending=1，开始重写 live 并投递环境变量");
                         if let Err(e) =
                             crate::services::provider::reapply_live_after_migration(&app_state)
@@ -651,9 +650,9 @@ pub fn run() {
                             log::warn!("live 重写批次异常: {e}");
                         }
                     }
+                    Ok(_) => {}
+                    Err(e) => log::warn!("读取 live_reapply_pending 失败: {e}"),
                 }
-                Ok(_) => {}
-                Err(e) => log::warn!("读取 live_reapply_pending 失败: {e}"),
             }
 
             // ============================================================

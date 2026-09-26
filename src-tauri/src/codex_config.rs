@@ -560,6 +560,37 @@ pub fn get_codex_auth_path() -> PathBuf {
     get_codex_config_dir().join("auth.json")
 }
 
+/// §6.8 / 1Password 模式：key-free 地剥掉 auth.json 里的明文 apikey。
+///
+/// 1Password 模式下 Codex 的钥匙经 config.toml 的 env_key 环境变量注入，不靠 auth.json；
+/// 所以 auth.json 里任何明文 `OPENAI_API_KEY` 都是遗留，应剥除。不比对 vault（不取钥匙
+/// 、不解锁，§6.7）。保留 OAuth 登录态（存在 `tokens`）——那是用户自己的 ChatGPT 登录，不动。
+/// 返回是否真的剥除了。
+pub fn strip_codex_apikey_plaintext_for_onepassword() -> Result<bool, AppError> {
+    let path = get_codex_auth_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(false); // 文件不存在
+    };
+    let Ok(mut root) = serde_json::from_str::<Value>(&text) else {
+        return Ok(false); // 无法解析，不动
+    };
+    let Some(obj) = root.as_object_mut() else {
+        return Ok(false);
+    };
+    // OAuth 登录态（tokens）一律不动。
+    if obj.contains_key("tokens") {
+        return Ok(false);
+    }
+    if obj.remove("OPENAI_API_KEY").is_none() {
+        return Ok(false); // 本来就没明文
+    }
+    let bytes = serde_json::to_vec_pretty(&root)
+        .map_err(|e| AppError::Config(format!("序列化 auth.json 失败: {e}")))?;
+    atomic_write(&path, &bytes)?;
+    log::info!("1Password 模式：已剥除 auth.json 里的明文 OPENAI_API_KEY");
+    Ok(true)
+}
+
 /// 获取 Codex config.toml 路径
 pub fn get_codex_config_path() -> PathBuf {
     get_codex_config_dir().join("config.toml")
