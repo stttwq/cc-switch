@@ -1792,5 +1792,30 @@
     "import": "导入凭据",
     "exportDone": "已导出 {{count}} 条凭据到 {{path}}",
     "importDone": "导入 {{imported}} 条，覆盖 {{overwritten}} 条，未变 {{unchanged}} 条"
+  },
+  "onepassword": {
+    "title": "1Password 后端",
+    "description": "运行时从 1Password 取钥匙，本地不留明文",
+    "hint": "通过本机 1Password CLI（op）走桌面 App 集成。每次取钥需数秒，可能弹出解锁。钥匙绝不写入系统环境变量。",
+    "status": {
+      "checking": "正在检查 1Password 状态…",
+      "notInstalled": "未检测到 1Password 命令行工具（op）",
+      "notSignedIn": "尚未登录 1Password",
+      "ready": "1Password 已就绪"
+    },
+    "version": "op 版本",
+    "path": "op 路径",
+    "signatureFailed": "op.exe 签名校验失败，将拒绝使用。",
+    "account": "账户",
+    "loadAccounts": "加载账户",
+    "selectAccount": "选择账户…",
+    "vault": "Vault",
+    "loadVaults": "加载 vault",
+    "selectVault": "选择 vault…",
+    "vaultUnlockHint": "列出 vault 需要解锁 1Password（可能弹出授权）。",
+    "verifySignature": "校验 op.exe 签名（推荐）",
+    "testFetch": "测试取钥匙",
+    "testOk": "1Password 可达且已解锁。",
+    "saved": "1Password 设置已保存"
   }
 }

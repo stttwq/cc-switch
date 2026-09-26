@@ -17,6 +17,7 @@ import {
   HardDriveDownload,
   Globe,
   ShieldCheck,
+  KeyRound,
 } from "lucide-react";
 import { toast } from "sonner";
 import {
@@ -39,6 +40,7 @@ import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
 import { SecretStoreMaintenance } from "@/components/settings/SecretStoreMaintenance";
 import { SecretsPortableSection } from "@/components/settings/SecretsPortableSection";
+import { OnePasswordSection } from "@/components/settings/OnePasswordSection";
 import { LiveReapplyMaintenance } from "@/components/settings/LiveReapplyMaintenance";
 import { ThemeSettings } from "@/components/settings/ThemeSettings";
 import { WindowSettings } from "@/components/settings/WindowSettings";
@@ -518,6 +520,28 @@ export function SettingsPage({
                             <SecretsPortableSection />
                           </div>
                           <LiveReapplyMaintenance />
+                        </AccordionContent>
+                      </AccordionItem>
+
+                      <AccordionItem
+                        value="onepassword"
+                        className="rounded-xl glass-card overflow-hidden"
+                      >
+                        <AccordionTrigger className="px-6 py-4 hover:no-underline hover:bg-muted/50 data-[state=open]:bg-muted/50">
+                          <div className="flex items-center gap-3">
+                            <KeyRound className="h-5 w-5 text-cyan-500" />
+                            <div className="text-left">
+                              <h3 className="text-base font-semibold">
+                                {t("onepassword.title")}
+                              </h3>
+                              <p className="text-sm text-muted-foreground font-normal">
+                                {t("onepassword.description")}
+                              </p>
+                            </div>
+                          </div>
+                        </AccordionTrigger>
+                        <AccordionContent className="px-6 pb-6 pt-4 border-t border-border/50">
+                          <OnePasswordSection />
                         </AccordionContent>
                       </AccordionItem>
                     </Accordion>

@@ -221,8 +221,8 @@ impl VaultError {
                 "Not signed in to 1Password".to_string(),
             ),
             Self::Locked => (
-                "1Password 已锁定或授权被取消，请解锁后重试".to_string(),
-                "1Password is locked or authorization was dismissed".to_string(),
+                "1Password 已锁定、未运行或授权被取消，请打开并解锁 1Password 后重试".to_string(),
+                "1Password is locked, not running, or authorization was dismissed".to_string(),
             ),
             Self::Network => (
                 "连接 1Password 失败，请检查网络".to_string(),

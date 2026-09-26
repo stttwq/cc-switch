@@ -304,6 +304,27 @@ impl S3SyncSettings {
     }
 }
 
+/// 1Password 后端配置（非秘密：op 绝对路径 / 账户 / vault / 是否校验签名）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct OnePasswordSettings {
+    /// `op.exe` 绝对路径（定位后固定下来）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub op_path: Option<String>,
+    /// 账户标识（`op account list` 里的 account_id / email）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+    /// 专用 vault 的 id 或名称。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub vault: Option<String>,
+    /// 是否校验 op.exe 签名（D8，默认开）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verify_signature: Option<bool>,
+    /// 迁移完成时间（ISO 字符串），供诊断。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub migrated_at: Option<String>,
+}
+
 /// 本机自动迁移状态。
 ///
 /// 这里记录的是本机启动时执行过的一次性迁移；标记不随数据库同步。
@@ -474,6 +495,15 @@ pub struct AppSettings {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub local_migrations: Option<LocalMigrations>,
 
+    // ===== 凭据后端（§7）=====
+    /// 运行时凭据后端：缺省 / "windows" = 凭据管理器；"onepassword" = 1Password。
+    /// 迁移向导校验通过后切到 onepassword，单向（D10 不保留回退开关）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secret_backend: Option<String>,
+    /// 1Password 后端配置（非秘密：op 绝对路径 / 账户 / vault / 是否校验签名）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onepassword: Option<OnePasswordSettings>,
+
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
     /// so official sessions share one resume-history bucket with third-party
@@ -542,6 +572,8 @@ impl Default for AppSettings {
             env_delivery_strict_mode: true,
             env_delivery_strict_apps: None,
             local_migrations: None,
+            secret_backend: None,
+            onepassword: None,
         }
     }
 }
@@ -1122,6 +1154,47 @@ pub fn get_custom_terminal_config() -> Option<(String, String)> {
         .filter(|a| !a.trim().is_empty())
         .unwrap_or_else(|| "-e cmd /K \"{bat}\"".to_string());
     Some((path, args))
+}
+
+// ===== 1Password 后端设置（非秘密）=====
+
+/// 获取凭据后端标识（缺省视为 "windows"）。
+pub fn get_secret_backend() -> String {
+    settings_store()
+        .read()
+        .ok()
+        .and_then(|s| s.secret_backend.clone())
+        .unwrap_or_else(|| "windows".to_string())
+}
+
+/// 是否已切到 1Password 后端。
+// 尚未接入构造/投递判定（P4 用）。
+#[allow(dead_code)]
+pub fn is_onepassword_backend() -> bool {
+    get_secret_backend() == "onepassword"
+}
+
+pub fn get_onepassword_settings() -> Option<OnePasswordSettings> {
+    settings_store().read().ok()?.onepassword.clone()
+}
+
+pub fn get_onepassword_op_path() -> Option<String> {
+    get_onepassword_settings().and_then(|s| s.op_path)
+}
+
+pub fn get_onepassword_account() -> Option<String> {
+    get_onepassword_settings().and_then(|s| s.account)
+}
+
+pub fn get_onepassword_vault() -> Option<String> {
+    get_onepassword_settings().and_then(|s| s.vault)
+}
+
+/// 是否校验 op.exe 签名（缺省开，D8）。
+pub fn onepassword_verify_signature() -> bool {
+    get_onepassword_settings()
+        .and_then(|s| s.verify_signature)
+        .unwrap_or(true)
 }
 
 // ===== WebDAV 同步设置管理函数 =====

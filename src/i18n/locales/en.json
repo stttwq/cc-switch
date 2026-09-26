@@ -1792,5 +1792,30 @@
     "import": "Import credentials",
     "exportDone": "Exported {{count}} credential(s) to {{path}}",
     "importDone": "Imported {{imported}}, overwrote {{overwritten}}, unchanged {{unchanged}}"
+  },
+  "onepassword": {
+    "title": "1Password backend",
+    "description": "Fetch API keys from 1Password at runtime; keep nothing locally",
+    "hint": "Uses the local 1Password CLI (op) via the desktop app. Each fetch takes a few seconds and may prompt to unlock. Keys are never written to the system environment.",
+    "status": {
+      "checking": "Checking 1Password status…",
+      "notInstalled": "1Password CLI (op) not found",
+      "notSignedIn": "Not signed in to 1Password",
+      "ready": "1Password is ready"
+    },
+    "version": "op version",
+    "path": "op path",
+    "signatureFailed": "op.exe signature verification failed; it will be rejected.",
+    "account": "Account",
+    "loadAccounts": "Load accounts",
+    "selectAccount": "Select an account…",
+    "vault": "Vault",
+    "loadVaults": "Load vaults",
+    "selectVault": "Select a vault…",
+    "vaultUnlockHint": "Listing vaults requires unlocking 1Password (a prompt may appear).",
+    "verifySignature": "Verify op.exe signature (recommended)",
+    "testFetch": "Test fetch",
+    "testOk": "1Password is reachable and unlocked.",
+    "saved": "1Password settings saved"
   }
 }

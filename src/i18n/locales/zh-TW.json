@@ -1792,5 +1792,30 @@
     "import": "匯入憑證",
     "exportDone": "已匯出 {{count}} 筆憑證到 {{path}}",
     "importDone": "匯入 {{imported}} 筆，覆蓋 {{overwritten}} 筆，未變 {{unchanged}} 筆"
+  },
+  "onepassword": {
+    "title": "1Password 後端",
+    "description": "執行時從 1Password 取金鑰，本機不留明文",
+    "hint": "透過本機 1Password CLI（op）走桌面 App 整合。每次取金鑰需數秒，可能彈出解鎖。金鑰絕不寫入系統環境變數。",
+    "status": {
+      "checking": "正在檢查 1Password 狀態…",
+      "notInstalled": "未偵測到 1Password 命令列工具（op）",
+      "notSignedIn": "尚未登入 1Password",
+      "ready": "1Password 已就緒"
+    },
+    "version": "op 版本",
+    "path": "op 路徑",
+    "signatureFailed": "op.exe 簽章校驗失敗，將拒絕使用。",
+    "account": "帳戶",
+    "loadAccounts": "載入帳戶",
+    "selectAccount": "選擇帳戶…",
+    "vault": "Vault",
+    "loadVaults": "載入 vault",
+    "selectVault": "選擇 vault…",
+    "vaultUnlockHint": "列出 vault 需要解鎖 1Password（可能彈出授權）。",
+    "verifySignature": "校驗 op.exe 簽章（建議）",
+    "testFetch": "測試取金鑰",
+    "testOk": "1Password 可達且已解鎖。",
+    "saved": "1Password 設定已儲存"
   }
 }

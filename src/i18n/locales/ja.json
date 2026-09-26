@@ -1792,5 +1792,30 @@
     "import": "資格情報をインポート",
     "exportDone": "{{count}} 件の資格情報を {{path}} にエクスポートしました",
     "importDone": "{{imported}} 件をインポート、{{overwritten}} 件を上書き、{{unchanged}} 件は変更なし"
+  },
+  "onepassword": {
+    "title": "1Password バックエンド",
+    "description": "実行時に 1Password から鍵を取得し、ローカルには保存しない",
+    "hint": "ローカルの 1Password CLI（op）をデスクトップアプリ連携で使用します。取得は毎回数秒かかり、ロック解除を求められることがあります。鍵はシステム環境変数には書き込まれません。",
+    "status": {
+      "checking": "1Password の状態を確認中…",
+      "notInstalled": "1Password CLI（op）が見つかりません",
+      "notSignedIn": "1Password にサインインしていません",
+      "ready": "1Password は準備完了です"
+    },
+    "version": "op バージョン",
+    "path": "op パス",
+    "signatureFailed": "op.exe の署名検証に失敗しました。使用を拒否します。",
+    "account": "アカウント",
+    "loadAccounts": "アカウントを読み込む",
+    "selectAccount": "アカウントを選択…",
+    "vault": "Vault",
+    "loadVaults": "vault を読み込む",
+    "selectVault": "vault を選択…",
+    "vaultUnlockHint": "vault の一覧表示には 1Password のロック解除が必要です（プロンプトが表示されることがあります）。",
+    "verifySignature": "op.exe の署名を検証（推奨）",
+    "testFetch": "取得テスト",
+    "testOk": "1Password に接続でき、ロックも解除されています。",
+    "saved": "1Password 設定を保存しました"
   }
 }

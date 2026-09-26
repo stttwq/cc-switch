@@ -2,6 +2,7 @@ pub mod cleanup;
 mod extractor;
 pub mod legacy;
 pub mod migration;
+mod onepassword;
 pub mod portable;
 mod rules;
 pub mod scan;
@@ -35,4 +36,8 @@ pub use vault::{
     CountingVault, InMemoryVault, LegacyWindowsVault, SecretBundle, SecretGroup, SecretVault,
     VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX, FIELD_BASE_URL,
     FIELD_ENV_PREFIX,
+};
+pub use onepassword::{
+    list_accounts, list_vaults, locate_op, op_version, probe as onepassword_probe, verify_op_signature,
+    OnePasswordVault, OpAccount, OpProbe, OpVault,
 };
