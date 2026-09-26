@@ -93,7 +93,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Console",
     "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
-]}
+] }
 
 # Optimize release binary size for the Windows MSI
 [profile.release]

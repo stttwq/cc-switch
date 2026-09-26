@@ -254,15 +254,42 @@ fn exec_op(
     Err(classify_stderr(&stderr))
 }
 
-/// 1Password 账户（`op account list` 行）。
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// 1Password 账户（`op account list` 行）。前端面向结构：`account_uuid` 已解析。
+#[derive(Debug, Clone, Serialize)]
 pub struct OpAccount {
-    #[serde(default)]
     pub url: String,
-    #[serde(default)]
     pub email: String,
-    #[serde(default, rename = "account_uuid", alias = "user_uuid")]
     pub account_uuid: String,
+}
+
+/// op 原始输出：不同版本可能同时包含 `account_uuid` 与 `user_uuid`，
+/// 不能用 serde alias（两者共存时会报 duplicate field），故分开接收再解析。
+#[derive(Debug, Clone, Deserialize)]
+struct OpAccountRaw {
+    #[serde(default)]
+    url: String,
+    #[serde(default)]
+    email: String,
+    #[serde(default)]
+    account_uuid: String,
+    #[serde(default)]
+    user_uuid: String,
+}
+
+impl From<OpAccountRaw> for OpAccount {
+    fn from(r: OpAccountRaw) -> Self {
+        // `--account` 接受账户 UUID 或用户 UUID；优先账户 UUID，缺失时回落用户 UUID。
+        let account_uuid = if !r.account_uuid.is_empty() {
+            r.account_uuid
+        } else {
+            r.user_uuid
+        };
+        OpAccount {
+            url: r.url,
+            email: r.email,
+            account_uuid,
+        }
+    }
 }
 
 /// 1Password vault（`op vault list` 行）。
@@ -282,8 +309,9 @@ pub fn list_accounts(op_path: &Path) -> Result<Vec<OpAccount>, VaultError> {
         None,
     )
     .map_err(RunErr::into_vault)?;
-    serde_json::from_slice(&out)
-        .map_err(|e| VaultError::Other(format!("parse accounts failed: {e}")))
+    let raw: Vec<OpAccountRaw> = serde_json::from_slice(&out)
+        .map_err(|e| VaultError::Other(format!("parse accounts failed: {e}")))?;
+    Ok(raw.into_iter().map(OpAccount::from).collect())
 }
 
 /// 列出 vault（需解锁：会触发授权弹窗）。
@@ -829,6 +857,26 @@ mod tests {
     fn parse_item_id_reads_id() {
         let json = br#"{"id": "xyz", "fields": []}"#;
         assert_eq!(parse_item_id(json).as_deref(), Some("xyz"));
+    }
+
+    #[test]
+    fn parse_accounts_tolerates_both_uuid_fields() {
+        // op 2.39 同时输出 account_uuid 与 user_uuid；不能用 alias（会 duplicate field）。
+        let json = br#"[{"url":"my.1password.com","email":"u@e.com","user_uuid":"UUUU","account_uuid":"AAAA"}]"#;
+        let raw: Vec<OpAccountRaw> = serde_json::from_slice(json).expect("parse");
+        let accounts: Vec<OpAccount> = raw.into_iter().map(OpAccount::from).collect();
+        assert_eq!(accounts.len(), 1);
+        // 优先 account_uuid。
+        assert_eq!(accounts[0].account_uuid, "AAAA");
+        assert_eq!(accounts[0].email, "u@e.com");
+    }
+
+    #[test]
+    fn parse_accounts_falls_back_to_user_uuid() {
+        let json = br#"[{"url":"x","email":"e","user_uuid":"UUUU"}]"#;
+        let raw: Vec<OpAccountRaw> = serde_json::from_slice(json).unwrap();
+        let accounts: Vec<OpAccount> = raw.into_iter().map(OpAccount::from).collect();
+        assert_eq!(accounts[0].account_uuid, "UUUU");
     }
 
     #[test]

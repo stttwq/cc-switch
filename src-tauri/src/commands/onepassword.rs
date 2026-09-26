@@ -50,9 +50,13 @@ pub async fn onepassword_list_accounts(_state: State<'_, AppState>) -> Result<Va
     .map_err(|e| e.to_string())
 }
 
-/// 列出 vault（需解锁：会触发授权弹窗）。
+/// 列出 vault（需解锁：会触发授权弹窗）。`account` 传当前下拉选中值（尚未保存），
+/// 缺失时回落已保存设置。
 #[tauri::command]
-pub async fn onepassword_list_vaults(_state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn onepassword_list_vaults(
+    _state: State<'_, AppState>,
+    account: Option<String>,
+) -> Result<Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let verify = crate::settings::onepassword_verify_signature();
         let path = secrets::locate_op(crate::settings::get_onepassword_op_path().as_deref())
@@ -60,9 +64,12 @@ pub async fn onepassword_list_vaults(_state: State<'_, AppState>) -> Result<Valu
         if verify {
             secrets::verify_op_signature(&path).map_err(crate::error::AppError::from)?;
         }
-        let account = crate::settings::get_onepassword_account().ok_or_else(|| {
-            crate::error::AppError::from(secrets::VaultError::Other("请先选择账户".to_string()))
-        })?;
+        let account = account
+            .filter(|s| !s.trim().is_empty())
+            .or_else(crate::settings::get_onepassword_account)
+            .ok_or_else(|| {
+                crate::error::AppError::from(secrets::VaultError::Other("请先选择账户".to_string()))
+            })?;
         let vaults = secrets::list_vaults(&path, &account).map_err(crate::error::AppError::from)?;
         Ok::<Value, crate::error::AppError>(json!(vaults))
     })

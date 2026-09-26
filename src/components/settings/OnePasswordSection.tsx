@@ -82,7 +82,9 @@ export function OnePasswordSection() {
   const loadVaults = async () => {
     setBusy("vaults");
     try {
-      const list = await invoke<OpVault[]>("onepassword_list_vaults");
+      const list = await invoke<OpVault[]>("onepassword_list_vaults", {
+        account: account || null,
+      });
       setVaults(list);
       if (!vault && list.length > 0) setVault(list[0].id);
     } catch (error) {
