@@ -1949,7 +1949,7 @@ fn strip_and_store_provider_secrets(
 }
 
 /// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
-fn store_provider_bundle(
+pub(crate) fn store_provider_bundle(
     state: &AppState,
     app_type: &AppType,
     provider_id: &str,
@@ -1990,6 +1990,93 @@ fn store_provider_bundle(
         &vref.fields,
     )?;
     Ok(())
+}
+
+/// F1-5：1Password 模式下的导入明文清理（P0-5 / 原则 3）。
+///
+/// SQL 导入 / 备份恢复 / 云同步下载后，DB 里可能带明文钥匙。1P 模式下绝不写
+/// 凭据管理器（守卫也会拦）：逐行纯提取 → 整包写入 vault（merge 语义）→
+/// **写入成功才**在 DB 剥离该行；失败的行保留明文并记入本机设置
+/// `secrets_import_pending`，UI 提示「解锁 1Password 后重试导入钥匙」。
+/// 导出护栏 `assert_no_secret_patterns` 会拒绝带明文的同步上传——fail-closed。
+///
+/// 返回 pending 清单（空 = 全部成功）。
+pub(crate) fn scrub_imported_plaintext_via_vault(
+    state: &AppState,
+) -> Result<Vec<String>, AppError> {
+    let mut pending: Vec<String> = Vec::new();
+    // 收集「vault 写入成功」的行的 stripped 配置，最后事务写回。
+    let mut stripped_rows: Vec<(String, String, Value)> = Vec::new();
+
+    for app_type in [AppType::Claude, AppType::Codex, AppType::Pi] {
+        let providers = state.db.get_all_providers(app_type.as_str())?;
+        for (id, provider) in providers {
+            let key = format!("{}/{}", app_type.as_str(), id);
+            let extracted = match SecretExtractor::extract_with_meta(
+                &id,
+                &app_type,
+                &provider.settings_config,
+                provider
+                    .meta
+                    .as_ref()
+                    .and_then(|m| m.api_key_field.as_deref()),
+            ) {
+                Ok(e) => e,
+                Err(e) => {
+                    // 提取失败：保留原样，等用户重试（只记 id，不记值）。
+                    pending.push(key.clone());
+                    log::warn!("1P 模式导入清理：{key} 提取失败，保留原样待重试: {e}");
+                    continue;
+                }
+            };
+            // 无秘密的行不写 vault，但仍要落 stripped——与凭据管理器迁移一致：
+            // 只含 OAuth 登录态的行必须把被丢弃的 tokens 从 DB 里剥掉。
+            if !extracted.secrets.is_empty() {
+                if let Err(e) =
+                    store_provider_bundle(state, &app_type, &id, &extracted.secrets, true)
+                {
+                    pending.push(key.clone());
+                    log::warn!("1P 模式导入清理：{key} 写 vault 失败（可能锁定），保留明文待重试: {e}");
+                    continue;
+                }
+            }
+            stripped_rows.push((app_type.as_str().to_string(), id, extracted.stripped));
+        }
+    }
+
+    // 事务写回 stripped（secure_delete 让被覆盖的明文立刻离开 free page）。
+    if !stripped_rows.is_empty() {
+        let conn = crate::database::lock_conn!(state.db.conn);
+        conn.execute_batch("PRAGMA secure_delete = ON;")
+            .map_err(|e| AppError::Database(format!("开启 secure_delete 失败: {e}")))?;
+        let tx = conn
+            .unchecked_transaction()
+            .map_err(|e| AppError::Database(format!("开启导入清理事务失败: {e}")))?;
+        for (app_str, id, stripped) in &stripped_rows {
+            let json = serde_json::to_string(stripped)
+                .map_err(|e| AppError::Database(format!("序列化 stripped 失败: {e}")))?;
+            tx.execute(
+                "UPDATE providers SET settings_config = ?1 WHERE app_type = ?2 AND id = ?3",
+                rusqlite::params![json, app_str, id],
+            )
+            .map_err(|e| AppError::Database(format!("剥离 {app_str}/{id} 失败: {e}")))?;
+        }
+        tx.commit()
+            .map_err(|e| AppError::Database(format!("提交导入清理事务失败: {e}")))?;
+        conn.execute_batch("VACUUM;")
+            .map_err(|e| AppError::Database(format!("导入清理后 VACUUM 失败: {e}")))?;
+        conn.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")
+            .map_err(|e| AppError::Database(format!("恢复连接 pragma 失败: {e}")))?;
+    }
+
+    crate::settings::set_secrets_import_pending(pending.clone())?;
+    if !pending.is_empty() {
+        log::warn!(
+            "1P 模式导入清理：{} 行保留明文待重试（解锁 1Password 后在设置里重试导入）",
+            pending.len()
+        );
+    }
+    Ok(pending)
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -2418,5 +2505,202 @@ mod vault_call_count_tests {
         counting.reset();
         super::delete_provider_secrets(&state, &AppType::Claude, "p1");
         assert_eq!(counting.delete_count(), 1, "删除一次整组");
+    }
+}
+
+#[cfg(test)]
+mod onepassword_scrub_tests {
+    //! F1-5 回归（P0-5）：1P 模式下导入明文只进 vault，凭据管理器零触碰；
+    //! vault 写入失败时保留明文并记 pending。
+    use super::*;
+    use crate::secrets::{GuardedSecretStore, InMemorySecretStore, InMemoryVault, SecretGroup, SecretVault};
+    use serial_test::serial;
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
+
+    /// 记录调用次数的存储包装：守卫拦截时调用数必须为 0。
+    struct CountingStore {
+        inner: InMemorySecretStore,
+        calls: Mutex<AtomicUsize>,
+    }
+
+    impl CountingStore {
+        fn new() -> Self {
+            Self {
+                inner: InMemorySecretStore::new(),
+                calls: Mutex::new(AtomicUsize::new(0)),
+            }
+        }
+
+        fn count(&self) -> usize {
+            self.calls.lock().unwrap().load(Ordering::SeqCst)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl crate::secrets::SecretStore for CountingStore {
+        async fn set(
+            &self,
+            target: &crate::secrets::SecretTarget,
+            value: Zeroizing<String>,
+        ) -> Result<(), AppError> {
+            self.calls.lock().unwrap().fetch_add(1, Ordering::SeqCst);
+            self.inner.set(target, value).await
+        }
+        async fn get(
+            &self,
+            target: &crate::secrets::SecretTarget,
+        ) -> Result<Option<Zeroizing<String>>, AppError> {
+            self.inner.get(target).await
+        }
+        async fn delete(&self, target: &crate::secrets::SecretTarget) -> Result<(), AppError> {
+            self.inner.delete(target).await
+        }
+        async fn probe(&self) -> Result<(), AppError> {
+            self.inner.probe().await
+        }
+        async fn list_targets(&self, prefix: &str) -> Result<Vec<String>, AppError> {
+            self.inner.list_targets(prefix).await
+        }
+        async fn get_target_raw(
+            &self,
+            target_name: &str,
+        ) -> Result<Option<Zeroizing<String>>, AppError> {
+            self.inner.get_target_raw(target_name).await
+        }
+        async fn set_target_raw(&self, target_name: &str, value: &str) -> Result<(), AppError> {
+            self.inner.set_target_raw(target_name, value).await
+        }
+    }
+
+    /// 隔离本机设置文件（set_secrets_import_pending 落盘路径）。
+    struct TempHome {
+        dir: std::path::PathBuf,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("cc-switch-scrub-{tag}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".cc-switch")).expect("mkdir");
+            std::fs::write(dir.join(".cc-switch").join("cc-switch.db"), b"").expect("placeholder");
+            let prev = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", &dir);
+            Self { dir, prev }
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    fn onepassword_state() -> (AppState, Arc<InMemoryVault>, Arc<CountingStore>) {
+        let counting = Arc::new(CountingStore::new());
+        // 守卫恒开：任何对凭据管理器的调用都应让断言失败。
+        let guarded: Arc<dyn crate::secrets::SecretStore> =
+            Arc::new(GuardedSecretStore::with_predicate(
+                counting.clone(),
+                Arc::new(|| true),
+            ));
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, guarded);
+        let vault = Arc::new(InMemoryVault::new());
+        state.vault = vault.clone();
+        (state, vault, counting)
+    }
+
+    fn seed_provider(state: &AppState, id: &str, settings: serde_json::Value) {
+        let provider = Provider::from_parts(id.to_string(), id.to_string(), settings, None);
+        state
+            .db
+            .save_provider(AppType::Claude.as_str(), &provider)
+            .expect("seed provider");
+    }
+
+    #[test]
+    #[serial]
+    fn scrub_routes_plaintext_into_vault_without_touching_credential_manager() {
+        let _home = TempHome::new("ok");
+        let (state, vault, counting) = onepassword_state();
+        seed_provider(
+            &state,
+            "p1",
+            serde_json::json!({
+                "env": {"ANTHROPIC_AUTH_TOKEN": "sk-import-1", "ANTHROPIC_BASE_URL": "https://x.example"}
+            }),
+        );
+
+        let pending = super::scrub_imported_plaintext_via_vault(&state).expect("scrub");
+        assert!(pending.is_empty(), "全部成功时无 pending");
+        assert!(
+            crate::settings::get_secrets_import_pending().is_empty(),
+            "成功后清空 pending 标记"
+        );
+        assert_eq!(counting.count(), 0, "凭据管理器必须零调用");
+
+        // 钥匙进入 vault。
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Claude, "p1"))
+            .expect("fetch")
+            .expect("存在");
+        assert_eq!(
+            bundle.get("api_key").map(|v| v.to_string()),
+            Some("sk-import-1".into())
+        );
+        // secret_refs 已登记。
+        let fields = state
+            .db
+            .get_secret_ref_fields("claude", "p1")
+            .expect("refs")
+            .expect("非空");
+        assert!(fields.iter().any(|f| f == "api_key"));
+        // DB 已剥离明文。
+        let row = state.db.get_provider_by_id("p1", "claude").expect("row");
+        let config = row.expect("存在").settings_config.to_string();
+        assert!(!config.contains("sk-import-1"), "明文必须剥离: {config}");
+    }
+
+    #[test]
+    #[serial]
+    fn scrub_keeps_plaintext_and_marks_pending_when_vault_write_fails() {
+        let _home = TempHome::new("fail");
+        let counting = Arc::new(CountingStore::new());
+        let guarded: Arc<dyn crate::secrets::SecretStore> =
+            Arc::new(GuardedSecretStore::with_predicate(
+                counting.clone(),
+                Arc::new(|| true),
+            ));
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, guarded);
+        // vault 一律失败（模拟 1P 锁定 / 断网）。
+        state.vault = Arc::new(crate::secrets::UnavailableVault::new(
+            crate::secrets::VaultError::Locked,
+        ));
+        seed_provider(
+            &state,
+            "p1",
+            serde_json::json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-keep-1"}}),
+        );
+
+        let pending = super::scrub_imported_plaintext_via_vault(&state).expect("scrub");
+        assert_eq!(pending, vec!["claude/p1".to_string()], "失败行记 pending");
+        assert_eq!(
+            crate::settings::get_secrets_import_pending(),
+            vec!["claude/p1".to_string()],
+            "pending 标记写入本机设置"
+        );
+        // DB 保持原样（明文未剥离）。
+        let row = state.db.get_provider_by_id("p1", "claude").expect("row");
+        let config = row.expect("存在").settings_config.to_string();
+        assert!(config.contains("sk-keep-1"), "失败行必须保留明文: {config}");
+        assert!(counting.count() == 0);
     }
 }

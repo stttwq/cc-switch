@@ -93,7 +93,14 @@ impl AppState {
     }
 
     /// 导入/还原后对 providers 逐行 extract，把残留明文收进凭据管理器。
+    ///
+    /// F1-5：1Password 模式下改走 vault（P0-5）——逐行写 1P、成功才剥离，
+    /// 失败行保留明文并记入本机设置 `secrets_import_pending`；绝不读写凭据管理器。
     pub fn scrub_imported_plaintext(&self) -> Result<(), AppError> {
+        if crate::settings::is_onepassword_backend() {
+            crate::services::provider::scrub_imported_plaintext_via_vault(self)?;
+            return Ok(());
+        }
         let migrator = crate::secrets::migration::CredentialMigrator::new(
             self.db.as_ref(),
             self.secrets.as_ref(),

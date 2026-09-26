@@ -503,6 +503,11 @@ pub struct AppSettings {
     /// 1Password 后端配置（非秘密：op 绝对路径 / 账户 / vault / 是否校验签名）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onepassword: Option<OnePasswordSettings>,
+    /// F1-5：1P 模式下导入/恢复时写 vault 失败、明文暂留 DB 的供应商清单
+    /// （`<app>/<id>`，只记 id 不记值）。存本机设置（settings.json 不随云同步）。
+    /// 非空时 UI 提示「解锁 1Password 后重试导入钥匙」；重试成功后清空。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secrets_import_pending: Option<Vec<String>>,
 
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
@@ -574,6 +579,7 @@ impl Default for AppSettings {
             local_migrations: None,
             secret_backend: None,
             onepassword: None,
+            secrets_import_pending: None,
         }
     }
 }
@@ -1213,6 +1219,23 @@ pub fn onepassword_verify_signature() -> bool {
     get_onepassword_settings()
         .and_then(|s| s.verify_signature)
         .unwrap_or(true)
+}
+
+// ===== 明文导入待重试（F1-5，本机设置） =====
+
+/// F1-5：读取「明文导入待重试」清单（`<app>/<id>`，只记 id 不记值）。
+/// F5-5 前端「解锁后重试导入」提示接入前仅测试使用。
+#[allow(dead_code)]
+pub fn get_secrets_import_pending() -> Vec<String> {
+    get_settings().secrets_import_pending.unwrap_or_default()
+}
+
+/// F1-5：写入「明文导入待重试」清单。空清单 = 清除标记（重试全部成功）。
+pub fn set_secrets_import_pending(items: Vec<String>) -> Result<(), AppError> {
+    let items = if items.is_empty() { None } else { Some(items) };
+    mutate_settings(|settings| {
+        settings.secrets_import_pending = items;
+    })
 }
 
 // ===== WebDAV 同步设置管理函数 =====

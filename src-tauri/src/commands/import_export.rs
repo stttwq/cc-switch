@@ -2,9 +2,9 @@
 
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use zeroize::Zeroizing;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
+use zeroize::Zeroizing;
 
 use crate::commands::sync_support::{
     post_sync_warning_from_result, run_post_import_sync, success_payload_with_warning,
@@ -27,6 +27,10 @@ pub async fn secrets_export_via_dialog<R: tauri::Runtime>(
     passphrase: String,
     state: State<'_, AppState>,
 ) -> Result<Option<Value>, String> {
+    // F1-5（D9）：1P 模式下凭据在 1Password 里，凭据管理器是空的迁移源——
+    // 导出只会产出空包或误导包，由后端直接拒绝（不能只靠前端隐藏按钮）。
+    crate::secrets::portable::ensure_portable_export_allowed().map_err(|e| e.to_string())?;
+
     // 口令永不落盘：立即 move 进 Zeroizing，函数返回时自动抹除内存。
     let passphrase = Zeroizing::new(passphrase);
     let default_name = format!(
@@ -85,9 +89,17 @@ pub async fn secrets_import_via_dialog<R: tauri::Runtime>(
     let source_path = PathBuf::from(source.to_string());
     let bytes = std::fs::read(&source_path).map_err(|e| format!("读取便携包失败: {e}"))?;
 
-    let report = crate::secrets::portable::import(state.secrets.as_ref(), &bytes, passphrase.as_str())
-        .await
-        .map_err(|e| e.to_string())?;
+    // F1-5（D9）：1P 模式导入改写 vault（分组 fetch+put + 登记 secret_refs），
+    // 凭据管理器模式维持原路径。
+    let report = if crate::settings::is_onepassword_backend() {
+        crate::secrets::portable::import_to_vault(state.inner(), &bytes, passphrase.as_str())
+            .await
+            .map_err(|e| e.to_string())?
+    } else {
+        crate::secrets::portable::import(state.secrets.as_ref(), &bytes, passphrase.as_str())
+            .await
+            .map_err(|e| e.to_string())?
+    };
 
     Ok(Some(json!({
         "success": true,

@@ -17,7 +17,9 @@ use std::collections::BTreeMap;
 
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::app_config::AppType;
 use crate::error::AppError;
+use crate::secrets::vault::{app_sync_bundle_field, SecretBundle, SecretGroup};
 use crate::secrets::SecretStore;
 use crate::services::sync_e2e::{
     aead_open, aead_seal, derive_kek, new_kdf_params, random_bytes, validate_kdf_params, KdfParams,
@@ -203,6 +205,149 @@ pub async fn import(
     Ok(report)
 }
 
+/// F1-5：1Password 模式下便携包导出是否允许（D9：1P 模式凭据在 1P 里，
+/// 凭据管理器是空的迁移源，导出只会产出空包/误导包——后端直接拒绝）。
+pub fn ensure_portable_export_allowed() -> Result<(), AppError> {
+    if crate::settings::is_onepassword_backend() {
+        return Err(AppError::localized(
+            "onepassword.portable_export_unsupported",
+            "1Password 模式下凭据保存在 1Password 中，不提供凭据管理器便携包导出",
+            "Portable export is unavailable while the 1Password backend is in use",
+        ));
+    }
+    Ok(())
+}
+
+/// 便携包载荷的分组视图：供应商组（app → id → 字段值）与应用级组（AppSync 字段）。
+struct GroupedPayload {
+    providers: BTreeMap<String, BTreeMap<String, BTreeMap<String, Zeroizing<String>>>>,
+    app_sync: BTreeMap<String, Zeroizing<String>>,
+}
+
+/// 把 `target 名 → 值` 的载荷按组归拢（解析失败的目标跳过）。
+fn group_payload(payload: &PortablePayload) -> GroupedPayload {
+    let mut grouped = GroupedPayload {
+        providers: BTreeMap::new(),
+        app_sync: BTreeMap::new(),
+    };
+    for (target, value) in &payload.secrets {
+        if let Some(rest) = target.strip_prefix("cc-switch/v1/provider/") {
+            let mut parts = rest.splitn(3, '/');
+            let (Some(app_str), Some(id), Some(field)) = (parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            let Ok(app) = app_str.parse::<AppType>() else {
+                continue;
+            };
+            grouped
+                .providers
+                .entry(app.as_str().to_string())
+                .or_default()
+                .entry(id.to_string())
+                .or_default()
+                .insert(field.to_string(), value.clone());
+        } else if let Some(rest) = target.strip_prefix("cc-switch/v1/app/") {
+            let mut parts = rest.splitn(2, '/');
+            let (Some(sub), Some(field)) = (parts.next(), parts.next()) else {
+                continue;
+            };
+            if let Some(bundle_field) = app_sync_bundle_field(sub, field) {
+                grouped
+                    .app_sync
+                    .insert(bundle_field.to_string(), value.clone());
+            }
+        }
+        // 其它形态（probe / legacy）不在导入范围内。
+    }
+    grouped
+}
+
+/// F1-5：1Password 模式下把便携包导入 vault（P0-5 / D9）。
+///
+/// 按 `(app, provider)` / AppSync 分组：每组先 fetch 一次现有整包（0 op 时也安全），
+/// 算出 imported / overwritten / unchanged，再以 **merge=false** 的整包 put 一次——
+/// 写入与 `secret_refs` 登记都走统一的 `store_provider_bundle`（供应商组），
+/// AppSync 组就地 upsert `_app/_sync` 引用。绝不触碰凭据管理器。
+pub async fn import_to_vault(
+    state: &crate::store::AppState,
+    bundle_bytes: &[u8],
+    passphrase: &str,
+) -> Result<ImportReport, AppError> {
+    validate_passphrase(passphrase)?;
+    if bundle_bytes.len() > MAX_BUNDLE_BYTES {
+        return Err(AppError::localized(
+            "secrets.portable.bundle_too_large",
+            "便携包超出大小上限",
+            "Portable bundle exceeds the size limit",
+        ));
+    }
+
+    let payload = open_payload(bundle_bytes, passphrase)?;
+    let grouped = group_payload(&payload);
+    let mut report = ImportReport::default();
+
+    // AppSync 组：一次 fetch → 覆盖 → 一次 put → upsert 引用。
+    if !grouped.app_sync.is_empty() {
+        let group = SecretGroup::AppSync;
+        let existing = state.vault.fetch(&group)?.unwrap_or_default();
+        for (field, value) in &grouped.app_sync {
+            classify_field(&existing, field, value, &mut report);
+        }
+        report.app_secrets = grouped.app_sync.len();
+        let mut merged = existing;
+        for (field, value) in &grouped.app_sync {
+            merged.insert(field.clone(), value.clone());
+        }
+        let vref = state.vault.put(&group, &merged)?;
+        state
+            .db
+            .upsert_secret_ref("_app", "_sync", &vref.vault_id, &vref.item_id, &vref.fields)?;
+    }
+
+    // 供应商组：一次 fetch → 覆盖 → 整包 put（merge=false，不再额外 fetch）。
+    for (app_str, providers) in &grouped.providers {
+        let Ok(app_type) = app_str.parse::<AppType>() else {
+            continue;
+        };
+        for (id, fields) in providers {
+            let group = SecretGroup::provider(app_type.clone(), id.clone());
+            let existing = state.vault.fetch(&group)?.unwrap_or_default();
+            for (field, value) in fields {
+                classify_field(&existing, field, value, &mut report);
+            }
+            let mut merged = existing;
+            for (field, value) in fields {
+                merged.insert(field.clone(), value.clone());
+            }
+            // 统一辅助函数：写 vault + 登记 secret_refs 在同一处完成（陷阱 10）。
+            crate::services::provider::store_provider_bundle(
+                state,
+                &app_type,
+                id,
+                &merged.to_provider_secrets(),
+                false,
+            )?;
+        }
+    }
+
+    Ok(report)
+}
+
+/// 对比现有字段值，累计 imported / overwritten / unchanged 统计。
+fn classify_field(
+    existing: &SecretBundle,
+    field: &str,
+    value: &Zeroizing<String>,
+    report: &mut ImportReport,
+) {
+    match existing.get(field) {
+        None => report.imported += 1,
+        Some(current) if current.as_str() == value.as_str() => report.unchanged += 1,
+        Some(_) => report.overwritten += 1,
+    }
+}
+
 /// 加密载荷。序列化缓冲用完立即清零（`Zeroize`），不在堆上留明文副本。
 fn seal_payload(
     payload: &PortablePayload,
@@ -354,6 +499,7 @@ mod base64_24 {
 mod tests {
     use super::*;
     use crate::secrets::InMemorySecretStore;
+    use std::sync::Arc;
 
     const GOOD: &str = "correct-horse-battery-staple-20";
 
@@ -554,5 +700,80 @@ mod tests {
         }
         // 口令本身也不得落盘。
         assert!(!text.contains(GOOD), "便携包中不得出现口令");
+    }
+
+    /// F1-5 回归（P0-5 / D9）：1P 模式下导入写 vault 并登记 secret_refs，
+    /// 不触碰凭据管理器。供应商组与 AppSync 组各一次 fetch + 一次 put。
+    #[tokio::test]
+    async fn import_to_vault_writes_groups_and_refs() {
+        let source = store_with_secrets().await;
+        let (bytes, _) = export(&source, GOOD, "2.3.0").await.expect("export");
+
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = crate::store::AppState::new(db, store);
+        let vault = Arc::new(crate::secrets::InMemoryVault::new());
+        state.vault = vault.clone();
+
+        let report = import_to_vault(&state, &bytes, GOOD).await.expect("import");
+        assert_eq!(report.imported, 4, "空 vault 应全部新写入");
+        assert_eq!(report.overwritten, 0);
+        assert_eq!(report.app_secrets, 1, "webdav 密码属应用级");
+
+        use crate::secrets::{SecretGroup, SecretVault};
+        // 供应商组：pi/jm 的 api_key + base_url 合并进一个条目。
+        let jm = vault
+            .fetch(&SecretGroup::provider(AppType::Pi, "jm"))
+            .expect("fetch")
+            .expect("存在");
+        assert_eq!(
+            jm.get("api_key").map(|v| v.to_string()),
+            Some("sk-pi-jm-literal".into())
+        );
+        assert_eq!(
+            jm.get("base_url").map(|v| v.to_string()),
+            Some("https://a.example/v1".into())
+        );
+        // AppSync 组。
+        let sync = vault
+            .fetch(&SecretGroup::AppSync)
+            .expect("fetch")
+            .expect("存在");
+        assert_eq!(
+            sync.get("app.webdav_password").map(|v| v.to_string()),
+            Some("dav-pass".into())
+        );
+        // secret_refs：供应商行 + _app/_sync 行。
+        let fields = state
+            .db
+            .get_secret_ref_fields("pi", "jm")
+            .expect("refs")
+            .expect("非空");
+        assert!(fields.iter().any(|f| f == "api_key"));
+        let sync_refs = state
+            .db
+            .get_secret_ref_fields("_app", "_sync")
+            .expect("refs")
+            .expect("非空");
+        assert!(sync_refs.iter().any(|f| f == "app.webdav_password"));
+    }
+
+    /// F1-5 回归：重复导入时同值计 unchanged，不重复 fetch/put 之外的语义漂移。
+    #[tokio::test]
+    async fn import_to_vault_is_idempotent_by_value() {
+        let source = store_with_secrets().await;
+        let (bytes, _) = export(&source, GOOD, "2.3.0").await.expect("export");
+
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = crate::store::AppState::new(db, store);
+        let vault = Arc::new(crate::secrets::InMemoryVault::new());
+        state.vault = vault.clone();
+
+        import_to_vault(&state, &bytes, GOOD).await.expect("first");
+        let second = import_to_vault(&state, &bytes, GOOD).await.expect("second");
+        assert_eq!(second.unchanged, 4, "同值重导全部 unchanged");
+        assert_eq!(second.imported, 0);
+        assert_eq!(second.overwritten, 0);
     }
 }
