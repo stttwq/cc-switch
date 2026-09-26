@@ -66,13 +66,24 @@ fn put_app_field(
     field: &str,
     value: Option<&str>,
 ) -> Result<(), AppError> {
-    let mut bundle = vault.fetch(&SecretGroup::AppSync)?.unwrap_or_default();
-    match value {
-        Some(v) => bundle.insert(field, Zeroizing::new(v.to_string())),
+    update_app_sync(vault, |bundle| match value {
+        Some(v) => {
+            bundle.insert(field, Zeroizing::new(v.to_string()));
+        }
         None => {
             bundle.remove(field);
         }
-    }
+    })
+}
+
+/// F1-1：AppSync 的统一「一次 fetch → 闭包里改任意多个字段 → 一次 put」。
+/// 原则 1 的写侧护栏：多字段合并保存（如 S3 双密钥）不得退化成逐字段往返。
+fn update_app_sync(
+    vault: &Arc<dyn SecretVault>,
+    edit: impl FnOnce(&mut SecretBundle),
+) -> Result<(), AppError> {
+    let mut bundle = vault.fetch(&SecretGroup::AppSync)?.unwrap_or_default();
+    edit(&mut bundle);
     vault.put(&SecretGroup::AppSync, &bundle)?;
     Ok(())
 }
@@ -102,29 +113,37 @@ pub fn store_webdav_password(
 
 /// 三态语义同 `store_webdav_password`，两个字段各自独立：`None` = 不动，`Some("")` =
 /// 删除该条，`Some(v)` = 写入。返回是否至少写入了一个值。
+///
+/// F1-1：两个字段在**同一次** fetch + put 里写完（原来逐字段 fetch+put，
+/// 一次保存最多 6 次 op）。
 pub fn store_s3_credentials(
     vault: &Arc<dyn SecretVault>,
     access_key_id: Option<&str>,
     secret_access_key: Option<&str>,
 ) -> Result<bool, AppError> {
-    let mut stored = false;
-    for (field, value) in [
-        (FIELD_APP_S3_ACCESS_KEY_ID, access_key_id),
-        (FIELD_APP_S3_SECRET_ACCESS_KEY, secret_access_key),
-    ] {
-        let Some(value) = value else {
-            continue;
-        };
-        if value.starts_with("literal:") {
-            continue;
-        }
-        if value.is_empty() {
-            put_app_field(vault, field, None)?;
-        } else {
-            put_app_field(vault, field, Some(value))?;
-            stored = true;
-        }
+    if access_key_id.is_none() && secret_access_key.is_none() {
+        return Ok(false);
     }
+    let mut stored = false;
+    update_app_sync(vault, |bundle| {
+        for (field, value) in [
+            (FIELD_APP_S3_ACCESS_KEY_ID, access_key_id),
+            (FIELD_APP_S3_SECRET_ACCESS_KEY, secret_access_key),
+        ] {
+            let Some(value) = value else {
+                continue;
+            };
+            if value.starts_with("literal:") {
+                continue;
+            }
+            if value.is_empty() {
+                bundle.remove(field);
+            } else {
+                bundle.insert(field, Zeroizing::new(value.to_string()));
+                stored = true;
+            }
+        }
+    })?;
     Ok(stored)
 }
 

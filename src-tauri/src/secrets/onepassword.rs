@@ -474,7 +474,7 @@ struct OpFieldTemplate {
     value: String,
 }
 
-/// 构造 create/edit 用的条目模板 JSON（stdin 管道）。所有秘密字段 CONCEALED，
+/// 构造 create 用的条目模板 JSON（stdin 管道）。所有秘密字段 CONCEALED，
 /// 另加一个非秘密 STRING 标记字段。绝不把值放进命令行参数（§3.4 / §12.3）。
 fn build_template_json(title: &str, bundle: &SecretBundle) -> Result<Vec<u8>, VaultError> {
     let mut fields: Vec<OpFieldTemplate> = bundle
@@ -498,6 +498,75 @@ fn build_template_json(title: &str, bundle: &SecretBundle) -> Result<Vec<u8>, Va
     };
     serde_json::to_vec(&template)
         .map_err(|e| VaultError::Other(format!("serialize op template failed: {e}")))
+}
+
+/// F1-1：在 `op item get` 返回的条目 JSON 上**就地**应用目标整包（edit 的 stdin 输入）。
+///
+/// - 非托管字段（op 默认字段、用户自加字段）原样保留；
+/// - 托管字段（[`is_managed_field`]）按目标整包设置值（类型 CONCEALED）；
+/// - 目标里没有的托管字段**不包含**在编辑输入里——若 op 的管道编辑是「合并」语义，
+///   残留字段由调用方用 `'<label>[delete]'` 定点删除（参数里只有字段名，§12.3）；
+/// - 确保 `cc-switch-schema` 标记字段存在。
+fn apply_managed_fields_to_item(item: &mut serde_json::Value, bundle: &SecretBundle) {
+    let Some(fields) = item.get_mut("fields").and_then(|f| f.as_array_mut()) else {
+        return;
+    };
+    // 先更新已存在的托管字段，非托管字段不动。
+    for field in fields.iter_mut() {
+        let Some(label) = field.get("label").and_then(|l| l.as_str()).map(str::to_string) else {
+            continue;
+        };
+        if let Some(value) = bundle.get(&label) {
+            field["type"] = serde_json::Value::String("CONCEALED".to_string());
+            field["value"] = serde_json::Value::String(value.to_string());
+        }
+    }
+    // 追加目标里有、条目里没有的托管字段。
+    let existing_labels: Vec<String> = fields
+        .iter()
+        .filter_map(|f| f.get("label").and_then(|l| l.as_str()).map(str::to_string))
+        .collect();
+    for (label, value) in bundle.iter() {
+        if !existing_labels.iter().any(|l| l == label) {
+            fields.push(serde_json::json!({
+                "label": label,
+                "type": "CONCEALED",
+                "value": value.to_string(),
+            }));
+        }
+    }
+    // schema 标记字段。
+    if !existing_labels.iter().any(|l| l == SCHEMA_FIELD_LABEL) {
+        fields.push(serde_json::json!({
+            "label": SCHEMA_FIELD_LABEL,
+            "type": "STRING",
+            "value": SCHEMA_FIELD_VALUE,
+        }));
+    }
+}
+
+/// 从条目 JSON 提取「托管字段 label 集合」（校验 edit 结果用）。
+fn managed_labels_of(item: &serde_json::Value) -> Vec<String> {
+    item.get("fields")
+        .and_then(|f| f.as_array())
+        .map(|fields| {
+            fields
+                .iter()
+                .filter_map(|f| f.get("label").and_then(|l| l.as_str()).map(str::to_string))
+                .filter(|l| is_managed_field(l))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// F1-1：edit 之后校验「托管字段集合 == 目标集合」。op 的管道编辑若为合并语义，
+/// 目标里已删除的托管字段会残留——对每个残留字段发一次 `'<label>[delete]'`，
+/// 参数里只有字段名、没有值（§12.3），保证整包语义最终成立。
+fn leftover_managed_labels(edited: &serde_json::Value, bundle: &SecretBundle) -> Vec<String> {
+    managed_labels_of(edited)
+        .into_iter()
+        .filter(|label| label != SCHEMA_FIELD_LABEL && !bundle.contains(label))
+        .collect()
 }
 
 // ─── stderr 分类（§5.2；关键字以本机实测为准，样本入单测） ───
@@ -562,52 +631,93 @@ impl SecretVault for OnePasswordVault {
 
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
         let title = item_title(group);
-        let template = build_template_json(&title, bundle)?;
 
-        // 覆盖式写（§5.4）：先删旧条目（存在则归档，幂等），再新建。
-        // 不用 `op item edit`：它靠 assignment 语句传值（会把密钥放命令行，§12.3 禁止）；
-        // create 支持以 `-` 从 stdin 读 JSON 模板，恰好避开。op 允许同名条目，所以
-        // 必须先删后建，否则会出现同标题重复条目、get 时报歧义。
-        let delete_args = [
-            "item",
-            "delete",
-            &title,
-            "--vault",
-            &self.vault,
-            "--account",
-            &self.account,
-            "--archive",
-            "--no-color",
-        ];
-        match self.run_op(&delete_args, None) {
-            Ok(_) => {}
-            Err(RunErr::NotFound) => {} // 新建场景：旧条目不存在，正常。
-            Err(e) => return Err(e.into_vault()),
+        // F1-1（P0-2）：覆盖写改为原子的「读取 → 就地编辑」，不再先归档删除再新建。
+        // 旧实现（delete + create）非原子：删除成功、新建失败会把条目留在归档里
+        // （CCS 视为没钥匙），每次覆盖写还在归档里多留一份旧钥匙副本，item id 也
+        // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
+        // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
+        match self.run_op(&self.base_read_args(&title), None) {
+            Err(RunErr::NotFound) => {
+                // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
+                let template = build_template_json(&title, bundle)?;
+                let create_args = [
+                    "item",
+                    "create",
+                    "--vault",
+                    &self.vault,
+                    "--account",
+                    &self.account,
+                    "--format",
+                    "json",
+                    "--no-color",
+                    "-",
+                ];
+                let out = self
+                    .run_op(&create_args, Some(&template))
+                    .map_err(RunErr::into_vault)?;
+                let item_id = parse_item_id(&out).unwrap_or_default();
+                Ok(VaultRef {
+                    vault_id: self.vault.clone(),
+                    item_id,
+                    fields: bundle.field_names(),
+                })
+            }
+            Err(e) => Err(e.into_vault()),
+            Ok(bytes) => {
+                // 已存在：在返回的条目 JSON 上就地改托管字段后整份走 stdin edit。
+                let item_id = parse_item_id(&bytes)
+                    .ok_or_else(|| VaultError::Other("op 条目缺少 id，无法就地编辑".to_string()))?;
+                let mut item: serde_json::Value = serde_json::from_slice(&bytes)
+                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+                apply_managed_fields_to_item(&mut item, bundle);
+                let edited_input = Zeroizing::new(
+                    serde_json::to_vec(&item)
+                        .map_err(|e| VaultError::Other(format!("serialize op item failed: {e}")))?,
+                );
+                // edit 后立即 drop 反序列化用的 Value（内存卫生）。
+                drop(item);
+                let edit_args = [
+                    "item",
+                    "edit",
+                    item_id.as_str(),
+                    "--vault",
+                    &self.vault,
+                    "--account",
+                    &self.account,
+                    "--format",
+                    "json",
+                    "--no-color",
+                    "-",
+                ];
+                let out = self
+                    .run_op(&edit_args, Some(&edited_input))
+                    .map_err(RunErr::into_vault)?;
+                // 校验托管字段集合 == 目标集合；合并语义残留用 `[delete]` 定点删。
+                let edited: serde_json::Value = serde_json::from_slice(&out)
+                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+                for label in leftover_managed_labels(&edited, bundle) {
+                    let delete_field_arg = format!("{label}[delete]");
+                    let delete_args = [
+                        "item",
+                        "edit",
+                        item_id.as_str(),
+                        "--vault",
+                        &self.vault,
+                        "--account",
+                        &self.account,
+                        delete_field_arg.as_str(),
+                        "--no-color",
+                    ];
+                    self.run_op(&delete_args, None).map_err(RunErr::into_vault)?;
+                }
+                Ok(VaultRef {
+                    vault_id: self.vault.clone(),
+                    item_id,
+                    fields: bundle.field_names(),
+                })
+            }
         }
-
-        // create 以 `-` 作为位置参数，模板 JSON 走 stdin。
-        let create_args = [
-            "item",
-            "create",
-            "--vault",
-            &self.vault,
-            "--account",
-            &self.account,
-            "--format",
-            "json",
-            "--no-color",
-            "-",
-        ];
-        let out = self
-            .run_op(&create_args, Some(&template))
-            .map_err(RunErr::into_vault)?;
-
-        let item_id = parse_item_id(&out).unwrap_or_default();
-        Ok(VaultRef {
-            vault_id: self.vault.clone(),
-            item_id,
-            fields: bundle.field_names(),
-        })
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
@@ -948,6 +1058,172 @@ mod tests {
         assert_eq!(args[0], "item");
         assert_eq!(args[1], "get");
         assert!(stdin.is_none());
+    }
+
+    /// 构造 `op item get` 形态的条目 JSON。
+    fn item_json(id: &str, fields: &[(&str, &str, &str)]) -> String {
+        let fields: Vec<String> = fields
+            .iter()
+            .map(|(label, ftype, value)| {
+                format!(r#"{{"id":"f-{label}","type":"{ftype}","label":"{label}","value":"{value}"}}"#)
+            })
+            .collect();
+        format!(
+            r#"{{"id":"{id}","title":"cc-switch/claude/p1","category":"API_CREDENTIAL","version":3,"fields":[{}]}}"#,
+            fields.join(",")
+        )
+    }
+
+    fn sample_bundle() -> SecretBundle {
+        let mut bundle = SecretBundle::new();
+        bundle.insert(FIELD_API_KEY, Zeroizing::new("sk-new-value".to_string()));
+        bundle.insert("env.FOO", Zeroizing::new("foo-new".to_string()));
+        bundle
+    }
+
+    /// F1-1 验收：条目已存在时，put 的调用序列为 [get, edit]，没有 delete / create；
+    /// 非托管字段原样保留、托管字段按目标更新；所有调用的 args 不含任何值。
+    #[test]
+    fn put_existing_edits_in_place_without_delete_or_create() {
+        let existing = item_json(
+            "item-42",
+            &[
+                ("username", "STRING", "ignored-user"),
+                ("api_key", "CONCEALED", "sk-old-value"),
+            ],
+        );
+        let (vault, runner) = vault_with(vec![Ok(existing.into_bytes()), Ok(
+            item_json(
+                "item-42",
+                &[
+                    ("username", "STRING", "ignored-user"),
+                    ("api_key", "CONCEALED", "sk-new-value"),
+                    ("env.FOO", "CONCEALED", "foo-new"),
+                    (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+                ],
+            )
+            .into_bytes(),
+        )]);
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let vref = vault.put(&group, &sample_bundle()).expect("put");
+
+        assert_eq!(runner.call_count(), 2, "已存在时只能是 get + edit");
+        let (get_args, _) = runner.call(0);
+        assert_eq!((get_args[0].as_str(), get_args[1].as_str()), ("item", "get"));
+        let (edit_args, edit_stdin) = runner.call(1);
+        assert_eq!((edit_args[0].as_str(), edit_args[1].as_str()), ("item", "edit"));
+        assert_eq!(edit_args[2], "item-42", "编辑按 item id 定位");
+        // item id 保持不变。
+        assert_eq!(vref.item_id, "item-42");
+        // stdin 里：非托管字段保留、托管字段更新、schema 标记存在。
+        let input: serde_json::Value =
+            serde_json::from_slice(&edit_stdin.expect("edit stdin")).unwrap();
+        let by_label = |label: &str| {
+            input["fields"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["label"] == label)
+                .map(|f| (f["type"].as_str().unwrap().to_string(), f["value"].as_str().unwrap().to_string()))
+        };
+        assert_eq!(
+            by_label("username"),
+            Some(("STRING".into(), "ignored-user".into())),
+            "非托管字段必须原样保留"
+        );
+        assert_eq!(
+            by_label("api_key"),
+            Some(("CONCEALED".into(), "sk-new-value".into()))
+        );
+        assert!(by_label("env.FOO").is_some(), "新字段必须追加");
+        assert!(by_label(SCHEMA_FIELD_LABEL).is_some(), "schema 标记必须存在");
+        // 命令行参数中绝不出现任何值。
+        runner.assert_args_contain_none_of(&["sk-new-value", "sk-old-value", "foo-new"]);
+    }
+
+    /// F1-1 验收：条目不存在时序列为 [get(NotFound), create]。
+    #[test]
+    fn put_missing_creates_without_delete() {
+        let (vault, runner) = vault_with(vec![
+            Err(RunErr::NotFound),
+            Ok(item_json("item-new", &[(FIELD_API_KEY, "CONCEALED", "sk-new-value")]).into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let vref = vault.put(&group, &sample_bundle()).expect("put");
+        assert_eq!(runner.call_count(), 2);
+        let (args0, _) = runner.call(0);
+        assert_eq!(args0[1], "get");
+        let (args1, _) = runner.call(1);
+        assert_eq!(args1[1], "create");
+        assert_eq!(vref.item_id, "item-new");
+        runner.assert_args_contain_none_of(&["sk-new-value", "foo-new"]);
+    }
+
+    /// F1-1 验收：edit 失败时返回 Err 且没有发出任何 delete（不存在半截成功）。
+    #[test]
+    fn put_edit_failure_leaves_no_delete() {
+        let existing = item_json("item-42", &[(FIELD_API_KEY, "CONCEALED", "sk-old-value")]);
+        let (vault, runner) = vault_with(vec![
+            Ok(existing.into_bytes()),
+            Err(RunErr::Vault(VaultError::Locked)),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let err = vault.put(&group, &sample_bundle()).expect_err("edit 失败");
+        assert_eq!(err.code(), "vault_locked");
+        assert_eq!(runner.call_count(), 2, "失败后不得追加任何调用");
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            assert!(!args.contains(&"delete".to_string()), "任何步骤都不得 delete");
+        }
+    }
+
+    /// F1-1 验收：若 op 的管道编辑是「合并」语义（目标删除的字段残留），
+    /// 对每个残留托管字段追加一次 `'<label>[delete]'`——参数只有字段名，没有值。
+    #[test]
+    fn put_deletes_leftover_fields_when_edit_merges() {
+        let existing = item_json(
+            "item-42",
+            &[
+                (FIELD_API_KEY, "CONCEALED", "sk-old-value"),
+                ("env.OLD", "CONCEALED", "old-env"),
+            ],
+        );
+        // edit 返回值模拟合并语义：env.OLD 残留。
+        let merged = item_json(
+            "item-42",
+            &[
+                (FIELD_API_KEY, "CONCEALED", "sk-new-value"),
+                ("env.FOO", "CONCEALED", "foo-new"),
+                ("env.OLD", "CONCEALED", "old-env"),
+                (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+            ],
+        );
+        let after_delete = item_json(
+            "item-42",
+            &[
+                (FIELD_API_KEY, "CONCEALED", "sk-new-value"),
+                ("env.FOO", "CONCEALED", "foo-new"),
+                (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+            ],
+        );
+        let (vault, runner) = vault_with(vec![
+            Ok(existing.into_bytes()),
+            Ok(merged.into_bytes()),
+            Ok(after_delete.into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let vref = vault.put(&group, &sample_bundle()).expect("put");
+        assert_eq!(runner.call_count(), 3, "get + edit + 一次定点 delete 字段");
+        let (args, stdin) = runner.call(2);
+        assert_eq!(args[1], "edit");
+        assert_eq!(args[2], "item-42");
+        assert!(
+            args.iter().any(|a| a == "env.OLD[delete]"),
+            "定点删除参数应为字段名[delete]，实际: {args:?}"
+        );
+        assert!(stdin.is_none(), "[delete] 走参数，不走 stdin");
+        assert_eq!(vref.item_id, "item-42");
+        runner.assert_args_contain_none_of(&["sk-new-value", "foo-new", "old-env"]);
     }
 
     #[test]
