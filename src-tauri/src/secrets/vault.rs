@@ -7,7 +7,7 @@
 //! P1 阶段行为仍跑在凭据管理器上（见 `LegacyWindowsVault`），1Password 实现于 P3 接入。
 
 use std::collections::BTreeMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use zeroize::Zeroizing;
@@ -18,6 +18,27 @@ use crate::error::AppError;
 use crate::secrets::store::SecretStore;
 use crate::secrets::target::SecretTarget;
 use crate::secrets::types::ProviderSecrets;
+
+/// 迁移提交后旧后端是否已被退役（F1-6）。迁移在切 `secret_backend` 的同一时刻置位，
+/// 让运行中的 `LegacyWindowsVault` 立即失效——防止「迁移后未重启」窗口里
+/// 新增/编辑供应商把钥匙写回凭据管理器、重启后 1P 里没有（P0-6）。
+/// 进程级标志：重启后自然复位（新进程按设置构造 OnePasswordVault，不再用旧后端）。
+static LEGACY_VAULT_RETIRED: AtomicBool = AtomicBool::new(false);
+
+/// 迁移提交时调用：退役运行中的旧凭据管理器后端。
+pub(crate) fn retire_legacy_vault() {
+    LEGACY_VAULT_RETIRED.store(true, Ordering::SeqCst);
+}
+
+/// 测试专用：复位退役标志（并行测试间不得相互污染）。
+#[cfg(test)]
+pub(crate) fn reset_legacy_vault_retirement_for_tests() {
+    LEGACY_VAULT_RETIRED.store(false, Ordering::SeqCst);
+}
+
+fn legacy_vault_retired() -> bool {
+    LEGACY_VAULT_RETIRED.load(Ordering::SeqCst)
+}
 
 /// 一个凭据组：供应商级或应用级。
 ///
@@ -192,6 +213,9 @@ pub enum VaultError {
     Timeout,
     /// 条目冲突（同标题条目已存在等）。
     ItemConflict,
+    /// 已切换到 1Password 后端，但运行中的仍是旧后端实例（迁移后未重启）。
+    /// 任何读写都必须失败，防止钥匙经凭据管理器回流（F1-6）。
+    RestartRequired,
     /// 其它错误（只带脱敏后的分类信息，绝不含值/原始 stdout）。
     Other(String),
 }
@@ -206,6 +230,7 @@ impl VaultError {
             Self::Network => "vault_network",
             Self::Timeout => "vault_timeout",
             Self::ItemConflict => "vault_item_conflict",
+            Self::RestartRequired => "vault_restart_required",
             Self::Other(_) => "vault_other",
         }
     }
@@ -235,6 +260,10 @@ impl VaultError {
             Self::ItemConflict => (
                 "1Password 中已存在同名条目".to_string(),
                 "A conflicting item already exists in 1Password".to_string(),
+            ),
+            Self::RestartRequired => (
+                "已切换到 1Password，请重启 CC Switch".to_string(),
+                "Switched to 1Password; please restart CC Switch".to_string(),
             ),
             Self::Other(detail) => (
                 format!("1Password 调用失败：{detail}"),
@@ -429,6 +458,16 @@ impl LegacyWindowsVault {
         Self { store, db }
     }
 
+    /// F1-6：迁移提交（切 secret_backend）后，运行中的旧后端必须立即失效——
+    /// 否则新增/编辑供应商会把钥匙写回凭据管理器，重启后 1P 里没有（P0-6）。
+    /// 迁移顺序是先切后端再删凭据管理器条目，因此此守卫在删除之前就已生效。
+    fn ensure_not_replaced_by_1p() -> Result<(), VaultError> {
+        if legacy_vault_retired() {
+            return Err(VaultError::RestartRequired);
+        }
+        Ok(())
+    }
+
     /// 读取某供应商已登记的 extra_env 变量名（keyring 无法枚举，靠 known_secret_targets）。
     fn known_env_vars(&self, app: &AppType, provider_id: &str) -> Result<Vec<String>, VaultError> {
         let prefix = format!(
@@ -452,20 +491,21 @@ impl LegacyWindowsVault {
         desired: &ProviderSecrets,
     ) -> Result<(), VaultError> {
         let prefix = crate::secrets::provider_target_prefix(app, provider_id);
-        let mut targets = crate::secrets::load_known_targets(self.db.as_ref()).map_err(store_err)?;
+        let mut targets =
+            crate::secrets::load_known_targets(self.db.as_ref()).map_err(store_err)?;
         // 先移除该供应商此前的全部登记项，再按 desired 重建（整包语义：删掉的字段要消失）。
         targets.retain(|t| !t.starts_with(&prefix));
         if desired.api_key.is_some() {
-            targets.push(SecretTarget::provider_api_key(app.clone(), provider_id).to_target_string());
+            targets
+                .push(SecretTarget::provider_api_key(app.clone(), provider_id).to_target_string());
         }
         if desired.base_url.is_some() {
             targets
                 .push(SecretTarget::provider_base_url(app.clone(), provider_id).to_target_string());
         }
         for var in desired.extra_env.keys() {
-            targets.push(
-                SecretTarget::provider_env(app.clone(), provider_id, var).to_target_string(),
-            );
+            targets
+                .push(SecretTarget::provider_env(app.clone(), provider_id, var).to_target_string());
         }
         crate::secrets::save_known_targets(self.db.as_ref(), &targets).map_err(store_err)
     }
@@ -473,21 +513,20 @@ impl LegacyWindowsVault {
 
 impl SecretVault for LegacyWindowsVault {
     fn fetch(&self, group: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
+        Self::ensure_not_replaced_by_1p()?;
         let mut bundle = SecretBundle::new();
         match group {
             SecretGroup::Provider { app, provider_id } => {
-                if let Some(key) = futures::executor::block_on(
-                    self.store
-                        .get(&SecretTarget::provider_api_key(app.clone(), provider_id.clone())),
-                )
+                if let Some(key) = futures::executor::block_on(self.store.get(
+                    &SecretTarget::provider_api_key(app.clone(), provider_id.clone()),
+                ))
                 .map_err(store_err)?
                 {
                     bundle.insert(FIELD_API_KEY, key);
                 }
-                if let Some(url) = futures::executor::block_on(
-                    self.store
-                        .get(&SecretTarget::provider_base_url(app.clone(), provider_id.clone())),
-                )
+                if let Some(url) = futures::executor::block_on(self.store.get(
+                    &SecretTarget::provider_base_url(app.clone(), provider_id.clone()),
+                ))
                 .map_err(store_err)?
                 {
                     bundle.insert(FIELD_BASE_URL, url);
@@ -521,14 +560,17 @@ impl SecretVault for LegacyWindowsVault {
     }
 
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
+        Self::ensure_not_replaced_by_1p()?;
         match group {
             SecretGroup::Provider { app, provider_id } => {
                 let desired = bundle.to_provider_secrets();
                 let api_key_target =
                     SecretTarget::provider_api_key(app.clone(), provider_id.clone());
                 match &desired.api_key {
-                    Some(k) => futures::executor::block_on(self.store.set(&api_key_target, k.clone()))
-                        .map_err(store_err)?,
+                    Some(k) => {
+                        futures::executor::block_on(self.store.set(&api_key_target, k.clone()))
+                            .map_err(store_err)?
+                    }
                     None => futures::executor::block_on(self.store.delete(&api_key_target))
                         .map_err(store_err)?,
                 }
@@ -581,21 +623,21 @@ impl SecretVault for LegacyWindowsVault {
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
+        Self::ensure_not_replaced_by_1p()?;
         match group {
             SecretGroup::Provider { app, provider_id } => {
-                futures::executor::block_on(
-                    self.store
-                        .delete(&SecretTarget::provider_api_key(app.clone(), provider_id.clone())),
-                )
+                futures::executor::block_on(self.store.delete(&SecretTarget::provider_api_key(
+                    app.clone(),
+                    provider_id.clone(),
+                )))
                 .map_err(store_err)?;
-                futures::executor::block_on(
-                    self.store
-                        .delete(&SecretTarget::provider_base_url(app.clone(), provider_id.clone())),
-                )
+                futures::executor::block_on(self.store.delete(&SecretTarget::provider_base_url(
+                    app.clone(),
+                    provider_id.clone(),
+                )))
                 .map_err(store_err)?;
                 for var in self.known_env_vars(app, provider_id)? {
-                    let target =
-                        SecretTarget::provider_env(app.clone(), provider_id.clone(), var);
+                    let target = SecretTarget::provider_env(app.clone(), provider_id.clone(), var);
                     futures::executor::block_on(self.store.delete(&target)).map_err(store_err)?;
                 }
                 // 从 known_secret_targets 抹掉该供应商的全部登记项。
@@ -715,6 +757,7 @@ mod tests {
         assert_eq!(VaultError::Network.code(), "vault_network");
         assert_eq!(VaultError::Timeout.code(), "vault_timeout");
         assert_eq!(VaultError::ItemConflict.code(), "vault_item_conflict");
+        assert_eq!(VaultError::RestartRequired.code(), "vault_restart_required");
         assert_eq!(VaultError::Other("x".to_string()).code(), "vault_other");
     }
 
@@ -770,6 +813,48 @@ mod tests {
         assert_eq!(counting.delete_count(), 1);
     }
 
+    /// F1-6 验收（P0-6 回归）：迁移退役旧后端后，`LegacyWindowsVault` 的
+    /// fetch / put / delete 全部返回 `vault_restart_required`，钥匙不再可能
+    /// 经凭据管理器回流。
+    #[test]
+    fn legacy_vault_rejects_all_ops_after_retirement() {
+        let vault = legacy_vault();
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+
+        // 前置：未退役时正常工作。
+        let mut bundle = SecretBundle::new();
+        bundle.insert(FIELD_API_KEY, Zeroizing::new("sk-1".to_string()));
+        vault.put(&group, &bundle).expect("退役前写入");
+        vault.fetch(&group).expect("退役前读取");
+
+        // 模拟迁移提交：退役旧后端。
+        retire_legacy_vault();
+        struct ResetGuard;
+        impl Drop for ResetGuard {
+            fn drop(&mut self) {
+                reset_legacy_vault_retirement_for_tests();
+            }
+        }
+        let _reset = ResetGuard;
+
+        let err = vault.fetch(&group).expect_err("fetch 必须失败");
+        assert_eq!(err.code(), "vault_restart_required");
+        let err = vault
+            .put(&group, &SecretBundle::new())
+            .expect_err("put 必须失败");
+        assert_eq!(err.code(), "vault_restart_required");
+        let err = vault.delete(&group).expect_err("delete 必须失败");
+        assert_eq!(err.code(), "vault_restart_required");
+
+        // 复位后确认数据完好：拦截发生在触碰存储之前，钥匙未被改动。
+        reset_legacy_vault_retirement_for_tests();
+        let got = vault.fetch(&group).expect("复位后可读").expect("仍在");
+        assert_eq!(
+            got.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-1".into())
+        );
+    }
+
     fn legacy_vault() -> LegacyWindowsVault {
         use crate::secrets::store::InMemorySecretStore;
         let db = Arc::new(crate::database::Database::memory().expect("memory db"));
@@ -793,9 +878,18 @@ mod tests {
         vault.put(&group, &b1).unwrap();
 
         let got = vault.fetch(&group).unwrap().unwrap();
-        assert_eq!(got.get(FIELD_API_KEY).map(|v| v.to_string()), Some("sk-1".into()));
-        assert_eq!(got.get("env.FOO").map(|v| v.to_string()), Some("foo".into()));
-        assert_eq!(got.get("env.BAR").map(|v| v.to_string()), Some("bar".into()));
+        assert_eq!(
+            got.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-1".into())
+        );
+        assert_eq!(
+            got.get("env.FOO").map(|v| v.to_string()),
+            Some("foo".into())
+        );
+        assert_eq!(
+            got.get("env.BAR").map(|v| v.to_string()),
+            Some("bar".into())
+        );
 
         // 重写：去掉 BAR、去掉 base_url，整包语义应让它们消失。
         let mut b2 = SecretBundle::new();
@@ -804,9 +898,18 @@ mod tests {
         vault.put(&group, &b2).unwrap();
 
         let got2 = vault.fetch(&group).unwrap().unwrap();
-        assert_eq!(got2.get(FIELD_API_KEY).map(|v| v.to_string()), Some("sk-2".into()));
-        assert!(got2.get(FIELD_BASE_URL).is_none(), "base_url 应被整包覆盖删除");
-        assert_eq!(got2.get("env.FOO").map(|v| v.to_string()), Some("foo2".into()));
+        assert_eq!(
+            got2.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-2".into())
+        );
+        assert!(
+            got2.get(FIELD_BASE_URL).is_none(),
+            "base_url 应被整包覆盖删除"
+        );
+        assert_eq!(
+            got2.get("env.FOO").map(|v| v.to_string()),
+            Some("foo2".into())
+        );
         assert!(got2.get("env.BAR").is_none(), "BAR 应被整包覆盖删除");
 
         // 删除整组。

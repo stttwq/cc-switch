@@ -41,6 +41,7 @@ export function OnePasswordSection() {
   const [account, setAccount] = useState<string>("");
   const [vault, setVault] = useState<string>("");
   const [verifySignature, setVerifySignature] = useState(true);
+  const [restartFailed, setRestartFailed] = useState(false);
   const [busy, setBusy] = useState<
     "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | null
   >(null);
@@ -139,11 +140,12 @@ export function OnePasswordSection() {
           fields: report.migratedFields,
         }),
       );
-      // 运行时保险箱在启动时构造；切后端 + 剥离 live 明文需重启生效。
-      if (window.confirm(t("onepassword.migrateRestart"))) {
+      // 迁移提交后运行中的旧后端已失效（F1-6），必须重启才能继续使用，
+      // 不再提供「稍后」选项；重启失败时显示常驻横幅。
+      try {
         await settingsApi.restart();
-      } else {
-        await refreshStatus();
+      } catch {
+        setRestartFailed(true);
       }
     } catch (error) {
       toast.error(String(error));
@@ -161,6 +163,11 @@ export function OnePasswordSection() {
 
   return (
     <div className="space-y-4">
+      {restartFailed && (
+        <div className="rounded-lg border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive">
+          {t("onepassword.restartRequiredBanner")}
+        </div>
+      )}
       <p className="text-sm text-muted-foreground">{t("onepassword.hint")}</p>
 
       <div className="rounded-lg border border-border/50 p-3 space-y-1 text-sm">

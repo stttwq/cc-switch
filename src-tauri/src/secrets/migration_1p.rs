@@ -150,8 +150,7 @@ pub fn migrate_to_onepassword(
         // 读出（本地凭据管理器，快）。
         let mut bundle = SecretBundle::new();
         for (field, target_name) in &pending.fields {
-            let value =
-                futures::executor::block_on(state.secrets.get_target_raw(target_name))?;
+            let value = futures::executor::block_on(state.secrets.get_target_raw(target_name))?;
             let Some(value) = value else {
                 report
                     .warnings
@@ -205,6 +204,9 @@ pub fn migrate_to_onepassword(
     op.migrated_at = Some(chrono::Utc::now().to_rfc3339());
     settings.onepassword = Some(op);
     crate::settings::update_settings(settings)?;
+    // F1-6：后端已切换，运行中的旧凭据管理器后端立即退役（P0-6）。
+    // 迁移后续的凭据管理器删除走 Win32 直调，不经旧 vault，不受影响。
+    crate::secrets::vault::retire_legacy_vault();
 
     // 切到 1Password 后必须重写一次 live（剥掉 Codex auth.json / Claude settings.json 里的
     // 明文钥匙）。置标志，重启时（新进程用 OnePasswordVault）执行 reapply。
@@ -239,6 +241,21 @@ mod tests {
     use crate::secrets::{InMemorySecretStore, InMemoryVault, SecretStore, SecretTarget};
     use std::sync::Arc;
 
+    /// 测试卫生：迁移会切全局设置并退役旧 vault（进程级），离开测试前复位，
+    /// 避免污染并行的其它测试。
+    struct GlobalStateGuard;
+    impl Drop for GlobalStateGuard {
+        fn drop(&mut self) {
+            crate::secrets::vault::reset_legacy_vault_retirement_for_tests();
+            let mut settings = crate::settings::get_settings();
+            if settings.secret_backend.as_deref() == Some("onepassword") {
+                settings.secret_backend = None;
+                settings.onepassword = None;
+                let _ = crate::settings::update_settings(settings);
+            }
+        }
+    }
+
     fn state_with_seed() -> (AppState, Vec<String>) {
         let db = Arc::new(crate::database::Database::memory().expect("db"));
         let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
@@ -267,6 +284,7 @@ mod tests {
 
     #[test]
     fn migrate_writes_verifies_and_registers_refs() {
+        let _guard = GlobalStateGuard;
         let (state, _targets) = state_with_seed();
         let vault = InMemoryVault::new();
         let report = migrate_to_onepassword(&state, &vault).expect("migrate");
@@ -278,7 +296,10 @@ mod tests {
             .fetch(&SecretGroup::provider(AppType::Claude, "p1"))
             .unwrap()
             .unwrap();
-        assert_eq!(got.get("api_key").map(|v| v.to_string()), Some("sk-1".into()));
+        assert_eq!(
+            got.get("api_key").map(|v| v.to_string()),
+            Some("sk-1".into())
+        );
         assert_eq!(
             got.get("base_url").map(|v| v.to_string()),
             Some("https://x".into())
@@ -296,6 +317,7 @@ mod tests {
 
     #[test]
     fn migrate_is_rerunnable() {
+        let _guard = GlobalStateGuard;
         let (state, _t) = state_with_seed();
         let vault = InMemoryVault::new();
         migrate_to_onepassword(&state, &vault).expect("first");
