@@ -3,14 +3,33 @@ use crate::session_manager::providers::pi::PiSessionDiscovery;
 use crate::store::AppState;
 use tauri::State;
 
+/// S1-5：改为 async + spawn_blocking。历史版本是同步命令（跑在主线程），
+/// 而 `ProviderService::list` 可能在同一把 Pi 切换锁内做长时间的原生同步，
+/// 主线程 block_on 等锁就是「整个窗口冻结」的直接原因；服务层同时已去掉
+/// 读侧等锁（pi_state.rs），这里是双保险——任何重活都不占用主线程。
 #[tauri::command]
-pub(crate) fn get_pi_current_state(state: State<'_, AppState>) -> Result<PiCurrentState, String> {
-    PiStateService::current(state.inner()).map_err(|error| error.to_string())
+pub(crate) async fn get_pi_current_state(
+    state: State<'_, AppState>,
+) -> Result<PiCurrentState, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        PiStateService::current(&state).map_err(|error| error.to_string())
+    })
+    .await
+    .map_err(|e| format!("读取 Pi 状态任务执行失败: {e}"))?
 }
 
+/// S1-5：会话发现会扫描 Pi 会话目录（潜在磁盘 IO），同样不占主线程。
 #[tauri::command]
-pub(crate) fn get_pi_session_discovery() -> PiSessionDiscovery {
-    crate::session_manager::providers::pi::session_discovery()
+pub(crate) async fn get_pi_session_discovery() -> PiSessionDiscovery {
+    tauri::async_runtime::spawn_blocking(crate::session_manager::providers::pi::session_discovery)
+        .await
+        .unwrap_or_else(|error| {
+            log::warn!("Pi 会话发现任务失败（视为不可用）: {error}");
+            PiSessionDiscovery::Unavailable {
+                reason: error.to_string(),
+            }
+        })
 }
 
 /// F1-4：「导入到 1Password」——把 Pi 原生同步检测到的明文钥匙收进 vault，
