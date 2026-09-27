@@ -271,6 +271,9 @@ impl OnePasswordVault {
     /// F2-2 读取主路径：id 直达 → 标题兜底 → 同名冲突取最新。命中时返回
     /// 整包、成功那次 `op item get` 的原文（put 的 edit stdin 必须基于 op 返回的
     /// 完整条目 JSON），以及「需要回写 ref 的 item id」（引用直达命中时为 `None`）。
+    ///
+    /// 真机实测（op 2.39）：`op item get <id>` 会命中**归档区**条目（返回 JSON 带
+    /// `"state":"ARCHIVED"`），按标题则不会。归档 = 已删除，一律按 NotFound 处理。
     fn fetch_item_resolved(
         &self,
         group: &SecretGroup,
@@ -279,7 +282,7 @@ impl OnePasswordVault {
         // 1) 引用行里的真实 item id 直达。
         if let Some(id) = self.ref_item_id(group) {
             match self.run_op(&self.base_read_args(&id), None) {
-                Ok(raw) => {
+                Ok(raw) if !is_archived_item(&raw) => {
                     let bundle = parse_item_bundle(&raw)?;
                     return Ok(Some(FetchedItem {
                         bundle,
@@ -287,12 +290,12 @@ impl OnePasswordVault {
                         raw,
                     }));
                 }
-                // id 失效（条目被删/换 vault）：按标题兜底一次。
-                Err(RunErr::NotFound) => {}
+                // id 失效（条目被删/已归档/换 vault）：按标题兜底一次。
+                Ok(_) | Err(RunErr::NotFound) => {}
                 Err(RunErr::Vault(e)) => return Err(e),
             }
         }
-        // 2) 标题兜底。
+        // 2) 标题兜底（按标题不会命中归档区，无需再查状态）。
         match self.run_op(&self.base_read_args(title), None) {
             Ok(raw) => {
                 let bundle = parse_item_bundle(&raw)?;
@@ -309,7 +312,7 @@ impl OnePasswordVault {
                     return Ok(None);
                 };
                 match self.run_op(&self.base_read_args(&id), None) {
-                    Ok(raw) => {
+                    Ok(raw) if !is_archived_item(&raw) => {
                         let bundle = parse_item_bundle(&raw)?;
                         Ok(Some(FetchedItem {
                             bundle,
@@ -317,7 +320,7 @@ impl OnePasswordVault {
                             raw,
                         }))
                     }
-                    Err(RunErr::NotFound) => Ok(None),
+                    Ok(_) | Err(RunErr::NotFound) => Ok(None),
                     Err(RunErr::Vault(e)) => Err(e),
                 }
             }
@@ -613,6 +616,19 @@ fn is_managed_field(label: &str) -> bool {
 /// 1P 的 item id 使用。
 fn is_placeholder_item_id(item_id: &str, group: &SecretGroup) -> bool {
     item_id.is_empty() || item_id == group.key()
+}
+
+/// 真机实测（op 2.39）：`op item get <id>` 会命中归档区条目，JSON 顶层带
+/// `"state":"ARCHIVED"`。归档 = 已删除，读取按 NotFound 处理。
+fn is_archived_item(raw: &[u8]) -> bool {
+    serde_json::from_slice::<serde_json::Value>(raw)
+        .ok()
+        .and_then(|v| {
+            v.get("state")
+                .and_then(|s| s.as_str())
+                .map(|s| s.eq_ignore_ascii_case("ARCHIVED"))
+        })
+        .unwrap_or(false)
 }
 
 // ─── op 条目 JSON（读） ──────────────────────────────────────
@@ -1652,6 +1668,62 @@ mod tests {
             .ref_item_id(&SecretGroup::provider(AppType::Claude, "p1"))
             .is_none());
         assert_eq!(runner.call_count(), 0);
+    }
+
+    /// 真机回归（op 2.39 实测）：`op item get <id>` 会命中**归档区**条目。
+    /// 引用 id 指向已归档条目时必须按「不存在」处理（归档 = 已删除），
+    /// 转按标题兜底；标题也没有 → None。
+    #[test]
+    fn fetch_treats_archived_item_as_missing() {
+        let archived = r#"{"id":"item-archived","title":"cc-switch/claude/p1","state":"ARCHIVED","fields":[{"id":"f","type":"CONCEALED","label":"api_key","value":"sk-old"}]}"#;
+        let (vault, runner) = vault_with(vec![
+            Ok(archived.as_bytes().to_vec()),
+            Err(RunErr::NotFound),
+        ]);
+        vault
+            .db
+            .upsert_secret_ref(
+                "claude",
+                "p1",
+                "vault-x",
+                "item-archived",
+                &[FIELD_API_KEY.to_string()],
+            )
+            .unwrap();
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let got = vault.fetch(&group).expect("fetch");
+        assert!(got.is_none(), "归档条目应视为不存在");
+        assert_eq!(runner.call_count(), 2, "id 直达命中归档后按标题兜底一次");
+        let (args1, _) = runner.call(1);
+        assert_eq!(args1[2], "cc-switch/claude/p1");
+    }
+
+    /// 活跃条目（无 state 字段）不受归档判定影响。
+    #[test]
+    fn fetch_active_item_without_state_is_found() {
+        let (vault, _runner) = vault_with(vec![Ok(item_json(
+            "item-1",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-1")],
+        )
+        .into_bytes())]);
+        vault
+            .db
+            .upsert_secret_ref(
+                "claude",
+                "p1",
+                "vault-x",
+                "item-1",
+                &[FIELD_API_KEY.to_string()],
+            )
+            .unwrap();
+        let got = vault
+            .fetch(&SecretGroup::provider(AppType::Claude, "p1"))
+            .expect("fetch")
+            .expect("exists");
+        assert_eq!(
+            got.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-1".into())
+        );
     }
 
     #[test]
