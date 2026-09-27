@@ -111,17 +111,18 @@ pub fn reapply_live_after_migration(state: &AppState) -> Result<Vec<String>, App
 }
 
 /// §6.7：1Password 模式下的启动 live 明文剥离（key-free，不走 switch/backfill/hydrate，
-/// 不触发任何 op / 解锁）。只重写当前 Claude/Codex 的 live 文件，剥掉残留明文
-/// （如 Codex auth.json 里的 OPENAI_API_KEY）。Pi 的 models.json 本就只含引用，不处理。
+/// 不触发任何 op / 解锁）。
+///
+/// F1-8（P0-8）：改「就地、定点、有备份才剥」——启动路径没有回填，整文件重写 live 会
+/// 吞掉用户在 CCS 外对 live 的改动；无条件删钥匙可能删掉 vault 里没有的新钥匙。现在：
+/// 只删 Claude settings.json 的敏感键、Codex auth.json 的 OPENAI_API_KEY 与 config.toml
+/// 的 experimental_bearer_token，其余字节原样；**剥离前提**是当前供应商的 `secret_refs`
+/// 含 api_key（vault 里有备份，存在性按 refs 判定、0 次往返），不满足时不动文件、记入
+/// 本机设置 `live_plaintext_pending`，UI 提示「检测到 live 文件含明文钥匙，[导入到
+/// 1Password 并剥离]」。无明文零写入（幂等）。Pi 的 models.json 本就只含引用，不处理
+/// （明文走 F1-4 的 pi_plaintext_pending）。
 pub fn strip_current_live_plaintext(state: &AppState) -> Result<(), AppError> {
-    // Codex：key-free 剥离 auth.json 残留明文（1P 模式下 Codex 靠 config.toml env_key，
-    // auth.json 里的明文一律是遗留）。不比对 vault、不取钥匙、不解锁。
-    match crate::codex_config::strip_codex_apikey_plaintext_for_onepassword() {
-        Ok(true) => log::info!("✓ 已剥离 Codex auth.json 残留明文"),
-        Ok(false) => {}
-        Err(e) => log::warn!("剥离 Codex auth.json 明文失败: {e}"),
-    }
-    // Claude/Codex：重写当前 live 文件（settings.json / config.toml），op-free。
+    let mut deferred: Vec<String> = Vec::new();
     for app_type in [AppType::Claude, AppType::Codex] {
         let id = match crate::settings::get_effective_current_provider(&state.db, &app_type) {
             Ok(Some(id)) => id,
@@ -131,19 +132,130 @@ pub fn strip_current_live_plaintext(state: &AppState) -> Result<(), AppError> {
                 continue;
             }
         };
-        match state.db.get_provider_by_id(&id, app_type.as_str()) {
-            Ok(Some(provider)) => {
-                if let Err(e) =
-                    live::write_live_with_common_config_for_state(state, &app_type, &provider)
-                {
-                    log::warn!("剥离 live 明文失败 {}/{id}: {e}", app_type.as_str());
-                }
+        let has_backup = match ProviderService::provider_has_stored_key(state, &app_type, &id) {
+            Ok(has) => has,
+            Err(e) => {
+                log::warn!("读 secret_refs 失败 {}/{id}: {e}", app_type.as_str());
+                continue;
             }
-            Ok(None) => {}
-            Err(e) => log::warn!("读供应商 {}/{id} 失败: {e}", app_type.as_str()),
+        };
+        let outcome = match app_type {
+            AppType::Claude => live::strip_claude_live_plaintext_in_place(has_backup),
+            AppType::Codex => live::strip_codex_live_plaintext_in_place(has_backup),
+            _ => Ok(crate::codex_config::PlaintextStripOutcome::Clean),
+        };
+        match outcome {
+            Ok(crate::codex_config::PlaintextStripOutcome::Stripped) => {
+                log::info!("✓ 已定点剥离 {}/{} 的 live 明文", app_type.as_str(), id);
+            }
+            Ok(crate::codex_config::PlaintextStripOutcome::Deferred) => {
+                log::info!(
+                    "{}/{} 的 live 文件含明文钥匙但 vault 无备份，待导入",
+                    app_type.as_str(),
+                    id
+                );
+                deferred.push(format!("{}/{}", app_type.as_str(), id));
+            }
+            Ok(crate::codex_config::PlaintextStripOutcome::Clean) => {}
+            Err(e) => log::warn!("剥离 live 明文失败 {}/{id}: {e}", app_type.as_str()),
         }
     }
+    // pending 全量重建：无变化不落盘。
+    if crate::settings::get_live_plaintext_pending() != deferred {
+        crate::settings::set_live_plaintext_pending(deferred)?;
+    }
     Ok(())
+}
+
+/// F1-8：「导入到 1Password 并剥离」——把 live 文件里的明文钥匙收进 vault，然后
+/// 就地剥离 live。用户主动触发（允许 op 往返与解锁弹窗）。返回成功导入的数量。
+pub(crate) fn import_live_plaintext_to_vault(state: &AppState) -> Result<usize, AppError> {
+    let pending = crate::settings::get_live_plaintext_pending();
+    let mut imported = 0;
+    let mut remaining = Vec::new();
+    for key in &pending {
+        let Some((app_str, id)) = key.split_once('/') else {
+            continue;
+        };
+        let Ok(app_type) = AppType::from_str(app_str) else {
+            continue;
+        };
+        match import_one_live_plaintext(state, &app_type, id) {
+            Ok(true) => imported += 1,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("{key} 导入 live 明文失败，保留 pending 待重试: {error}");
+                remaining.push(key.clone());
+            }
+        }
+    }
+    if remaining.len() != pending.len() {
+        crate::settings::set_live_plaintext_pending(remaining)?;
+    }
+    Ok(imported)
+}
+
+/// 导入单个 `<app>/<id>` 的 live 明文。返回 `false` 表示 live 里已没有明文钥匙（出队）。
+fn import_one_live_plaintext(
+    state: &AppState,
+    app_type: &AppType,
+    id: &str,
+) -> Result<bool, AppError> {
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // 提取源是 live 文件本身（明文本就在用户文件里）；meta 只为 Claude 的 api_key_field。
+    let meta_field = state
+        .db
+        .get_provider_by_id(id, app_type.as_str())?
+        .and_then(|p| p.meta)
+        .and_then(|m| m.api_key_field);
+    let extracted = match app_type {
+        AppType::Claude => {
+            let path = crate::config::get_claude_settings_path();
+            let text = std::fs::read_to_string(&path)
+                .map_err(|e| AppError::Config(format!("读取 live settings.json 失败: {e}")))?;
+            let config: Value = serde_json::from_str(&text)
+                .map_err(|e| AppError::Config(format!("解析 live settings.json 失败: {e}")))?;
+            SecretExtractor::extract_with_meta(id, app_type, &config, meta_field.as_deref())?
+        }
+        AppType::Codex => {
+            // 合成提取源：auth.json 根 OPENAI_API_KEY + config.toml 全文，
+            // 与 extract_codex 期望的 settings_config 形状对齐。
+            let auth_text = std::fs::read_to_string(crate::codex_config::get_codex_auth_path())
+                .unwrap_or_default();
+            let auth: Value = serde_json::from_str(&auth_text).unwrap_or(Value::Null);
+            let key = auth.get("OPENAI_API_KEY").and_then(Value::as_str);
+            let config_text =
+                std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+                    .unwrap_or_default();
+            let synthetic = serde_json::json!({
+                "auth": { "OPENAI_API_KEY": key },
+                "config": config_text,
+            });
+            SecretExtractor::extract(id, app_type, &synthetic)?
+        }
+        _ => return Ok(false),
+    };
+    // 与启动剥离的 pending 判据对齐：只有钥匙类明文才算待导入（非敏感 base_url 不算）。
+    let had_plaintext = extracted.secrets.api_key.is_some()
+        || !extracted.secrets.extra_env.is_empty()
+        || extracted
+            .secrets
+            .base_url
+            .as_ref()
+            .is_some_and(|url| crate::secrets::is_credential_bearing_url(url.as_str()));
+    if !had_plaintext {
+        return Ok(false);
+    }
+    // ① 钥匙进 vault（merge 语义；非敏感 base_url 由 store_provider_bundle 拆去端点表）。
+    store_provider_bundle(state, app_type, id, &extracted.secrets, true)?;
+    // ② refs 已登记 api_key，就地剥离现在满足前提。
+    let outcome = match app_type {
+        AppType::Claude => live::strip_claude_live_plaintext_in_place(true)?,
+        AppType::Codex => live::strip_codex_live_plaintext_in_place(true)?,
+        _ => crate::codex_config::PlaintextStripOutcome::Clean,
+    };
+    log::info!("✓ 已导入 {}/{id} 的 live 明文并剥离（{outcome:?}）", app_type.as_str());
+    Ok(true)
 }
 
 pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
@@ -3072,5 +3184,220 @@ mod onepassword_endpoint_tests {
             None,
             "删除供应商应级联删除端点行"
         );
+    }
+}
+
+#[cfg(test)]
+mod onepassword_live_strip_tests {
+    //! F1-8 回归（P0-8）：启动剥离改「就地、定点、有备份才剥」——无明文零写入；
+    //! 有明文且 refs 有 api_key 才定点剥离（其余内容原样）；没有备份不动文件、记
+    //! `live_plaintext_pending`；「导入到 1Password 并剥离」收进 vault 后再剥。
+    use super::*;
+    use crate::secrets::{CountingVault, InMemorySecretStore, InMemoryVault, SecretGroup};
+    use serial_test::serial;
+    use std::sync::Arc;
+
+    /// Claude live 夹具：含敏感键 + 应保留的自定义内容。
+    const CLAUDE_DIRTY: &str = r#"{
+  "model": "claude-opus-5",
+  "custom": "keep-me",
+  "env": {
+    "ANTHROPIC_AUTH_TOKEN": "sk-claude-plain",
+    "ANTHROPIC_BASE_URL": "https://claude.example",
+    "ANTHROPIC_MODEL": "claude-opus-5"
+  }
+}"#;
+
+    /// Codex config.toml 夹具：注释与其它键必须原样保留。
+    const CODEX_CONFIG_DIRTY: &str = "# user comment\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nexperimental_bearer_token = \"sk-codex-plain\"\n";
+
+    struct TempHome {
+        dir: std::path::PathBuf,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("cc-switch-live-strip-{tag}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".cc-switch")).expect("mkdir");
+            std::fs::write(dir.join(".cc-switch").join("cc-switch.db"), b"").expect("placeholder");
+            let prev = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", &dir);
+            Self { dir, prev }
+        }
+
+        fn path(&self, rel: &str) -> std::path::PathBuf {
+            self.dir.join(rel)
+        }
+
+        fn write(&self, rel: &str, content: &str) -> std::path::PathBuf {
+            let path = self.path(rel);
+            std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+            std::fs::write(&path, content).expect("write fixture");
+            path
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// 种下 Claude/Codex 当前供应商（DB 行不含钥匙）；`with_backup` 决定是否登记 refs api_key。
+    fn strip_state(with_backup: bool) -> (AppState, Arc<CountingVault>) {
+        let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store,
+        );
+        let counting = Arc::new(CountingVault::new(Arc::new(InMemoryVault::new())));
+        state.vault = counting.clone();
+        for (app, id) in [(AppType::Claude, "p1"), (AppType::Codex, "c1")] {
+            let provider =
+                Provider::from_parts(id.to_string(), id.to_string(), serde_json::json!({}), None);
+            state
+                .db
+                .save_provider(app.as_str(), &provider)
+                .expect("seed provider");
+            crate::settings::set_current_provider(&app, Some(id)).expect("set current");
+            if with_backup {
+                state
+                    .db
+                    .upsert_secret_ref(app.as_str(), id, "", "item", &["api_key".to_string()])
+                    .expect("seed ref");
+            }
+        }
+        (state, counting)
+    }
+
+    #[test]
+    #[serial]
+    fn strip_leaves_clean_live_files_byte_identical() {
+        let home = TempHome::new("clean");
+        let claude = home.write(".claude/settings.json", "{\n  \"model\": \"opus\"\n}");
+        let config = home.write(".codex/config.toml", "# keep\n[model_providers.a]\nname = \"A\"\n");
+        let (state, counting) = strip_state(false);
+
+        strip_current_live_plaintext(&state).expect("strip");
+
+        assert_eq!(
+            std::fs::read_to_string(&claude).expect("read"),
+            "{\n  \"model\": \"opus\"\n}",
+            "无明文的 live 文件必须字节不变"
+        );
+        assert_eq!(
+            std::fs::read_to_string(&config).expect("read"),
+            "# keep\n[model_providers.a]\nname = \"A\"\n"
+        );
+        assert!(crate::settings::get_live_plaintext_pending().is_empty());
+        assert_eq!(counting.fetch_count(), 0, "启动剥离不得 fetch");
+        assert_eq!(counting.put_count(), 0, "启动剥离不得 put");
+    }
+
+    #[test]
+    #[serial]
+    fn strip_removes_only_sensitive_keys_when_backup_exists() {
+        let home = TempHome::new("strip");
+        let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
+        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
+        let (state, _counting) = strip_state(true);
+
+        strip_current_live_plaintext(&state).expect("strip");
+
+        // Claude：敏感键没了，其余键原样保留。
+        let claude_after = std::fs::read_to_string(&claude).expect("read");
+        assert!(!claude_after.contains("sk-claude-plain"));
+        assert!(claude_after.contains("\"model\": \"claude-opus-5\""));
+        assert!(claude_after.contains("\"custom\": \"keep-me\""));
+        assert!(claude_after.contains("\"ANTHROPIC_MODEL\": \"claude-opus-5\""));
+        // Codex：auth.json 的 key 没了；config.toml 只少 token 行，注释和其它键保留。
+        let auth_after = std::fs::read_to_string(home.path(".codex/auth.json")).expect("read");
+        assert!(!auth_after.contains("sk-codex-plain"));
+        let config_after = std::fs::read_to_string(&config).expect("read");
+        assert!(!config_after.contains("sk-codex-plain"));
+        assert!(!config_after.contains("experimental_bearer_token"));
+        assert!(config_after.contains("# user comment"));
+        assert!(config_after.contains("base_url = \"https://a.example/v1\""));
+        assert!(crate::settings::get_live_plaintext_pending().is_empty());
+    }
+
+    #[test]
+    #[serial]
+    fn strip_defers_and_keeps_plaintext_when_no_backup() {
+        let home = TempHome::new("defer");
+        let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
+        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
+        let (state, counting) = strip_state(false);
+
+        strip_current_live_plaintext(&state).expect("strip");
+
+        // 文件全部原样（含明文），pending 有记录，op 零调用。
+        assert!(
+            std::fs::read_to_string(&claude)
+                .expect("read")
+                .contains("sk-claude-plain")
+        );
+        assert!(
+            std::fs::read_to_string(&config)
+                .expect("read")
+                .contains("sk-codex-plain")
+        );
+        let pending = crate::settings::get_live_plaintext_pending();
+        assert!(pending.contains(&"claude/p1".to_string()), "pending: {pending:?}");
+        assert!(pending.contains(&"codex/c1".to_string()), "pending: {pending:?}");
+        assert_eq!(counting.fetch_count(), 0);
+        assert_eq!(counting.put_count(), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn import_moves_live_plaintext_into_vault_then_strips() {
+        let home = TempHome::new("import");
+        let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
+        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
+        let (state, counting) = strip_state(false);
+        strip_current_live_plaintext(&state).expect("strip → deferred");
+        assert_eq!(counting.put_count(), 0);
+
+        let imported = import_live_plaintext_to_vault(&state).expect("import");
+        assert_eq!(imported, 2, "Claude + Codex 各导入一个");
+
+        // vault 里有两把 key（对应两个 provider 组）。
+        for (app, id) in [(AppType::Claude, "p1"), (AppType::Codex, "c1")] {
+            let bundle = state
+                .vault
+                .fetch(&SecretGroup::provider(app.clone(), id.to_string()))
+                .expect("fetch")
+                .unwrap_or_else(|| panic!("{app:?}/{id} 应有整包"));
+            assert!(bundle.get("api_key").is_some(), "{app:?}/{id} 缺 api_key");
+        }
+        // live 已剥离、注释与其它键保留。
+        assert!(
+            !std::fs::read_to_string(&claude)
+                .expect("read")
+                .contains("sk-claude-plain")
+        );
+        let config_after = std::fs::read_to_string(&config).expect("read");
+        assert!(!config_after.contains("sk-codex-plain"));
+        assert!(config_after.contains("# user comment"));
+        // 非敏感 base_url 落端点表。
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("claude", "p1")
+                .expect("endpoint"),
+            Some("https://claude.example".to_string())
+        );
+        // pending 清空。
+        assert!(crate::settings::get_live_plaintext_pending().is_empty());
     }
 }

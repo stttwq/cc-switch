@@ -560,35 +560,74 @@ pub fn get_codex_auth_path() -> PathBuf {
     get_codex_config_dir().join("auth.json")
 }
 
+/// F1-8：启动定点剥离的结果。
+/// `Clean` = 无明文（未写盘）；`Stripped` = 有明文且已就地剥离；
+/// `Deferred` = 有明文但 vault 里没有备份（refs 无 api_key），等用户「导入到 1Password 并剥离」。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlaintextStripOutcome {
+    Clean,
+    Stripped,
+    Deferred,
+}
+
 /// §6.8 / 1Password 模式：key-free 地剥掉 auth.json 里的明文 apikey。
 ///
 /// 1Password 模式下 Codex 的钥匙经 config.toml 的 env_key 环境变量注入，不靠 auth.json；
-/// 所以 auth.json 里任何明文 `OPENAI_API_KEY` 都是遗留，应剥除。不比对 vault（不取钥匙
-/// 、不解锁，§6.7）。保留 OAuth 登录态（存在 `tokens`）——那是用户自己的 ChatGPT 登录，不动。
-/// 返回是否真的剥除了。
-pub fn strip_codex_apikey_plaintext_for_onepassword() -> Result<bool, AppError> {
+/// 所以 auth.json 里任何明文 `OPENAI_API_KEY` 都是遗留，应剥除。不比对 vault、不取钥匙
+/// 、不解锁（§6.7）。保留 OAuth 登录态（存在 `tokens`）——那是用户自己的 ChatGPT 登录，不动。
+///
+/// F1-8（P0-8）：增加前提参数 `refs_have_api_key`——vault 里有备份（secret_refs 含
+/// api_key）才敢剥；没有时不碰文件，返回 `Deferred` 等用户导入，避免删掉 1P 里没有的新钥匙。
+pub fn strip_codex_apikey_plaintext_for_onepassword(
+    refs_have_api_key: bool,
+) -> Result<PlaintextStripOutcome, AppError> {
     let path = get_codex_auth_path();
     let Ok(text) = std::fs::read_to_string(&path) else {
-        return Ok(false); // 文件不存在
+        return Ok(PlaintextStripOutcome::Clean); // 文件不存在
     };
     let Ok(mut root) = serde_json::from_str::<Value>(&text) else {
-        return Ok(false); // 无法解析，不动
+        return Ok(PlaintextStripOutcome::Clean); // 无法解析，不动
     };
     let Some(obj) = root.as_object_mut() else {
-        return Ok(false);
+        return Ok(PlaintextStripOutcome::Clean);
     };
     // OAuth 登录态（tokens）一律不动。
     if obj.contains_key("tokens") {
-        return Ok(false);
+        return Ok(PlaintextStripOutcome::Clean);
     }
-    if obj.remove("OPENAI_API_KEY").is_none() {
-        return Ok(false); // 本来就没明文
+    if !obj.contains_key("OPENAI_API_KEY") {
+        return Ok(PlaintextStripOutcome::Clean); // 本来就没明文
     }
+    if !refs_have_api_key {
+        return Ok(PlaintextStripOutcome::Deferred);
+    }
+    obj.remove("OPENAI_API_KEY");
     let bytes = serde_json::to_vec_pretty(&root)
         .map_err(|e| AppError::Config(format!("序列化 auth.json 失败: {e}")))?;
     atomic_write(&path, &bytes)?;
     log::info!("1Password 模式：已剥除 auth.json 里的明文 OPENAI_API_KEY");
-    Ok(true)
+    Ok(PlaintextStripOutcome::Stripped)
+}
+
+/// F1-8：就地点剥 config.toml 各表的 `experimental_bearer_token`（toml_edit，
+/// 注释与其余内容原样保留）。前提与 auth.json 相同：refs 有 api_key 才剥。
+pub fn strip_codex_config_bearer_token_plaintext(
+    refs_have_api_key: bool,
+) -> Result<PlaintextStripOutcome, AppError> {
+    let path = get_codex_config_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(PlaintextStripOutcome::Clean); // 文件不存在
+    };
+    let stripped = remove_codex_experimental_bearer_token_if(&text, |_| true)?;
+    if stripped == text {
+        return Ok(PlaintextStripOutcome::Clean); // 没有真正的 token 行（可能只是注释提到）
+    }
+    if !refs_have_api_key {
+        return Ok(PlaintextStripOutcome::Deferred);
+    }
+    atomic_write(&path, stripped.as_bytes())?;
+    log::info!("1Password 模式：已剥除 config.toml 里的 experimental_bearer_token");
+    Ok(PlaintextStripOutcome::Stripped)
 }
 
 /// 获取 Codex config.toml 路径

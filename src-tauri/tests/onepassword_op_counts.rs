@@ -103,9 +103,8 @@ fn onepassword_codex_switch_is_zero_op() {
 }
 
 /// 1P 模式启动路径（启动剥离 + 默认导入 + Pi 原生同步 + Pi 投递）：
-/// fetch = 0、put = 0。F1-8 / F1-2 落地后启用。
+/// fetch = 0、put = 0。F1-8 落地，启用（P0-8 验收：整个启动路径 0 次 op）。
 #[test]
-#[ignore = "F1-2/F1-8 后启用"]
 fn onepassword_startup_path_is_zero_op() {
     let _guard = test_mutex().lock().expect("acquire test mutex");
     reset_test_fs();
@@ -131,6 +130,7 @@ fn onepassword_startup_path_is_zero_op() {
             ),
         );
     }
+    config.ensure_app(&AppType::Pi);
     {
         let manager = config.get_manager_mut(&AppType::Pi).expect("pi manager");
         manager.providers.insert(

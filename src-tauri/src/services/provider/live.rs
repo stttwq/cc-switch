@@ -14,8 +14,85 @@ use crate::services::mcp::McpService;
 use crate::store::AppState;
 
 use super::normalize_claude_models_in_value;
+use crate::codex_config::PlaintextStripOutcome;
 
 const KIMI_FOR_CODING_CONTEXT_TOKENS: &str = "262144";
+
+/// F1-8：Claude settings.json 就地定点剥离——只删 `env` 与顶层的敏感键
+/// （`is_claude_env_secret`），其余内容（含键序）原样保留；无明文零写入（幂等）。
+/// `refs_have_api_key` 为假时不碰文件、返回 `Deferred`，等用户「导入到 1Password 并剥离」。
+pub(super) fn strip_claude_live_plaintext_in_place(
+    refs_have_api_key: bool,
+) -> Result<PlaintextStripOutcome, AppError> {
+    let path = get_claude_settings_path();
+    let Ok(text) = std::fs::read_to_string(&path) else {
+        return Ok(PlaintextStripOutcome::Clean); // 文件不存在或不可读，不动
+    };
+    let Ok(mut root) = serde_json::from_str::<Value>(&text) else {
+        return Ok(PlaintextStripOutcome::Clean); // 无法解析，不动
+    };
+    let Some(obj) = root.as_object_mut() else {
+        return Ok(PlaintextStripOutcome::Clean);
+    };
+    let mut touched = false;
+    if let Some(env) = obj.get_mut("env").and_then(Value::as_object_mut) {
+        let sensitive: Vec<String> = env
+            .keys()
+            .filter(|key| super::live_sanitizer::is_claude_env_secret(key))
+            .cloned()
+            .collect();
+        if !sensitive.is_empty() {
+            if !refs_have_api_key {
+                return Ok(PlaintextStripOutcome::Deferred);
+            }
+            for key in sensitive {
+                env.remove(&key);
+            }
+            touched = true;
+        }
+    }
+    let top_level: Vec<String> = obj
+        .keys()
+        .filter(|key| super::live_sanitizer::is_claude_env_secret(key))
+        .cloned()
+        .collect();
+    if !top_level.is_empty() {
+        if !refs_have_api_key {
+            return Ok(PlaintextStripOutcome::Deferred);
+        }
+        for key in top_level {
+            obj.remove(&key);
+        }
+        touched = true;
+    }
+    if !touched {
+        return Ok(PlaintextStripOutcome::Clean);
+    }
+    let bytes = serde_json::to_vec_pretty(&root)
+        .map_err(|e| AppError::JsonSerialize { source: e })?;
+    crate::config::atomic_write(&path, &bytes)?;
+    Ok(PlaintextStripOutcome::Stripped)
+}
+
+/// F1-8：Codex live 就地定点剥离——auth.json 只删 `OPENAI_API_KEY`（有 `tokens` 不动），
+/// config.toml 用 toml_edit 只删各表 `experimental_bearer_token`（注释与其余内容保留）。
+pub(super) fn strip_codex_live_plaintext_in_place(
+    refs_have_api_key: bool,
+) -> Result<PlaintextStripOutcome, AppError> {
+    let auth =
+        crate::codex_config::strip_codex_apikey_plaintext_for_onepassword(refs_have_api_key)?;
+    let config =
+        crate::codex_config::strip_codex_config_bearer_token_plaintext(refs_have_api_key)?;
+    Ok(match (auth, config) {
+        (PlaintextStripOutcome::Deferred, _) | (_, PlaintextStripOutcome::Deferred) => {
+            PlaintextStripOutcome::Deferred
+        }
+        (PlaintextStripOutcome::Stripped, _) | (_, PlaintextStripOutcome::Stripped) => {
+            PlaintextStripOutcome::Stripped
+        }
+        _ => PlaintextStripOutcome::Clean,
+    })
+}
 
 fn is_kimi_for_coding_provider(provider: &Provider) -> bool {
     provider

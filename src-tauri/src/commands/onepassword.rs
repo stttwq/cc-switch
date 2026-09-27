@@ -8,6 +8,22 @@ use tauri::{Emitter, State};
 use crate::secrets;
 use crate::store::AppState;
 
+/// F1-8：「导入到 1Password 并剥离」——把启动剥离检测到的 live 文件明文钥匙
+/// （`live_plaintext_pending`）收进 vault 后就地剥离。会触发 op（可能弹解锁），
+/// 故 async + spawn_blocking。返回成功导入的数量。
+#[tauri::command]
+pub async fn import_live_plaintext_to_onepassword(
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::provider::import_live_plaintext_to_vault(&state)
+    })
+    .await
+    .map_err(|e| format!("导入 live 明文任务失败: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
 /// 状态探测（不需解锁）：是否安装、op 版本、路径、是否已登录、签名校验结果，
 /// 外加当前后端与已配置的 account/vault。
 #[tauri::command]
