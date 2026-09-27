@@ -513,6 +513,13 @@ pub struct AppSettings {
     /// 每次原生同步全量重建；导入成功（或明文消失）后自动出队。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pi_plaintext_pending: Option<Vec<String>>,
+    /// S1-1（D-S9）：Pi 原生同步发现 models.json 的 baseUrl 与本机缓存不一致、
+    /// 待写回 1Password 的 provider id 清单（仅 Pi，存裸 id）。存本机设置（不随云同步）。
+    /// 为什么推迟：原则 1（列表 0 次 op）——缓存已是新值、本机使用不受影响，
+    /// 其他设备等用户下次主动触发 op 的动作时顺带写回。每次原生同步全量重建；
+    /// 消化动作（编辑保存 / 导入明文 / 重建引用）成功后随重建自动出队。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_endpoint_vault_pending: Option<Vec<String>>,
     /// F1-8：启动剥离检测到 live 文件含明文钥匙、但 vault 里没有备份
     /// （secret_refs 无 api_key）的 `<app>/<id>` 清单。存本机设置（不随云同步）。
     /// 非空时 UI 提示「检测到 live 文件含明文钥匙，[导入到 1Password 并剥离]」；
@@ -597,6 +604,7 @@ impl Default for AppSettings {
             onepassword: None,
             secrets_import_pending: None,
             pi_plaintext_pending: None,
+            pi_endpoint_vault_pending: None,
             live_plaintext_pending: None,
             onepassword_orphans: None,
         }
@@ -1297,6 +1305,19 @@ pub fn set_pi_plaintext_pending(items: Vec<String>) -> Result<(), AppError> {
     let items = if items.is_empty() { None } else { Some(items) };
     mutate_settings(|settings| {
         settings.pi_plaintext_pending = items;
+    })
+}
+
+/// S1-1（D-S9）：读取 Pi 端点改动待写回 1Password 的清单。
+pub fn get_pi_endpoint_vault_pending() -> Vec<String> {
+    get_settings().pi_endpoint_vault_pending.unwrap_or_default()
+}
+
+/// S1-1（D-S9）：写入清单。空清单 = 清除标记（已写回 / baseUrl 已改回）。
+pub fn set_pi_endpoint_vault_pending(items: Vec<String>) -> Result<(), AppError> {
+    let items = if items.is_empty() { None } else { Some(items) };
+    mutate_settings(|settings| {
+        settings.pi_endpoint_vault_pending = items;
     })
 }
 

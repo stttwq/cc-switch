@@ -256,6 +256,7 @@ fn sync_native_locked(
     let is_1p = crate::settings::is_onepassword_backend();
     let mut changed = 0;
     let mut plaintext_pending: Vec<String> = Vec::new();
+    let mut endpoint_vault_pending: Vec<String> = Vec::new();
 
     for (id, config) in native {
         let mut provider = saved.get(id).cloned().unwrap_or_else(|| {
@@ -274,33 +275,53 @@ fn sync_native_locked(
         let extracted =
             SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
 
-        // F1-4 步骤 1：baseUrl 落端点表（两种模式都做，0 次 vault 往返）。这一步做完，
-        // 就不会再出现「每次启动因重抽 baseUrl 而触发 op」。敏感 URL（带凭据）不落
-        // 端点表，视同明文钥匙走下面的 pending 分支，由「导入到 1Password」收进 vault。
-        if let Some(url) = extracted.secrets.base_url.as_ref() {
-            if !crate::secrets::is_credential_bearing_url(url.as_str()) {
-                state
-                    .db
-                    .upsert_provider_endpoint(PI_APP, &provider.id, url.as_str())?;
-            }
-        }
+        // S1-1（D3-B）：把「真正的钥匙」和「非敏感 base_url」分开判断。Pi 的
+        // models.json 里必有明文 baseUrl（Pi CLI 不支持 baseUrl 的 $VAR 引用），
+        // D3-B 把 base_url 放进整包后 `store_provider_bundle` 不再是空操作——
+        // 「拆掉非敏感 baseUrl 后整包为空、直接返回」已不成立，每个供应商每次
+        // 列表都会触发一次 6~9 秒的 op fetch（§4.1）。原则 1（列表 0 次 op）：
+        // 无真钥匙时完全不碰 vault，只处理端点缓存。
+        let has_real_secret = extracted.secrets.api_key.is_some()
+            || !extracted.secrets.extra_env.is_empty()
+            || extracted
+                .secrets
+                .base_url
+                .as_ref()
+                .is_some_and(|url| crate::secrets::is_credential_bearing_url(url.as_str()));
 
         // F1-4 步骤 2（1P 模式）：models.json 里有明文钥匙时，不改写 models.json、
         // 不保存 DB 行（行保持原样；新供应商不入库），记入 pending 等用户点
         // 「导入到 1Password」。原则 5 的启动 0 次 op 不能拿丢数据换——明文本来就在
         // 用户自己的 models.json 里，推迟处理不会更糟；凭据管理器模式照旧立即收编。
-        if is_1p
-            && (extracted.secrets.api_key.is_some()
-                || !extracted.secrets.extra_env.is_empty()
-                || extracted
-                    .secrets
-                    .base_url
-                    .as_ref()
-                    .is_some_and(|url| crate::secrets::is_credential_bearing_url(url.as_str())))
-        {
+        if is_1p && has_real_secret {
+            // F1-4 步骤 1 保留：非敏感 baseUrl 照旧落端点表——pending 供应商尚未
+            // 入 1P，之后「导入到 1Password」前读取端点要靠这行做到 0 次 op。
+            if let Some(url) = extracted.secrets.base_url.as_ref() {
+                if !crate::secrets::is_credential_bearing_url(url.as_str()) {
+                    state
+                        .db
+                        .upsert_provider_endpoint(PI_APP, &provider.id, url.as_str())?;
+                }
+            }
             log::info!("Pi 供应商 {id} 的 models.json 里有明文钥匙，待用户导入 1Password");
             plaintext_pending.push(provider.id.clone());
             continue;
+        }
+
+        // S1-1：无真钥匙（绝大多数情况：$VAR 引用 + 非敏感 baseUrl）→ 0 次 vault
+        // 往返，只处理端点缓存；vault 写回推迟到用户主动触发 op 的动作（D-S9）。
+        if !has_real_secret {
+            sync_pi_endpoint_cache_without_vault(
+                state,
+                is_1p,
+                &provider.id,
+                extracted
+                    .secrets
+                    .base_url
+                    .as_deref()
+                    .map(|url| url.as_str()),
+                &mut endpoint_vault_pending,
+            )?;
         }
 
         let live_rewritten =
@@ -311,10 +332,15 @@ fn sync_native_locked(
         if live_rewritten != *config {
             match crate::pi_config::replace_pi_provider(id, config, &live_rewritten) {
                 Ok(()) => {
-                    if let Err(error) =
-                        persist_pi_sync_secrets(state, &provider.id, &extracted.secrets)
-                    {
-                        log::warn!("Pi native extract after live rewrite failed for {id}: {error}");
+                    if has_real_secret {
+                        // 仅凭据管理器模式到达（1P 的真钥匙已在上面走 pending）。
+                        if let Err(error) =
+                            persist_pi_sync_secrets(state, &provider.id, &extracted.secrets)
+                        {
+                            log::warn!(
+                                "Pi native extract after live rewrite failed for {id}: {error}"
+                            );
+                        }
                     }
                     provider.settings_config = extracted.stripped;
                 }
@@ -326,9 +352,12 @@ fn sync_native_locked(
                 }
             }
         } else {
-            if let Err(error) = persist_pi_sync_secrets(state, &provider.id, &extracted.secrets) {
-                log::warn!("Pi native extract failed for {id}: {error}");
-                continue;
+            if has_real_secret {
+                if let Err(error) = persist_pi_sync_secrets(state, &provider.id, &extracted.secrets)
+                {
+                    log::warn!("Pi native extract failed for {id}: {error}");
+                    continue;
+                }
             }
             provider.settings_config = extracted.stripped;
         }
@@ -346,8 +375,57 @@ fn sync_native_locked(
     if crate::settings::get_pi_plaintext_pending() != plaintext_pending {
         crate::settings::set_pi_plaintext_pending(plaintext_pending)?;
     }
+    // S1-1：端点写回清单同样全量重建；用户主动触发 op 的动作消化后（或 baseUrl
+    // 改回原值）自动出队，无变化不落盘。
+    if crate::settings::get_pi_endpoint_vault_pending() != endpoint_vault_pending {
+        crate::settings::set_pi_endpoint_vault_pending(endpoint_vault_pending)?;
+    }
 
     Ok(changed)
+}
+
+/// S1-1（§4.2 S1-1 / D-S9）：无真钥匙时只同步端点缓存，0 次 vault 往返。
+///
+/// - live 没有 baseUrl → 缓存维持原样（与既有行为一致）；
+/// - 缓存与 live 一致 → 什么都不做（不动行、不触发 update_hook）；
+/// - 不一致（用户在 CCS 之外改了 models.json 的 baseUrl）：
+///   - 1P 模式：更新缓存，并把 id 记入 `pi_endpoint_vault_pending`，等用户下次
+///     主动触发 op 的动作（编辑保存 / 导入明文 / 重建引用，S1-2）时顺带写回
+///     1Password——原则 1：列表路径绝不调 op；
+///   - 凭据管理器模式：没有「自带同步」的真源，照旧立即收编（本地调用，快）。
+fn sync_pi_endpoint_cache_without_vault(
+    state: &AppState,
+    is_1p: bool,
+    provider_id: &str,
+    base_url: Option<&str>,
+    pending: &mut Vec<String>,
+) -> Result<(), AppError> {
+    let Some(url) = base_url else {
+        return Ok(());
+    };
+    if crate::secrets::is_credential_bearing_url(url) {
+        // 敏感 URL 不落缓存，正常不会到这里（has_real_secret 已拦截）；防御性兜底。
+        return Ok(());
+    }
+    let cached = state.db.get_provider_endpoint(PI_APP, provider_id)?;
+    if cached.as_deref() == Some(url) {
+        return Ok(());
+    }
+    if is_1p {
+        state
+            .db
+            .upsert_provider_endpoint(PI_APP, provider_id, url)?;
+        pending.push(provider_id.to_string());
+        log::info!("Pi 供应商 {provider_id} 的 baseUrl 有改动，待用户下次操作时写回 1Password");
+    } else {
+        // 凭据管理器：store_provider_bundle 会同时更新缓存与 vault（merge 语义）。
+        let secrets = crate::secrets::ProviderSecrets {
+            base_url: Some(url.to_owned().into()),
+            ..Default::default()
+        };
+        super::store_provider_bundle(state, &AppType::Pi, provider_id, &secrets, true)?;
+    }
+    Ok(())
 }
 
 fn merge_native_config(provider: &mut Provider, config: Value) {
@@ -397,10 +475,12 @@ fn strip_and_store_pi_secrets(
 
 /// 原生 sync（启动重建 DB）专用：把抽取结果落库。
 ///
-/// F1-4：删除了 1P 模式的短路——sync 路径在 1P 下到达这里时必然没有明文钥匙
-/// （api_key / 敏感 header / 敏感 URL 都已走 pending 分支），`store_provider_bundle`
-/// 拆掉非敏感 baseUrl 后整包为空、直接返回，不产生任何 vault 往返（§6.7 启动不取钥匙）。
-/// 凭据管理器模式照常写（本地快）。
+/// S1-1（D3-B）：调用点已收窄——`sync_native_locked` 仅在 `has_real_secret`
+/// 且非 1P 明文 pending（即仅凭据管理器模式）时调用本函数。1P 模式下无真钥匙的
+/// 供应商在上游经 [`sync_pi_endpoint_cache_without_vault`] 与 vault 分流，有真
+/// 钥匙的走 `pi_plaintext_pending`，都不会到达这里；因此不再出现「非敏感
+/// baseUrl 使整包非空 → merge 每次都 fetch」的 D3-B 回归（§4.1 / §4.2 S1-1）。
+/// 凭据管理器模式本地调用快，照常写（merge 语义）。
 fn persist_pi_sync_secrets(
     state: &AppState,
     provider_id: &str,
@@ -496,13 +576,13 @@ mod plaintext_pending_tests {
     const PLAINTEXT_MODELS: &str = r#"{"providers":{"pi-one":{"name":"One","baseUrl":"https://x.example/v1","apiKey":"sk-plain-pi-1"}}}"#;
 
     /// 隔离本机设置文件（settings 落盘路径），同时让 env sink 走内存实现。
-    struct TempHome {
+    pub(super) struct TempHome {
         dir: std::path::PathBuf,
         prev: Option<std::ffi::OsString>,
     }
 
     impl TempHome {
-        fn new(tag: &str) -> Self {
+        pub(super) fn new(tag: &str) -> Self {
             let dir = std::env::temp_dir().join(format!("cc-switch-pi-1p-{tag}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(dir.join(".cc-switch")).expect("mkdir");
@@ -524,10 +604,10 @@ mod plaintext_pending_tests {
     }
 
     /// 测试卫生：设置是进程级全局，离开测试前复位后端与 pending 标记。
-    struct OnePBackend;
+    pub(super) struct OnePBackend;
 
     impl OnePBackend {
-        fn enable() -> Self {
+        pub(super) fn enable() -> Self {
             let mut settings = crate::settings::get_settings();
             settings.secret_backend = Some("onepassword".to_string());
             settings.pi_plaintext_pending = None;
@@ -546,7 +626,7 @@ mod plaintext_pending_tests {
         }
     }
 
-    fn onepassword_pi_state() -> (AppState, Arc<InMemoryVault>, Arc<CountingVault>) {
+    pub(super) fn onepassword_pi_state() -> (AppState, Arc<InMemoryVault>, Arc<CountingVault>) {
         let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
         let mut state = AppState::new(
             Arc::new(crate::database::Database::memory().expect("memory db")),
@@ -558,14 +638,14 @@ mod plaintext_pending_tests {
         (state, vault, counting)
     }
 
-    fn write_models(content: &str) -> std::path::PathBuf {
+    pub(super) fn write_models(content: &str) -> std::path::PathBuf {
         let path = crate::pi_config::get_pi_models_path().expect("models path");
         std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
         std::fs::write(&path, content).expect("write models");
         path
     }
 
-    fn read_native() -> IndexMap<String, Value> {
+    pub(super) fn read_native() -> IndexMap<String, Value> {
         crate::pi_config::read_pi_native_providers().expect("read native")
     }
 
@@ -702,5 +782,150 @@ mod plaintext_pending_tests {
             .expect("Windows 模式照常入库");
         assert!(!row.settings_config.to_string().contains("sk-plain-pi-1"));
         assert!(crate::settings::get_pi_plaintext_pending().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod list_perf_tests {
+    //! S1-1 验收（施工方案 §4.3）：Pi 原生同步路径 0 次 vault 往返。
+    //! 场景取自真机最常见形态：models.json 全部是 $VAR 引用 + 非敏感 baseUrl。
+    use super::plaintext_pending_tests::{
+        onepassword_pi_state, read_native, write_models, OnePBackend, TempHome,
+    };
+    use super::*;
+    use serial_test::serial;
+
+    /// 5 个供应商，全部 $VAR 引用 + 非敏感 baseUrl（1P 下最常见形态）。
+    fn perf_models(override_url: Option<(usize, &str)>) -> String {
+        let mut providers = serde_json::Map::new();
+        for i in 0..5 {
+            let url = match override_url {
+                Some((idx, url)) if idx == i => url.to_string(),
+                _ => format!("https://perf{i}.example/v1"),
+            };
+            providers.insert(
+                format!("pi-perf-{i}"),
+                serde_json::json!({
+                    "name": format!("Perf {i}"),
+                    "baseUrl": url,
+                    "apiKey": format!("$CC_SWITCH_PI_PERF_{i}_API_KEY"),
+                }),
+            );
+        }
+        serde_json::json!({ "providers": providers }).to_string()
+    }
+
+    #[test]
+    #[serial]
+    fn sync_1p_refs_and_baseurl_never_touches_vault_across_repeated_syncs() {
+        let _home = TempHome::new("perf-1p-zero");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(&perf_models(None));
+        let _onep = OnePBackend::enable();
+        let (state, _vault, counting) = onepassword_pi_state();
+
+        // 第一轮：新供应商入库。
+        sync_native_locked(&state, &read_native()).expect("first sync");
+        assert_eq!(
+            counting.fetch_count(),
+            0,
+            "仅 $VAR 引用 + 非敏感 baseUrl，绝不能触发 vault fetch（S1-1 / 原则 1）"
+        );
+        assert_eq!(counting.put_count(), 0, "同步路径绝不能 put");
+
+        // 连续 3 轮重复同步（等价于连续 3 次进入 Pi 页面）。
+        counting.reset();
+        for _ in 0..3 {
+            sync_native_locked(&state, &read_native()).expect("resync");
+        }
+        assert_eq!(
+            counting.fetch_count(),
+            0,
+            "重复同步仍必须 0 次 fetch（每供应商每次 6~9 秒的 op 是卡顿根因）"
+        );
+        assert_eq!(counting.put_count(), 0);
+    }
+
+    #[test]
+    #[serial]
+    fn external_baseurl_change_in_1p_updates_cache_and_defers_vault_write() {
+        let _home = TempHome::new("perf-1p-change");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(&perf_models(None));
+        let _onep = OnePBackend::enable();
+        let (state, _vault, counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("first sync");
+
+        // 用户在 CCS 之外改了其中一个的 baseUrl。
+        write_models(&perf_models(Some((2, "https://changed.example/v1"))));
+        counting.reset();
+        sync_native_locked(&state, &read_native()).expect("resync");
+        assert_eq!(
+            counting.fetch_count(),
+            0,
+            "外部 baseUrl 改动只进缓存，不得调 op（D-S9）"
+        );
+        assert_eq!(counting.put_count(), 0);
+        assert_eq!(
+            state.db.get_provider_endpoint(PI_APP, "pi-perf-2").unwrap(),
+            Some("https://changed.example/v1".to_string()),
+            "缓存必须更新为本机新值"
+        );
+        assert_eq!(
+            crate::settings::get_pi_endpoint_vault_pending(),
+            vec!["pi-perf-2".to_string()],
+            "改动必须记入待写回清单（S1-1 / D-S9）"
+        );
+
+        // 全量重建语义：下一轮无改动时 pending 自动出队。
+        sync_native_locked(&state, &read_native()).expect("resync unchanged");
+        assert!(
+            crate::settings::get_pi_endpoint_vault_pending().is_empty(),
+            "无改动的同步轮次应清空 pending（全量重建语义）"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn external_baseurl_change_in_credential_manager_writes_vault_immediately() {
+        let _home = TempHome::new("perf-cm-change");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(&perf_models(None));
+        // 默认凭据管理器模式（不开 1P）。
+        let (state, _vault, counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("first sync");
+
+        // 首轮：5 个 baseUrl 都是「缓存不同」→ 各写一次（1 fetch + 1 put）。
+        assert_eq!(
+            counting.fetch_count(),
+            5,
+            "凭据管理器模式首轮收编 5 次 fetch"
+        );
+        assert_eq!(counting.put_count(), 5);
+
+        // 重复同步无改动 → 0 次往返（修复前：每次都要 5 次 fetch）。
+        counting.reset();
+        sync_native_locked(&state, &read_native()).expect("resync");
+        assert_eq!(
+            counting.fetch_count(),
+            0,
+            "凭据管理器模式下无改动也必须 0 次 fetch"
+        );
+        assert_eq!(counting.put_count(), 0);
+
+        // 改一个 baseUrl → 恰好 1 fetch + 1 put。
+        write_models(&perf_models(Some((3, "https://changed-cm.example/v1"))));
+        counting.reset();
+        sync_native_locked(&state, &read_native()).expect("resync changed");
+        assert_eq!(counting.fetch_count(), 1, "只处理改动的那个供应商");
+        assert_eq!(
+            counting.put_count(),
+            1,
+            "base_url 变化时写入 vault（1 次 put）"
+        );
+        assert!(
+            crate::settings::get_pi_endpoint_vault_pending().is_empty(),
+            "凭据管理器模式不产生待写回清单"
+        );
     }
 }
