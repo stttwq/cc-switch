@@ -331,7 +331,12 @@ impl Database {
 
     // ─── provider_endpoints（F1-2 / §7 D3-A）：非敏感 base_url 端点表 ───
 
-    /// upsert 端点行（覆盖写）。base_url 是非秘密配置，该表随云同步。
+    /// upsert 端点行。base_url 是非秘密配置（1P 模式下该表是 1P 真值的本机缓存，
+    /// 导出策略见 `snapshot_policy` / D-S1）。
+    ///
+    /// S1-3：值不变时 `DO UPDATE … WHERE` 条件为假，不更新行、不碰 `updated_at`、
+    /// 不触发 update_hook——消除「点一次 Pi 页面就触发一次自动同步上传」
+    /// （施工方案 §4.1-3 / §4.2 S1-3）。
     pub fn upsert_provider_endpoint(
         &self,
         app_type: &str,
@@ -345,7 +350,8 @@ impl Database {
              VALUES (?1, ?2, ?3, ?4)
              ON CONFLICT(app, provider_id) DO UPDATE SET
                  base_url = excluded.base_url,
-                 updated_at = excluded.updated_at",
+                 updated_at = excluded.updated_at
+             WHERE provider_endpoints.base_url IS NOT excluded.base_url",
             params![app_type, provider_id, base_url, now],
         )
         .map_err(|e| AppError::Database(format!("写入 provider_endpoints 失败: {e}")))?;
@@ -742,5 +748,48 @@ mod ensure_official_seed_tests {
         let db = Database::memory().expect("memory db");
         let result = db.ensure_official_seed_by_id(CLAUDE_OFFICIAL_PROVIDER_ID, AppType::Codex);
         assert!(result.is_err(), "(id, app_type) mismatch should be Err");
+    }
+}
+
+#[cfg(test)]
+mod endpoint_upsert_tests {
+    use crate::Database;
+
+    // ─── S1-3：端点 upsert 值不变时不写（施工方案 §4.2 S1-3）──────────
+
+    #[test]
+    fn endpoint_upsert_skips_write_when_value_unchanged() {
+        let db = Database::memory().expect("memory db");
+        let counts = crate::test_support::HookCounts::install(&db);
+
+        db.upsert_provider_endpoint("pi", "p1", "https://x.example/v1")
+            .expect("first insert");
+        assert_eq!(
+            counts.count_for_table("provider_endpoints"),
+            1,
+            "首次写入必须是 insert"
+        );
+
+        // 值不变：DO UPDATE … WHERE 为假，不更新行、不触发 update_hook。
+        db.upsert_provider_endpoint("pi", "p1", "https://x.example/v1")
+            .expect("same value upsert");
+        assert_eq!(
+            counts.count_for_table("provider_endpoints"),
+            1,
+            "值不变时不得再写（否则点一次 Pi 页面就触发一次自动上传）"
+        );
+
+        // 值变了：正常更新，update_hook 恰好再触发一次。
+        db.upsert_provider_endpoint("pi", "p1", "https://y.example/v1")
+            .expect("changed value upsert");
+        assert_eq!(
+            counts.count_for_table("provider_endpoints"),
+            2,
+            "值变化时必须正常更新"
+        );
+        assert_eq!(
+            db.get_provider_endpoint("pi", "p1").unwrap(),
+            Some("https://y.example/v1".to_string())
+        );
     }
 }
