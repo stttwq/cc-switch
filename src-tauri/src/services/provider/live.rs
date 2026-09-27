@@ -68,8 +68,8 @@ pub(super) fn strip_claude_live_plaintext_in_place(
     if !touched {
         return Ok(PlaintextStripOutcome::Clean);
     }
-    let bytes = serde_json::to_vec_pretty(&root)
-        .map_err(|e| AppError::JsonSerialize { source: e })?;
+    let bytes =
+        serde_json::to_vec_pretty(&root).map_err(|e| AppError::JsonSerialize { source: e })?;
     crate::config::atomic_write(&path, &bytes)?;
     Ok(PlaintextStripOutcome::Stripped)
 }
@@ -81,8 +81,7 @@ pub(super) fn strip_codex_live_plaintext_in_place(
 ) -> Result<PlaintextStripOutcome, AppError> {
     let auth =
         crate::codex_config::strip_codex_apikey_plaintext_for_onepassword(refs_have_api_key)?;
-    let config =
-        crate::codex_config::strip_codex_config_bearer_token_plaintext(refs_have_api_key)?;
+    let config = crate::codex_config::strip_codex_config_bearer_token_plaintext(refs_have_api_key)?;
     Ok(match (auth, config) {
         (PlaintextStripOutcome::Deferred, _) | (_, PlaintextStripOutcome::Deferred) => {
             PlaintextStripOutcome::Deferred
@@ -1178,6 +1177,51 @@ fn sanitize_codex_config_text(config_text: &str) -> Result<String, AppError> {
     sanitize_codex_config_for_live_write(config_text)
 }
 
+/// F3-7：读取 live 配置原文（`import_default_config` 的读取段），供导入与
+/// 启动明文预检共用，保证两条路径看到的是同一份内容。
+fn read_live_config_for_import(app_type: &AppType) -> Result<Value, AppError> {
+    match app_type {
+        AppType::Codex => crate::codex_config::read_codex_live_settings(),
+        AppType::Claude => {
+            let settings_path = get_claude_settings_path();
+            if !settings_path.exists() {
+                return Err(AppError::localized(
+                    "claude.live.missing",
+                    "Claude Code 配置文件不存在",
+                    "Claude settings file is missing",
+                ));
+            }
+            let mut v = read_json_file::<Value>(&settings_path)?;
+            let _ = normalize_claude_models_in_value(&mut v);
+            Ok(v)
+        }
+        AppType::Pi => {
+            unreachable!("additive mode apps are handled by early return")
+        }
+    }
+}
+
+/// F3-7（P1-9 / 原则 5）：1P 模式启动导入预检——live 配置里是否含明文秘密。
+///
+/// 纯提取（`SecretExtractor` 不碰任何存储，0 次 op）：启动自动导入若会把明文写进
+/// vault（`vault.put` → 启动即弹解锁），调用方必须跳过，留给用户手动导入。
+/// 判据与「钥匙类明文」一致：api_key、extra_env、带凭据的 base_url。
+pub fn live_config_has_plaintext_secrets(app_type: AppType) -> Result<bool, AppError> {
+    if app_type.is_additive_mode() {
+        return Ok(false);
+    }
+    let settings_config = read_live_config_for_import(&app_type)?;
+    let extracted =
+        crate::secrets::SecretExtractor::extract("default", &app_type, &settings_config)?;
+    Ok(extracted.secrets.api_key.is_some()
+        || !extracted.secrets.extra_env.is_empty()
+        || extracted
+            .secrets
+            .base_url
+            .as_ref()
+            .is_some_and(|url| crate::secrets::is_credential_bearing_url(url.as_str())))
+}
+
 /// Import default configuration from live files
 ///
 /// Returns `Ok(true)` if a provider was actually imported,
@@ -1197,25 +1241,7 @@ pub fn import_default_config(state: &AppState, app_type: AppType) -> Result<bool
         return Ok(false);
     }
 
-    let settings_config = match app_type {
-        AppType::Codex => crate::codex_config::read_codex_live_settings()?,
-        AppType::Claude => {
-            let settings_path = get_claude_settings_path();
-            if !settings_path.exists() {
-                return Err(AppError::localized(
-                    "claude.live.missing",
-                    "Claude Code 配置文件不存在",
-                    "Claude settings file is missing",
-                ));
-            }
-            let mut v = read_json_file::<Value>(&settings_path)?;
-            let _ = normalize_claude_models_in_value(&mut v);
-            v
-        }
-        AppType::Pi => {
-            unreachable!("additive mode apps are handled by early return")
-        }
-    };
+    let settings_config = read_live_config_for_import(&app_type)?;
 
     let mut provider = Provider::with_id("default".to_string());
     // id 与 name 均保持 "default"：展示名由前端 i18n 层负责（见 ProviderCard 的

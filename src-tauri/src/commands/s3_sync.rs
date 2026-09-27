@@ -83,6 +83,18 @@ where
     }
 }
 
+/// F3-1（P1-3）：`fetch_sync_credentials` 是阻塞 vault 往返（1P 模式下是 op 子进程、
+/// 最长 120 秒），async 命令里必须包进 `spawn_blocking`。
+async fn fetch_creds_blocking(
+    vault: &std::sync::Arc<dyn crate::secrets::SecretVault>,
+) -> Result<crate::secrets::SyncCredentials, String> {
+    let vault = vault.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::secrets::fetch_sync_credentials(&vault))
+        .await
+        .map_err(|e| format!("读取同步凭据任务执行失败: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn s3_test_connection(
     state: State<'_, AppState>,
@@ -99,7 +111,7 @@ pub async fn s3_test_connection(
         }
         _ => None,
     };
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     s3_sync_service::check_connection(&creds, &settings, override_credentials)
         .await
         .map_err(|e| e.to_string())?;
@@ -112,7 +124,7 @@ pub async fn s3_test_connection(
 #[tauri::command]
 pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let kek_cache = state.sync_kek.clone();
     let mut settings = require_enabled_s3_settings()?;
 
@@ -134,7 +146,7 @@ pub async fn s3_sync_download(
     allow_rollback: Option<bool>,
 ) -> Result<Value, String> {
     let db = state.db.clone();
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let kek_cache = state.sync_kek.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_s3_settings()?;
@@ -185,12 +197,19 @@ pub async fn s3_sync_save_settings(
     #[allow(non_snake_case)] secretAccessKey: Option<String>,
 ) -> Result<Value, String> {
     // 三态（§5.2.5）：None = 未触碰，保持现值；Some("") = 清空并删除该条；Some(v) = 写入。
-    crate::secrets::store_s3_credentials(
-        &state.vault,
-        &state.db,
-        accessKeyId.as_deref(),
-        secretAccessKey.as_deref(),
-    )
+    // F3-1（P1-3）：写 vault 是阻塞调用（一次 fetch + 一次 put），包进 `spawn_blocking`。
+    let vault = state.vault.clone();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::secrets::store_s3_credentials(
+            &vault,
+            &db,
+            accessKeyId.as_deref(),
+            secretAccessKey.as_deref(),
+        )
+    })
+    .await
+    .map_err(|e| format!("保存 S3 设置任务执行失败: {e}"))?
     .map_err(|e| e.to_string())?;
 
     let existing = settings::get_s3_sync_settings();
@@ -212,7 +231,7 @@ pub async fn s3_sync_save_settings(
 
 #[tauri::command]
 pub async fn s3_sync_fetch_remote_info(state: State<'_, AppState>) -> Result<Value, String> {
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let settings = require_enabled_s3_settings()?;
     let info = s3_sync_service::fetch_remote_info(&creds, &settings)
         .await

@@ -519,6 +519,11 @@ pub struct AppSettings {
     /// 每次启动全量重建，导入成功（或明文消失）后自动出队。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub live_plaintext_pending: Option<Vec<String>>,
+    /// F3-8：删除供应商时 vault.delete 失败（锁定/断网）、1P 条目尚未归档的组键
+    /// 清单（`<app>/<id>`）。存本机设置（不随云同步）。供应商照删（D12），
+    /// 条目由「清理孤儿凭据」动作稍后归档；清理成功后出队。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onepassword_orphans: Option<Vec<String>>,
 
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
@@ -593,6 +598,7 @@ impl Default for AppSettings {
             secrets_import_pending: None,
             pi_plaintext_pending: None,
             live_plaintext_pending: None,
+            onepassword_orphans: None,
         }
     }
 }
@@ -1278,6 +1284,21 @@ pub fn set_live_plaintext_pending(items: Vec<String>) -> Result<(), AppError> {
     let items = if items.is_empty() { None } else { Some(items) };
     mutate_settings(|settings| {
         settings.live_plaintext_pending = items;
+    })
+}
+
+// ===== 1Password 孤儿条目（F3-8，本机设置） =====
+
+/// F3-8：读取「vault.delete 失败、条目待归档」的组键清单（`<app>/<id>`）。
+pub fn get_onepassword_orphans() -> Vec<String> {
+    get_settings().onepassword_orphans.unwrap_or_default()
+}
+
+/// F3-8：写入清单。空清单 = 全部归档成功。
+pub fn set_onepassword_orphans(items: Vec<String>) -> Result<(), AppError> {
+    let items = if items.is_empty() { None } else { Some(items) };
+    mutate_settings(|settings| {
+        settings.onepassword_orphans = items;
     })
 }
 

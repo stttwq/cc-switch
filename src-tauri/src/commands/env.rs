@@ -55,14 +55,21 @@ pub fn env_delivery_conflicts(
     }
 }
 
+/// F3-2（P1-4）：接管会 `fetch_provider_secrets`（1P 模式下是阻塞子进程、可能弹解锁），
+/// 必须 async + `spawn_blocking`。严格模式（含 1P 恒严格）下服务层直接拒绝（F3-3）。
 #[tauri::command]
-pub fn env_delivery_adopt(
+pub async fn env_delivery_adopt(
     state: State<'_, AppState>,
     app: String,
     provider_id: String,
     names: Vec<String>,
 ) -> Result<(), String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::adopt_env_vars(state.inner(), &app_type, &provider_id, &names)
-        .map_err(|e| e.to_string())
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ProviderService::adopt_env_vars(&state, &app_type, &provider_id, &names)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("接管环境变量任务执行失败: {e}"))?
 }

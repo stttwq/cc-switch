@@ -119,10 +119,17 @@ pub fn delete_plaintext_backups() -> Result<usize, String> {
 /// 下次启动的 live 重写步骤会自动补完（此时文件通常已不再被 CLI 占用）。
 /// §6.5：live 重写的待补状态。一次性迁移对话框确认之后，失败就再也没人说了——
 /// 设置页高级区常驻这一行，`pending=1` 且有失败项时列出并给「重试」。
+///
+/// F3-4（P1-6）：1P 模式下不走迁移重写流程（不 adopt、不读凭据管理器），
+/// 改为反映 F1-8 的 `live_plaintext_pending` 清单。
 #[tauri::command]
 pub fn get_live_reapply_status(
     state: State<'_, crate::store::AppState>,
 ) -> Result<serde_json::Value, String> {
+    if crate::settings::is_onepassword_backend() {
+        let pending = crate::settings::get_live_plaintext_pending();
+        return Ok(serde_json::json!({ "pending": !pending.is_empty(), "failures": pending }));
+    }
     let pending = state
         .db
         .get_setting("live_reapply_pending")
@@ -145,11 +152,25 @@ pub fn get_live_reapply_status(
 /// §6.5：立刻重跑一次 live 重写 + 投递，供设置页那一行的「立即重试」使用。
 /// 与 `retry_live_reapply`（只置标志、等下次启动）互补：用户已经关掉占用进程或
 /// 解除只读时，不必重启应用。
+///
+/// F3-4（P1-6）：1P 模式下不调用 `reapply_live_after_migration`（它会 fetch 三个
+/// 当前供应商、读凭据管理器做 prune），改为执行 F1-8 的就地剥离并返回待导入清单。
+/// 会触碰 vault 的调用都已在调用方的 async 命令里包进 `spawn_blocking`。
 #[tauri::command]
-pub fn run_live_reapply_now(
+pub async fn run_live_reapply_now(
     state: State<'_, crate::store::AppState>,
 ) -> Result<Vec<String>, String> {
-    crate::services::provider::reapply_live_after_migration(&state).map_err(|e| e.to_string())
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::settings::is_onepassword_backend() {
+            crate::services::provider::strip_current_live_plaintext(&state)
+                .map_err(|e| e.to_string())?;
+            return Ok(crate::settings::get_live_plaintext_pending());
+        }
+        crate::services::provider::reapply_live_after_migration(&state).map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("live 重写任务执行失败: {e}"))?
 }
 
 #[tauri::command]
@@ -160,9 +181,51 @@ pub fn retry_live_reapply(state: State<'_, crate::store::AppState>) -> Result<()
         .map_err(|e| e.to_string())
 }
 
+/// §5.4「清理孤儿凭据」。
+///
+/// F3-2 / F3-8：会触碰 vault（1P 模式下是阻塞 op 子进程），async + `spawn_blocking`。
+/// Windows 模式维持原路径；1P 模式归档「删除供应商时记录的孤儿」+ `confirmedItemIds`
+/// 里用户确认过的候选条目（见 `secrets_list_onepassword_orphans`），不再碰凭据管理器。
 #[tauri::command]
-pub fn secrets_cleanup_orphans(state: State<'_, crate::store::AppState>) -> Result<usize, String> {
-    crate::services::provider::cleanup_orphan_secrets(state.inner()).map_err(|e| e.to_string())
+pub async fn secrets_cleanup_orphans(
+    state: State<'_, crate::store::AppState>,
+    #[allow(non_snake_case)] confirmedItemIds: Option<Vec<String>>,
+) -> Result<usize, String> {
+    let state = state.inner().clone();
+    let confirmed = confirmedItemIds.unwrap_or_default();
+    tauri::async_runtime::spawn_blocking(move || {
+        if crate::settings::is_onepassword_backend() {
+            crate::services::provider::cleanup_onepassword_orphans(&state, &confirmed)
+        } else {
+            crate::services::provider::cleanup_orphan_secrets(&state)
+        }
+    })
+    .await
+    .map_err(|e| format!("清理孤儿凭据任务执行失败: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
+/// F3-8：列出 1Password 里的孤儿条目候选（`op item list --tags cc-switch`，不带
+/// `--reveal`，不弹解锁、不含值），与 DB 对比后交给用户确认。仅 1P 模式可用。
+#[tauri::command]
+pub async fn secrets_list_onepassword_orphans(
+    state: State<'_, crate::store::AppState>,
+) -> Result<Vec<crate::services::provider::OnePasswordOrphan>, String> {
+    if !crate::settings::is_onepassword_backend() {
+        return Err(crate::error::AppError::localized(
+            "onepassword.orphans.not_1p",
+            "仅 1Password 模式下可列出 1Password 孤儿条目",
+            "Listing 1Password orphans is only available in 1Password mode",
+        )
+        .to_string());
+    }
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::provider::list_onepassword_orphans(&state)
+    })
+    .await
+    .map_err(|e| format!("列出 1Password 孤儿条目任务失败: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// 获取 Skills 自动导入（SSOT）迁移结果（若有）。
@@ -2974,9 +3037,8 @@ pub(crate) fn launch_provider_terminal(
                 .get(&enabled_id)
                 .ok_or_else(|| format!("Pi 启用供应商 {enabled_id} 不存在于配置列表"))?;
             // §6.5：每个启用供应商 1 次 fetch（串行，避免并发触发多次授权弹窗）。
-            let secrets =
-                ProviderService::fetch_provider_secrets(state, &app_type, &enabled_id)
-                    .map_err(|e| format!("读取 Pi 供应商 {enabled_id} 凭据失败: {e}"))?;
+            let secrets = ProviderService::fetch_provider_secrets(state, &app_type, &enabled_id)
+                .map_err(|e| format!("读取 Pi 供应商 {enabled_id} 凭据失败: {e}"))?;
             let pairs = ProviderService::provider_env_pairs(
                 &app_type,
                 enabled_provider,

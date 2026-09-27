@@ -91,10 +91,17 @@ pub async fn secrets_import_via_dialog<R: tauri::Runtime>(
 
     // F1-5（D9）：1P 模式导入改写 vault（分组 fetch+put + 登记 secret_refs），
     // 凭据管理器模式维持原路径。
-    let report = if crate::settings::is_onepassword_backend() {
-        crate::secrets::portable::import_to_vault(state.inner(), &bytes, passphrase.as_str())
-            .await
-            .map_err(|e| e.to_string())?
+    // F3-2：1P 分支是阻塞 op 调用，包进 `spawn_blocking`；凭据管理器分支是
+    // async 本地 Win32 调用（无 op 往返），保持原样。
+    let is_1p = crate::settings::is_onepassword_backend();
+    let report = if is_1p {
+        let app_state = state.inner().clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            crate::secrets::portable::import_to_vault(&app_state, &bytes, passphrase.as_str())
+        })
+        .await
+        .map_err(|e| format!("便携包导入任务执行失败: {e}"))?
+        .map_err(|e| e.to_string())?
     } else {
         crate::secrets::portable::import(state.secrets.as_ref(), &bytes, passphrase.as_str())
             .await
@@ -208,10 +215,11 @@ async fn import_config_from_path(
 
 #[tauri::command]
 pub async fn sync_current_providers_live(state: State<'_, AppState>) -> Result<Value, String> {
-    let db = state.db.clone();
-    let secrets = state.secrets.clone();
+    // F3-5（P1-7）：复用运行时 AppState。原先 `AppState::new` 会另起一个新状态——
+    // vault 被重置成 LegacyWindowsVault（1P 模式下守卫直接报错）、切换互斥锁与
+    // KEK 缓存也都脱离运行时实例。
+    let app_state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let app_state = AppState::new(db, secrets);
         ProviderService::sync_current_to_live(&app_state)?;
         Ok::<_, AppError>(json!({
             "success": true,

@@ -232,11 +232,9 @@ impl OnePasswordVault {
         }
     }
 
-    /// 标题命中多个（`ItemConflict`）时：`op item list --tags cc-switch`（不带
-    /// `--reveal`）筛出同标题条目，取 `updated_at` 最新的一条——不弹解锁、不自动归档，
-    /// 只告警（UI 清理由后续阶段提供入口）。找不到同标题条目时返回 `Ok(None)`，
-    /// 调用方按「条目不存在」处理。
-    fn resolve_conflicting_item_id(&self, title: &str) -> Result<Option<String>, VaultError> {
+    /// F3-8：列出 vault 中带 `cc-switch` 标签的全部条目（`op item list`，不带
+    /// `--reveal`，不弹解锁、不含值）。孤儿清理的候选来源。
+    pub(crate) fn list_tagged_items(&self) -> Result<Vec<OpItemListEntry>, VaultError> {
         let args = [
             "item",
             "list",
@@ -251,8 +249,26 @@ impl OnePasswordVault {
             "--no-color",
         ];
         let bytes = self.run_op(&args, None).map_err(RunErr::into_vault)?;
-        let items: Vec<OpItemListEntry> = serde_json::from_slice(&bytes)
-            .map_err(|e| VaultError::Other(format!("parse op item list failed: {e}")))?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| VaultError::Other(format!("parse op item list failed: {e}")))
+    }
+
+    /// F3-8：按 item id 归档条目（用户在 UI 确认过的孤儿）。已不存在视为成功（幂等）。
+    pub(crate) fn archive_item_by_id(&self, item_id: &str) -> Result<(), VaultError> {
+        let args = self.base_delete_args(item_id);
+        match self.run_op(&args, None) {
+            Ok(_) => Ok(()),
+            Err(RunErr::NotFound) => Ok(()),
+            Err(RunErr::Vault(e)) => Err(e),
+        }
+    }
+
+    /// 标题命中多个（`ItemConflict`）时：`op item list --tags cc-switch`（不带
+    /// `--reveal`）筛出同标题条目，取 `updated_at` 最新的一条——不弹解锁、不自动归档，
+    /// 只告警（UI 清理由后续阶段提供入口）。找不到同标题条目时返回 `Ok(None)`，
+    /// 调用方按「条目不存在」处理。
+    fn resolve_conflicting_item_id(&self, title: &str) -> Result<Option<String>, VaultError> {
+        let items = self.list_tagged_items()?;
         let latest = items
             .into_iter()
             .filter(|i| i.title == title && !i.id.is_empty())
@@ -506,15 +522,16 @@ pub struct OpVault {
     pub name: String,
 }
 
-/// F2-2：`op item list --format json` 行（解析同标题冲突用；只要 id / 标题 / 更新时间）。
+/// F2-2：`op item list --format json` 行（解析同标题冲突 / F3-8 孤儿清理用；
+/// 只要 id / 标题 / 更新时间，不含任何值）。
 #[derive(Debug, Clone, Deserialize)]
-struct OpItemListEntry {
+pub(crate) struct OpItemListEntry {
     #[serde(default)]
-    id: String,
+    pub(crate) id: String,
     #[serde(default)]
-    title: String,
+    pub(crate) title: String,
     #[serde(default, rename = "updatedAt")]
-    updated_at: String,
+    pub(crate) updated_at: String,
 }
 
 /// 列出账户（不需解锁）。
@@ -1491,6 +1508,37 @@ mod tests {
             "cc-switch/claude/p1"
         );
         assert_eq!(item_title(&SecretGroup::AppSync), "cc-switch/app/sync");
+    }
+
+    /// F3-8：孤儿清理的原语——`list_tagged_items` 走 `op item list`（不带 --reveal，
+    /// 不含值）；`archive_item_by_id` 按 id 归档（--archive，不走 stdin）。
+    #[test]
+    fn list_tagged_items_and_archive_by_id() {
+        let db = std::sync::Arc::new(crate::database::Database::memory().expect("db"));
+        let list_json = br#"[
+            {"id":"aaa","title":"cc-switch/claude/p1","updatedAt":"2026-01-01T00:00:00Z"},
+            {"id":"bbb","title":"cc-switch/claude/gone","updatedAt":"2026-01-02T00:00:00Z"}
+        ]"#;
+        let runner = std::sync::Arc::new(FakeOpRunner::new(vec![
+            Ok(list_json.to_vec()),
+            Ok(br#"{"id":"bbb"}"#.to_vec()),
+        ]));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acc", "vault", db);
+
+        let items = vault.list_tagged_items().expect("list");
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].id, "aaa");
+        assert_eq!(items[1].title, "cc-switch/claude/gone");
+        // 不带 --reveal：列表调用不需要解锁、不含值。
+        let (args, _) = runner.call(0);
+        assert!(args.iter().all(|a| a != "--reveal"));
+
+        vault.archive_item_by_id("bbb").expect("archive");
+        let (args, stdin) = runner.call(1);
+        assert!(args.iter().any(|a| a == "delete"));
+        assert!(args.iter().any(|a| a == "bbb"));
+        assert!(args.iter().any(|a| a == "--archive"));
+        assert!(stdin.is_none(), "归档不需要 stdin");
     }
 
     #[test]

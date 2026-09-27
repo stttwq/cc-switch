@@ -194,28 +194,41 @@ pub async fn update_provider(
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?
 }
 
+/// F3-2（P1-4）：删除会 `vault.delete`（1P 模式下是阻塞子进程、可能等解锁），
+/// 必须 async + `spawn_blocking`，不能在 IPC 线程上执行。
 #[tauri::command]
-pub fn delete_provider(
+pub async fn delete_provider(
     state: State<'_, AppState>,
     app: String,
     id: String,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::delete(state.inner(), app_type, &id)
-        .map(|_| true)
-        .map_err(|e| e.to_string())
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ProviderService::delete(&state, app_type, &id)
+            .map(|_| true)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("供应商删除任务执行失败: {e}"))?
 }
 
+/// F3-2（P1-4）：Pi 移除同样会走 `vault.delete`（见 `pi::remove`）。
 #[tauri::command]
-pub fn remove_provider_from_live_config(
-    state: tauri::State<'_, AppState>,
+pub async fn remove_provider_from_live_config(
+    state: State<'_, AppState>,
     app: String,
     id: String,
 ) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    ProviderService::remove_from_live_config(state.inner(), app_type, &id)
-        .map(|_| true)
-        .map_err(|e| e.to_string())
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        ProviderService::remove_from_live_config(&state, app_type, &id)
+            .map(|_| true)
+            .map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| format!("供应商移除任务执行失败: {e}"))?
 }
 
 fn switch_provider_internal(
@@ -288,10 +301,20 @@ pub fn import_default_config_test_hook(
     import_default_config_internal(state, app_type)
 }
 
+/// F3-2（P1-4）：1P 模式下导入 live 配置可能 `vault.put`（阻塞子进程、可能弹解锁），
+/// 必须 async + `spawn_blocking`；启动路径由 F3-7 保证 0 次 op。
 #[tauri::command]
-pub fn import_default_config(state: State<'_, AppState>, app: String) -> Result<bool, String> {
+pub async fn import_default_config(
+    state: State<'_, AppState>,
+    app: String,
+) -> Result<bool, String> {
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
-    import_default_config_internal(&state, app_type).map_err(Into::into)
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        import_default_config_internal(&state, app_type).map_err(Into::into)
+    })
+    .await
+    .map_err(|e| format!("导入默认配置任务执行失败: {e}"))?
 }
 
 #[tauri::command]

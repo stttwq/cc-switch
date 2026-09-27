@@ -143,8 +143,8 @@ impl<'a> CredentialMigrator<'a> {
         // §4.3：迁移写入凭据同时登记 secret_refs（列表/校验据此，零 vault 往返）。
         // 在下面获取 conn 锁之前做，避免与同笔事务重入锁。
         for row in &pending {
-            let fields = crate::secrets::SecretBundle::from_provider_secrets(&row.secrets)
-                .field_names();
+            let fields =
+                crate::secrets::SecretBundle::from_provider_secrets(&row.secrets).field_names();
             if fields.is_empty() {
                 continue;
             }

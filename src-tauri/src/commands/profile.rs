@@ -152,19 +152,28 @@ pub fn clear_current_profile(state: State<'_, AppState>, scope: String) -> Resul
 
 /// 应用项目快照（只作用于发起页所属分组内的应用）。
 ///
-/// 注意：必须保持同步命令（跑在 Tauri 线程池）——`ProviderService::switch`
-/// 内部使用 block_on 获取切换锁，放进 async 命令会在运行时线程上 panic。
+/// F3-2（P1-4）：`ProfileService::apply` → `ProviderService::switch` 会取凭据
+/// （1P 模式下是阻塞 op 子进程），改为 async + `spawn_blocking`。`switch` 内部的
+/// block_on 在阻塞线程上执行是安全的（与 `switch_provider` 命令同一模式）。
 #[tauri::command]
-pub fn apply_profile(
+pub async fn apply_profile(
     app: tauri::AppHandle,
     state: State<'_, AppState>,
     id: String,
     scope: String,
 ) -> Result<Vec<String>, String> {
     let scope = ProfileScope::parse(&scope).map_err(|e| e.to_string())?;
-    let warnings = ProfileService::apply(&state, &id, scope).map_err(|e| e.to_string())?;
+    let state = state.inner().clone();
+    let state_for_events = state.clone();
+    let id_for_task = id.clone();
+    let warnings = tauri::async_runtime::spawn_blocking(move || {
+        ProfileService::apply(&state, &id_for_task, scope)
+    })
+    .await
+    .map_err(|e| format!("应用项目快照任务执行失败: {e}"))?
+    .map_err(|e| e.to_string())?;
 
-    emit_profile_apply_events(&app, &state, &id, scope);
+    emit_profile_apply_events(&app, &state_for_events, &id, scope);
 
     Ok(warnings)
 }

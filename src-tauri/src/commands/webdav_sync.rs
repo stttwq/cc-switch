@@ -1,7 +1,6 @@
 #![allow(non_snake_case)]
 
 use serde_json::{json, Value};
-use std::sync::Arc;
 use tauri::State;
 
 use crate::commands::sync_support::{
@@ -89,6 +88,18 @@ where
     }
 }
 
+/// F3-1（P1-3）：`fetch_sync_credentials` 是阻塞 vault 往返（1P 模式下是 op 子进程、
+/// 最长 120 秒），async 命令里必须包进 `spawn_blocking`。
+async fn fetch_creds_blocking(
+    vault: &std::sync::Arc<dyn crate::secrets::SecretVault>,
+) -> Result<crate::secrets::SyncCredentials, String> {
+    let vault = vault.clone();
+    tauri::async_runtime::spawn_blocking(move || crate::secrets::fetch_sync_credentials(&vault))
+        .await
+        .map_err(|e| format!("读取同步凭据任务执行失败: {e}"))?
+        .map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub async fn webdav_test_connection(
     state: State<'_, AppState>,
@@ -97,7 +108,7 @@ pub async fn webdav_test_connection(
 ) -> Result<Value, String> {
     // 三态（§5.2.5）：Some(非空) = 用表单里刚输入、尚未保存的密码试连；否则读保险箱。
     let override_password = password.as_deref().filter(|p| !p.is_empty());
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     webdav_sync_service::check_connection(&creds, &settings, override_password)
         .await
         .map_err(|e| e.to_string())?;
@@ -110,7 +121,7 @@ pub async fn webdav_test_connection(
 #[tauri::command]
 pub async fn webdav_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
     let db = state.db.clone();
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let kek_cache = state.sync_kek.clone();
     let mut settings = require_enabled_webdav_settings()?;
 
@@ -132,7 +143,7 @@ pub async fn webdav_sync_download(
     allow_rollback: Option<bool>,
 ) -> Result<Value, String> {
     let db = state.db.clone();
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let kek_cache = state.sync_kek.clone();
     let app_state_for_sync = state.inner().clone();
     let mut settings = require_enabled_webdav_settings()?;
@@ -179,8 +190,11 @@ pub async fn webdav_sync_download(
 /// `webdav_sync_save_settings` 的可测核心（命令本身只做 `State` 解包与错误转字符串）。
 ///
 /// 三态（§5.2.5）：`None` = 未触碰，保持现值；`Some("")` = 清空并删除凭据；`Some(v)` = 写入。
-async fn save_webdav_settings(
-    vault: &Arc<dyn crate::secrets::SecretVault>,
+///
+/// F3-1（P1-3）：函数内含阻塞 vault 往返（`store_webdav_password`），改为同步函数、
+/// 由调用方包进 `spawn_blocking`，不再以 async 伪装阻塞调用。
+fn save_webdav_settings(
+    vault: &std::sync::Arc<dyn crate::secrets::SecretVault>,
     db: &crate::database::Database,
     settings: WebDavSyncSettings,
     password: Option<&str>,
@@ -210,15 +224,20 @@ pub async fn webdav_sync_save_settings(
     settings: WebDavSyncSettings,
     password: Option<String>,
 ) -> Result<Value, String> {
-    save_webdav_settings(&state.vault, &state.db, settings, password.as_deref())
-        .await
-        .map_err(|e| e.to_string())?;
+    let vault = state.vault.clone();
+    let db = state.db.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        save_webdav_settings(&vault, &db, settings, password.as_deref())
+    })
+    .await
+    .map_err(|e| format!("保存 WebDAV 设置任务执行失败: {e}"))?
+    .map_err(|e| e.to_string())?;
     Ok(json!({ "success": true }))
 }
 
 #[tauri::command]
 pub async fn webdav_sync_fetch_remote_info(state: State<'_, AppState>) -> Result<Value, String> {
-    let creds = crate::secrets::fetch_sync_credentials(&state.vault).map_err(|e| e.to_string())?;
+    let creds = fetch_creds_blocking(&state.vault).await?;
     let settings = require_enabled_webdav_settings()?;
     let info = webdav_sync_service::fetch_remote_info(&creds, &settings)
         .await
@@ -460,20 +479,15 @@ mod tests {
         // P0-1 回归：走命令真正执行的那段代码（含入参三态），而不是绕过命令签名。
         // ① Some(v) → 写入
         save_webdav_settings(&vault, &db(), settings(), Some("secret-password"))
-            .await
             .expect("save should succeed");
         assert_eq!(read_pw(&vault).as_deref(), Some("secret-password"));
 
         // ② None → 保持现值（不能被空值冲掉）
-        save_webdav_settings(&vault, &db(), settings(), None)
-            .await
-            .expect("save should succeed");
+        save_webdav_settings(&vault, &db(), settings(), None).expect("save should succeed");
         assert!(read_pw(&vault).is_some());
 
         // ③ Some("") → 删除条目（清空密码框必须真的删掉）
-        save_webdav_settings(&vault, &db(), settings(), Some(""))
-            .await
-            .expect("save should succeed");
+        save_webdav_settings(&vault, &db(), settings(), Some("")).expect("save should succeed");
         assert!(read_pw(&vault).is_none());
     }
 

@@ -43,6 +43,6 @@ pub use types::Extracted;
 pub use types::ProviderSecrets;
 pub use vault::{
     CountingVault, InMemoryVault, LegacyWindowsVault, SecretBundle, SecretGroup, SecretVault,
-    UnavailableVault, VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX,
-    FIELD_BASE_URL, FIELD_ENV_PREFIX,
+    UnavailableVault, VaultError, VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_E2E_PASSPHRASE,
+    FIELD_APP_PREFIX, FIELD_BASE_URL, FIELD_ENV_PREFIX,
 };

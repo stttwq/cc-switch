@@ -554,21 +554,18 @@ pub(crate) async fn e2e_describe_remote(
     };
     let compatible = outer.db_compat_version == DB_COMPAT_VERSION;
     let (device_name, created_at) = match secrets.e2e_passphrase.clone() {
-        Some(passphrase) => {
-            match crate::services::sync_e2e::derive_kek(&passphrase, &outer.kdf) {
-                Ok(kek) => {
-                    match crate::services::sync_e2e::open_manifest_with_kek(outer.clone(), &kek)
-                    {
-                        Ok(opened) => (
-                            Some(opened.inner.device_name),
-                            Some(opened.inner.created_at),
-                        ),
-                        Err(_) => (None, None),
-                    }
+        Some(passphrase) => match crate::services::sync_e2e::derive_kek(&passphrase, &outer.kdf) {
+            Ok(kek) => {
+                match crate::services::sync_e2e::open_manifest_with_kek(outer.clone(), &kek) {
+                    Ok(opened) => (
+                        Some(opened.inner.device_name),
+                        Some(opened.inner.created_at),
+                    ),
+                    Err(_) => (None, None),
                 }
-                Err(_) => (None, None),
             }
-        }
+            Err(_) => (None, None),
+        },
         _ => (None, None),
     };
     E2eRemoteInfo {
@@ -586,16 +583,13 @@ pub(crate) async fn e2e_describe_remote(
 pub(crate) async fn require_sync_passphrase(
     secrets: &crate::secrets::SyncCredentials,
 ) -> Result<zeroize::Zeroizing<String>, AppError> {
-    secrets
-        .e2e_passphrase
-        .clone()
-        .ok_or_else(|| {
-            localized(
-                "sync.e2e.passphrase_required",
-                "尚未设置同步口令，请在设置的同步加密区设置口令",
-                "Sync passphrase is not set; configure it in the sync encryption settings",
-            )
-        })
+    secrets.e2e_passphrase.clone().ok_or_else(|| {
+        localized(
+            "sync.e2e.passphrase_required",
+            "尚未设置同步口令，请在设置的同步加密区设置口令",
+            "Sync passphrase is not set; configure it in the sync encryption settings",
+        )
+    })
 }
 
 // ─── Transport security (E2E-5) ──────────────────────────────

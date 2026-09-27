@@ -492,8 +492,10 @@ async fn creds_for(
             (access_key_id.to_string(), secret_access_key.to_string())
         }
         None => {
-            let (access_key_id, secret_access_key) =
-                (secrets.s3_access_key_id.clone(), secrets.s3_secret_access_key.clone());
+            let (access_key_id, secret_access_key) = (
+                secrets.s3_access_key_id.clone(),
+                secrets.s3_secret_access_key.clone(),
+            );
             (
                 access_key_id.map(|key| key.to_string()).unwrap_or_default(),
                 secret_access_key

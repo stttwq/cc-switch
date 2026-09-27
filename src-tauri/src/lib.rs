@@ -750,6 +750,27 @@ pub fn run() {
                     continue;
                 }
 
+                // F3-7（P1-9 / 原则 5）：1P 模式下启动不得调 op。live 配置含明文钥匙
+                // 时，自动导入会触发 vault.put（启动即弹解锁）——跳过本次导入并提示，
+                // 由用户通过「导入当前配置」按钮（F3-2 已 async 化）完成导入。
+                if backend_is_1p {
+                    match crate::services::provider::live_config_has_plaintext_secrets(
+                        app_type.clone(),
+                    ) {
+                        Ok(true) => {
+                            log::warn!(
+                                "1Password 模式：{} 的 live 配置含明文钥匙，已跳过启动自动导入（避免启动时请求解锁）；请在供应商列表用「导入当前配置」完成导入",
+                                app_type.as_str()
+                            );
+                            continue;
+                        }
+                        Ok(false) => {}
+                        Err(e) => {
+                            log::debug!("预检 {} 的 live 明文失败: {e}", app_type.as_str())
+                        }
+                    }
+                }
+
                 match crate::services::provider::import_default_config(
                     &app_state,
                     app_type.clone(),
@@ -1076,6 +1097,7 @@ pub fn run() {
             commands::run_live_reapply_now,
             commands::retry_live_reapply,
             commands::secrets_cleanup_orphans,
+            commands::secrets_list_onepassword_orphans,
             commands::get_skills_migration_result,
             commands::get_app_config_path,
             commands::open_app_config_folder,

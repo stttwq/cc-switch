@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Link2,
   UploadCloud,
@@ -254,6 +255,15 @@ export function WebdavSyncSection({
     s3Config?.enabled ? "s3" : "webdav",
   );
   const [pendingSyncType, setPendingSyncType] = useState<SyncType | null>(null);
+
+  // F3-1（D4）：1Password 模式下后台自动同步被整体跳过，开关旁需说明。
+  const [secretBackend, setSecretBackend] = useState<string>("windows");
+  useEffect(() => {
+    invoke<string>("secret_backend_name")
+      .then(setSecretBackend)
+      .catch(() => setSecretBackend("windows"));
+  }, []);
+  const isOnePasswordBackend = secretBackend === "onepassword";
 
   // Sync the selector when settings load asynchronously
   useEffect(() => {
@@ -1175,6 +1185,11 @@ export function WebdavSyncSection({
                 />
               </div>
             </div>
+            {isOnePasswordBackend && (
+              <p className="text-xs text-muted-foreground -mt-2">
+                {t("settings.webdavSync.autoSyncDisabled1P")}
+              </p>
+            )}
           </div>
 
           {/* Last sync time */}
@@ -1466,6 +1481,11 @@ export function WebdavSyncSection({
                 />
               </div>
             </div>
+            {isOnePasswordBackend && (
+              <p className="text-xs text-muted-foreground">
+                {t("settings.s3Sync.autoSyncDisabled1P")}
+              </p>
+            )}
 
             {/* Enabled toggle */}
             <div className="flex items-start gap-4">

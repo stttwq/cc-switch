@@ -6,7 +6,8 @@
 //! [`crate::settings::get_effective_current_provider`]，不新写取值/选取逻辑。
 //!
 //! 退出码分级（写进用户文档，原则 4）：
-//! `0`=成功；`2`=用法/参数错误；`3`=缺密钥（fail-closed）；`4`=DB 版本不符；`5`=库/配置不可用。
+//! `0`=成功；`2`=用法/参数错误；`3`=缺密钥（fail-closed）；`4`=DB 版本不符；`5`=库/配置不可用；
+//! `6`=保险箱锁定/授权被取消（稍后解锁重试）；`7`=保险箱网络不通/超时。
 
 use std::str::FromStr;
 use std::sync::Arc;
@@ -24,6 +25,10 @@ pub const EXIT_USAGE: i32 = 2;
 pub const EXIT_MISSING_KEY: i32 = 3;
 pub const EXIT_DB_VERSION: i32 = 4;
 pub const EXIT_UNAVAILABLE: i32 = 5;
+/// F3-6：1Password 锁定 / 授权被取消——解锁后重试即可，与「缺钥匙」「不可用」区分。
+pub const EXIT_VAULT_LOCKED: i32 = 6;
+/// F3-6：1Password 网络不通 / 请求超时——恢复网络后重试。
+pub const EXIT_VAULT_UNREACHABLE: i32 = 7;
 
 /// 目标 shell。
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -203,8 +208,7 @@ fn build_state() -> Result<AppState, AppError> {
         })?);
         let mut state = AppState::new(db, secrets);
         // §4.2：运行时保险箱按 secret_backend 选择（ccs env / 右键终端也需走 1P）。
-        state.vault =
-            crate::secrets::build_runtime_vault(state.secrets.clone(), state.db.clone());
+        state.vault = crate::secrets::build_runtime_vault(state.secrets.clone(), state.db.clone());
         Ok(state)
     }
     #[cfg(not(windows))]
@@ -275,24 +279,20 @@ pub fn env_command_core(
     let provider = resolve_provider(state, &app_type, provider_id)?;
 
     let mut warnings: Vec<String> = Vec::new();
-    // §6.1/6.5：入口一次 fetch，再交给纯函数。锁定/断网与缺密钥都归一到 fail-closed。
-    let secrets = ProviderService::fetch_provider_secrets(state, &app_type, &provider.id)
-        .map_err(|e| {
-            AppError::localized(
-                "ccs_missing_key",
-                e.to_string(),
-                format!("Failed to read credentials for provider '{}': {}", provider.id, e),
-            )
-        })?;
-    let pending = ProviderService::provider_env_pairs(&app_type, &provider, &secrets, &mut warnings)
-        .map_err(|e| {
-        // 纯函数的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
-        AppError::localized(
-            "ccs_missing_key",
-            e.to_string(),
-            format!("Missing credentials for provider '{}': {}", provider.id, e),
-        )
-    })?;
+    // §6.1/6.5：入口一次 fetch，再交给纯函数。F3-6：fetch 错误保留 vault 分类
+    // （vault_locked / vault_network / …）原样上抛，由 classify_exit 映射成 6 / 7 / 5，
+    // 不再与「缺钥匙」混为一谈；缺钥匙仍由 provider_env_pairs 的错误与 fail-closed 判定负责。
+    let secrets = ProviderService::fetch_provider_secrets(state, &app_type, &provider.id)?;
+    let pending =
+        ProviderService::provider_env_pairs(&app_type, &provider, &secrets, &mut warnings)
+            .map_err(|e| {
+                // 纯函数的唯一 Err 来自 Claude 缺密钥，归一到 fail-closed 退出码 3。
+                AppError::localized(
+                    "ccs_missing_key",
+                    e.to_string(),
+                    format!("Missing credentials for provider '{}': {}", provider.id, e),
+                )
+            })?;
 
     let pending_names: Vec<String> = pending.iter().map(|(k, _)| k.clone()).collect();
 
@@ -481,6 +481,10 @@ pub fn classify_exit(err: &AppError) -> i32 {
             "unsupported_app" | "ccs_usage" => EXIT_USAGE,
             "ccs_missing_key" => EXIT_MISSING_KEY,
             "ccs_db_version" => EXIT_DB_VERSION,
+            // F3-6：vault 错误分级——锁定/取消=6；网络/超时=7；其余（未安装、
+            // 未登录、其它、需重启）按「库/配置不可用」=5。
+            "vault_locked" => EXIT_VAULT_LOCKED,
+            "vault_network" | "vault_timeout" => EXIT_VAULT_UNREACHABLE,
             _ => EXIT_UNAVAILABLE,
         },
         _ => EXIT_UNAVAILABLE,
@@ -556,10 +560,105 @@ mod tests {
             classify_exit(&AppError::localized("ccs_db_version", "z", "e")),
             EXIT_DB_VERSION
         );
+        // F3-6：vault 错误分级 6 / 7 / 5。
+        assert_eq!(
+            classify_exit(&AppError::localized("vault_locked", "z", "e")),
+            EXIT_VAULT_LOCKED
+        );
+        assert_eq!(
+            classify_exit(&AppError::localized("vault_network", "z", "e")),
+            EXIT_VAULT_UNREACHABLE
+        );
+        assert_eq!(
+            classify_exit(&AppError::localized("vault_timeout", "z", "e")),
+            EXIT_VAULT_UNREACHABLE
+        );
+        assert_eq!(
+            classify_exit(&AppError::localized("vault_not_signed_in", "z", "e")),
+            EXIT_UNAVAILABLE
+        );
+        assert_eq!(
+            classify_exit(&AppError::localized("vault_restart_required", "z", "e")),
+            EXIT_UNAVAILABLE
+        );
         assert_eq!(
             classify_exit(&AppError::Database("x".into())),
             EXIT_UNAVAILABLE
         );
+    }
+
+    /// F3-6：fetch 阶段的 vault 错误不再被包成 `ccs_missing_key`——错误码原样
+    /// 透传给 classify_exit（用返回 `vault_locked` 的假 vault 验证整条链路）。
+    #[test]
+    fn env_command_core_preserves_vault_error_classification() {
+        struct LockedVault;
+        impl crate::secrets::SecretVault for LockedVault {
+            fn fetch(
+                &self,
+                _group: &crate::secrets::SecretGroup,
+            ) -> Result<Option<crate::secrets::SecretBundle>, crate::secrets::VaultError>
+            {
+                Err(crate::secrets::VaultError::Locked)
+            }
+            fn put(
+                &self,
+                _group: &crate::secrets::SecretGroup,
+                _bundle: &crate::secrets::SecretBundle,
+            ) -> Result<crate::secrets::VaultRef, crate::secrets::VaultError> {
+                Err(crate::secrets::VaultError::Locked)
+            }
+            fn delete(
+                &self,
+                _group: &crate::secrets::SecretGroup,
+            ) -> Result<(), crate::secrets::VaultError> {
+                Err(crate::secrets::VaultError::Locked)
+            }
+            fn status(&self) -> crate::secrets::VaultStatus {
+                crate::secrets::VaultStatus::Ready
+            }
+            fn vault_id(&self) -> String {
+                String::new()
+            }
+            fn backend_name(&self) -> &'static str {
+                "test"
+            }
+        }
+
+        let db = std::sync::Arc::new(Database::memory().expect("内存库"));
+        let store: std::sync::Arc<dyn crate::secrets::SecretStore> =
+            std::sync::Arc::new(crate::secrets::InMemorySecretStore::new());
+        let mut state = AppState::new(db, store);
+        state.vault = std::sync::Arc::new(LockedVault);
+
+        let provider = crate::provider::Provider::from_parts(
+            "p1".to_string(),
+            "Provider p1".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        state
+            .db
+            .save_provider(AppType::Claude.as_str(), &provider)
+            .expect("写入供应商");
+        state
+            .db
+            .set_current_provider(AppType::Claude.as_str(), "p1")
+            .expect("置当前供应商");
+        // 只写 DB 当前供应商：get_effective_current_provider 在本地 settings 无值时
+        // 回落数据库，测试不必触碰真实 settings.json。
+
+        let err = env_command_core(&state, "claude", None, Shell::PowerShell, false)
+            .expect_err("锁定 vault 必须");
+        assert_eq!(err_code(&err), Some("vault_locked"));
+        assert_eq!(classify_exit(&err), EXIT_VAULT_LOCKED);
+    }
+
+    /// 取 Localized 错误的 key（测试辅助）。
+    fn err_code(err: &AppError) -> Option<&'static str> {
+        match err {
+            AppError::Localized { key, .. } => Some(key),
+            _ => None,
+        }
     }
 
     #[test]

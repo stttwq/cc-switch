@@ -269,7 +269,7 @@ fn group_payload(payload: &PortablePayload) -> GroupedPayload {
 /// 算出 imported / overwritten / unchanged，再以 **merge=false** 的整包 put 一次——
 /// 写入与 `secret_refs` 登记都走统一的 `store_provider_bundle`（供应商组），
 /// AppSync 组就地 upsert `_app/_sync` 引用。绝不触碰凭据管理器。
-pub async fn import_to_vault(
+pub fn import_to_vault(
     state: &crate::store::AppState,
     bundle_bytes: &[u8],
     passphrase: &str,
@@ -715,7 +715,7 @@ mod tests {
         let vault = Arc::new(crate::secrets::InMemoryVault::new());
         state.vault = vault.clone();
 
-        let report = import_to_vault(&state, &bytes, GOOD).await.expect("import");
+        let report = import_to_vault(&state, &bytes, GOOD).expect("import");
         assert_eq!(report.imported, 4, "空 vault 应全部新写入");
         assert_eq!(report.overwritten, 0);
         assert_eq!(report.app_secrets, 1, "webdav 密码属应用级");
@@ -775,8 +775,8 @@ mod tests {
         let vault = Arc::new(crate::secrets::InMemoryVault::new());
         state.vault = vault.clone();
 
-        import_to_vault(&state, &bytes, GOOD).await.expect("first");
-        let second = import_to_vault(&state, &bytes, GOOD).await.expect("second");
+        import_to_vault(&state, &bytes, GOOD).expect("first");
+        let second = import_to_vault(&state, &bytes, GOOD).expect("second");
         // F1-2：base_url 在 vault 侧已拆空，重导时按「新增」计（值仍落在端点表）；
         // 其余三个字段同值计 unchanged。
         assert_eq!(second.unchanged, 3, "vault 侧同值字段全部 unchanged");

@@ -23,8 +23,9 @@ use zeroize::Zeroizing;
 
 // Re-export sub-module functions for external access
 pub use live::{
-    import_default_config, read_live_settings, should_import_default_config_on_startup,
-    sync_current_to_live, update_toml_common_config_snippet,
+    import_default_config, live_config_has_plaintext_secrets, read_live_settings,
+    should_import_default_config_on_startup, sync_current_to_live,
+    update_toml_common_config_snippet,
 };
 
 pub fn import_pi_providers_from_live(state: &AppState) -> Result<usize, AppError> {
@@ -224,9 +225,8 @@ fn import_one_live_plaintext(
                 .unwrap_or_default();
             let auth: Value = serde_json::from_str(&auth_text).unwrap_or(Value::Null);
             let key = auth.get("OPENAI_API_KEY").and_then(Value::as_str);
-            let config_text =
-                std::fs::read_to_string(crate::codex_config::get_codex_config_path())
-                    .unwrap_or_default();
+            let config_text = std::fs::read_to_string(crate::codex_config::get_codex_config_path())
+                .unwrap_or_default();
             let synthetic = serde_json::json!({
                 "auth": { "OPENAI_API_KEY": key },
                 "config": config_text,
@@ -254,11 +254,24 @@ fn import_one_live_plaintext(
         AppType::Codex => live::strip_codex_live_plaintext_in_place(true)?,
         _ => crate::codex_config::PlaintextStripOutcome::Clean,
     };
-    log::info!("✓ 已导入 {}/{id} 的 live 明文并剥离（{outcome:?}）", app_type.as_str());
+    log::info!(
+        "✓ 已导入 {}/{id} 的 live 明文并剥离（{outcome:?}）",
+        app_type.as_str()
+    );
     Ok(true)
 }
 
 pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
+    // F3-8：1P 模式不碰凭据管理器与 known_secret_targets（凭据管理器残留由 F2-1
+    // 的专用按钮处理），改走 1P 孤儿清单 + 用户确认的候选条目归档。
+    if crate::settings::is_onepassword_backend() {
+        return cleanup_onepassword_orphans(state, &[]);
+    }
+    cleanup_windows_orphan_secrets(state)
+}
+
+/// Windows（凭据管理器）模式的孤儿清理——`cleanup_orphan_secrets` 的原有实现。
+fn cleanup_windows_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
     let mut targets = crate::secrets::load_known_targets(state.db.as_ref())?;
     let mut expected = Vec::new();
     for app in [AppType::Claude, AppType::Codex, AppType::Pi] {
@@ -316,6 +329,90 @@ pub fn cleanup_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
         removed += 1;
     }
     crate::secrets::save_known_targets(state.db.as_ref(), &kept)?;
+    Ok(removed)
+}
+
+/// F3-8：1Password 孤儿条目候选（给 UI 确认用；只有条目结构信息，不含值）。
+#[derive(Debug, serde::Serialize)]
+pub struct OnePasswordOrphan {
+    pub item_id: String,
+    pub title: String,
+    pub updated_at: String,
+}
+
+/// F3-8（P1-10）：`op item list --tags cc-switch`（不带 `--reveal`，不弹解锁）与 DB
+/// 对比，列出 vault 里有、DB 里已无对应供应商的孤儿条目候选。用户在 UI 确认后由
+/// [`cleanup_onepassword_orphans`] 归档。`cc-switch/app/sync`（AppSync）始终视为在用。
+pub fn list_onepassword_orphans(state: &AppState) -> Result<Vec<OnePasswordOrphan>, AppError> {
+    let vault = crate::secrets::onepassword_from_settings(state.db.clone())?;
+    let items = vault
+        .list_tagged_items()
+        .map_err(crate::error::AppError::from)?;
+    let mut expected: Vec<String> = Vec::new();
+    for app in [AppType::Claude, AppType::Codex, AppType::Pi] {
+        for id in state.db.get_all_providers(app.as_str())?.keys() {
+            expected.push(format!("cc-switch/{}/{}", app.as_str(), id));
+        }
+    }
+    expected.push("cc-switch/app/sync".to_string());
+    Ok(items
+        .into_iter()
+        .filter(|i| !i.id.is_empty() && !expected.iter().any(|t| t == &i.title))
+        .map(|i| OnePasswordOrphan {
+            item_id: i.id,
+            title: i.title,
+            updated_at: i.updated_at,
+        })
+        .collect())
+}
+
+/// F3-8：1P 模式孤儿清理。两部分：
+/// ① 删除供应商时 `vault.delete` 失败记入 `onepassword_orphans` 的组键——逐组归档，
+///    成功即出队（删除供应商本身已是用户的确认动作，无需再问）；
+/// ② [`list_onepassword_orphans`] 列出、用户在 UI 确认过的条目按 item id 归档。
+/// 返回本次归档的条目数。
+pub fn cleanup_onepassword_orphans(
+    state: &AppState,
+    confirmed_item_ids: &[String],
+) -> Result<usize, AppError> {
+    let mut removed = 0usize;
+
+    // ① 处理删除供应商时记下的孤儿组。
+    let mut orphans = crate::settings::get_onepassword_orphans();
+    let original_count = orphans.len();
+    let mut kept = Vec::new();
+    for key in orphans.drain(..) {
+        let Some((app_str, id)) = key.split_once('/') else {
+            continue;
+        };
+        let Ok(app) = AppType::from_str(app_str) else {
+            log::warn!("1Password 孤儿清单里有无法解析的组键 {key}，保留待人工处理");
+            kept.push(key);
+            continue;
+        };
+        let group = crate::secrets::SecretGroup::provider(app, id);
+        match state.vault.delete(&group) {
+            Ok(()) => removed += 1,
+            Err(e) => {
+                log::warn!("归档 1Password 孤儿条目 {key} 失败，保留待重试: {e}");
+                kept.push(key);
+            }
+        }
+    }
+    if kept.len() != original_count {
+        crate::settings::set_onepassword_orphans(kept)?;
+    }
+
+    // ② 用户确认过的候选条目（含与 ① 重叠的：幂等，NotFound 视为成功）。
+    if !confirmed_item_ids.is_empty() {
+        let vault = crate::secrets::onepassword_from_settings(state.db.clone())?;
+        for item_id in confirmed_item_ids {
+            match vault.archive_item_by_id(item_id) {
+                Ok(()) => removed += 1,
+                Err(e) => log::warn!("归档 1Password 孤儿条目 {item_id} 失败: {e}"),
+            }
+        }
+    }
     Ok(removed)
 }
 
@@ -1371,6 +1468,15 @@ impl ProviderService {
         provider_id: &str,
         names: &[String],
     ) -> Result<(), AppError> {
+        // F3-3（P1-5 / 原方案陷阱 §12.8）：严格投递（含 1P 模式恒严格）下钥匙绝不写
+        // `HKCU\Environment`——接管会 sink.set 写入真值，直接拒绝，不 fetch、不写注册表。
+        if crate::settings::strict_for(app_type) {
+            return Err(AppError::localized(
+                "env_delivery.adopt_strict",
+                "严格投递模式下无法接管环境变量：密钥不会写入用户环境变量",
+                "Environment variables cannot be adopted in strict delivery mode",
+            ));
+        }
         use crate::env_delivery::ManagedEnvVars;
         let provider = state
             .db
@@ -2019,8 +2125,35 @@ pub(super) fn delete_provider_secrets(state: &AppState, app_type: &AppType, id: 
     // §6.6：整组删除走 vault（旧后端下 = 逐字段删 + 清 known_secret_targets）。
     // 保持 best-effort：删除失败只告警，不阻断删供应商。
     let group = crate::secrets::SecretGroup::provider(app_type.clone(), id.to_string());
-    if let Err(e) = state.vault.delete(&group) {
-        log::warn!("删除供应商凭据失败 {}/{id}: {e}", app_type.as_str());
+    match state.vault.delete(&group) {
+        Ok(()) => {
+            // F3-8：这次真的清掉了——若此前因删除失败记过孤儿，出队。
+            let key = format!("{}/{}", app_type.as_str(), id);
+            let mut orphans = crate::settings::get_onepassword_orphans();
+            if orphans.iter().any(|k| k == &key) {
+                orphans.retain(|k| k != &key);
+                if let Err(e) = crate::settings::set_onepassword_orphans(orphans) {
+                    log::warn!("更新 1Password 孤儿清单失败: {e}");
+                }
+            }
+        }
+        Err(e) => {
+            // F3-8（D12 / P1-10）：1P 模式下删除失败（锁定/断网/超时）时供应商照删，
+            // 但 1P 里的条目不能当作「已清理」——记入本机设置 `onepassword_orphans`，
+            // 稍后由「清理孤儿凭据」按组归档，避免变成 CCS 看不见的孤儿。
+            // Windows 模式的删除失败维持旧行为（只告警），孤儿清单对它无意义。
+            log::warn!("删除供应商凭据失败 {}/{id}: {e}", app_type.as_str());
+            if crate::settings::is_onepassword_backend() {
+                let key = format!("{}/{}", app_type.as_str(), id);
+                let mut orphans = crate::settings::get_onepassword_orphans();
+                if !orphans.iter().any(|k| k == &key) {
+                    orphans.push(key);
+                    if let Err(err) = crate::settings::set_onepassword_orphans(orphans) {
+                        log::warn!("记录 1Password 孤儿条目失败: {err}");
+                    }
+                }
+            }
+        }
     }
     // §4.3：同步抹掉引用行（best-effort）。
     if let Err(e) = state.db.delete_secret_ref(app_type.as_str(), id) {
@@ -3281,7 +3414,10 @@ mod onepassword_live_strip_tests {
     fn strip_leaves_clean_live_files_byte_identical() {
         let home = TempHome::new("clean");
         let claude = home.write(".claude/settings.json", "{\n  \"model\": \"opus\"\n}");
-        let config = home.write(".codex/config.toml", "# keep\n[model_providers.a]\nname = \"A\"\n");
+        let config = home.write(
+            ".codex/config.toml",
+            "# keep\n[model_providers.a]\nname = \"A\"\n",
+        );
         let (state, counting) = strip_state(false);
 
         strip_current_live_plaintext(&state).expect("strip");
@@ -3305,7 +3441,10 @@ mod onepassword_live_strip_tests {
     fn strip_removes_only_sensitive_keys_when_backup_exists() {
         let home = TempHome::new("strip");
         let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
-        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        home.write(
+            ".codex/auth.json",
+            r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#,
+        );
         let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
         let (state, _counting) = strip_state(true);
 
@@ -3333,26 +3472,31 @@ mod onepassword_live_strip_tests {
     fn strip_defers_and_keeps_plaintext_when_no_backup() {
         let home = TempHome::new("defer");
         let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
-        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        home.write(
+            ".codex/auth.json",
+            r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#,
+        );
         let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
         let (state, counting) = strip_state(false);
 
         strip_current_live_plaintext(&state).expect("strip");
 
         // 文件全部原样（含明文），pending 有记录，op 零调用。
-        assert!(
-            std::fs::read_to_string(&claude)
-                .expect("read")
-                .contains("sk-claude-plain")
-        );
-        assert!(
-            std::fs::read_to_string(&config)
-                .expect("read")
-                .contains("sk-codex-plain")
-        );
+        assert!(std::fs::read_to_string(&claude)
+            .expect("read")
+            .contains("sk-claude-plain"));
+        assert!(std::fs::read_to_string(&config)
+            .expect("read")
+            .contains("sk-codex-plain"));
         let pending = crate::settings::get_live_plaintext_pending();
-        assert!(pending.contains(&"claude/p1".to_string()), "pending: {pending:?}");
-        assert!(pending.contains(&"codex/c1".to_string()), "pending: {pending:?}");
+        assert!(
+            pending.contains(&"claude/p1".to_string()),
+            "pending: {pending:?}"
+        );
+        assert!(
+            pending.contains(&"codex/c1".to_string()),
+            "pending: {pending:?}"
+        );
         assert_eq!(counting.fetch_count(), 0);
         assert_eq!(counting.put_count(), 0);
     }
@@ -3362,7 +3506,10 @@ mod onepassword_live_strip_tests {
     fn import_moves_live_plaintext_into_vault_then_strips() {
         let home = TempHome::new("import");
         let claude = home.write(".claude/settings.json", CLAUDE_DIRTY);
-        home.write(".codex/auth.json", r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#);
+        home.write(
+            ".codex/auth.json",
+            r#"{"OPENAI_API_KEY": "sk-codex-plain"}"#,
+        );
         let config = home.write(".codex/config.toml", CODEX_CONFIG_DIRTY);
         let (state, counting) = strip_state(false);
         strip_current_live_plaintext(&state).expect("strip → deferred");
@@ -3381,11 +3528,9 @@ mod onepassword_live_strip_tests {
             assert!(bundle.get("api_key").is_some(), "{app:?}/{id} 缺 api_key");
         }
         // live 已剥离、注释与其它键保留。
-        assert!(
-            !std::fs::read_to_string(&claude)
-                .expect("read")
-                .contains("sk-claude-plain")
-        );
+        assert!(!std::fs::read_to_string(&claude)
+            .expect("read")
+            .contains("sk-claude-plain"));
         let config_after = std::fs::read_to_string(&config).expect("read");
         assert!(!config_after.contains("sk-codex-plain"));
         assert!(config_after.contains("# user comment"));
@@ -3399,5 +3544,177 @@ mod onepassword_live_strip_tests {
         );
         // pending 清空。
         assert!(crate::settings::get_live_plaintext_pending().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod f3_boundary_tests {
+    //! F3 回归：线程/命令边界与孤儿处理（P1-4 / P1-5 / P1-10）。
+    use super::*;
+    use crate::secrets::{
+        CountingVault, InMemoryVault, SecretBundle, SecretGroup, SecretStore, SecretVault,
+        VaultError, VaultRef, VaultStatus,
+    };
+    use serial_test::serial;
+    use std::sync::Arc;
+
+    /// 隔离本机设置文件（`onepassword_orphans` 等本机标记的落盘路径）。
+    struct TempHome {
+        dir: std::path::PathBuf,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("cc-switch-f3-{tag}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".cc-switch")).expect("mkdir");
+            let prev = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", &dir);
+            crate::settings::update_settings(crate::settings::AppSettings::default())
+                .expect("reset settings");
+            Self { dir, prev }
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// delete 恒失败的 vault（模拟 1P 锁定/断网）。
+    struct FailingDeleteVault {
+        inner: Arc<InMemoryVault>,
+        delete_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl FailingDeleteVault {
+        fn new() -> Self {
+            Self {
+                inner: Arc::new(InMemoryVault::new()),
+                delete_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl SecretVault for FailingDeleteVault {
+        fn fetch(&self, group: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
+            self.inner.fetch(group)
+        }
+        fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
+            self.inner.put(group, bundle)
+        }
+        fn delete(&self, _group: &SecretGroup) -> Result<(), VaultError> {
+            self.delete_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Err(VaultError::Locked)
+        }
+        fn status(&self) -> VaultStatus {
+            VaultStatus::Ready
+        }
+        fn vault_id(&self) -> String {
+            String::new()
+        }
+        fn backend_name(&self) -> &'static str {
+            "failing-delete"
+        }
+    }
+
+    /// F3-8（P1-10 / D12）：vault.delete 失败时供应商侧照删 best-effort，但组键必须
+    /// 记入 `onepassword_orphans`（不能当作「已清理」）；vault 可用后由清理动作出队。
+    #[test]
+    #[serial]
+    fn delete_provider_secrets_records_orphan_when_delete_fails() {
+        let _home = TempHome::new("orphan-record");
+        // 孤儿记录只在 1P 模式下生效（见 delete_provider_secrets 的门控）。
+        crate::settings::mutate_settings(|s| s.secret_backend = Some("onepassword".to_string()))
+            .expect("set backend");
+        let store: Arc<dyn SecretStore> = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let failing = Arc::new(FailingDeleteVault::new());
+        state.vault = failing.clone();
+
+        super::delete_provider_secrets(&state, &AppType::Claude, "p1");
+        assert_eq!(
+            failing
+                .delete_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            1
+        );
+        assert_eq!(
+            crate::settings::get_onepassword_orphans(),
+            vec!["claude/p1".to_string()],
+            "删除失败的组必须记孤儿"
+        );
+
+        // vault 恢复可用后：清理动作归档孤儿并出队。
+        state.vault = Arc::new(InMemoryVault::new());
+        let removed = super::cleanup_onepassword_orphans(&state, &[]).expect("cleanup");
+        assert_eq!(removed, 1);
+        assert!(crate::settings::get_onepassword_orphans().is_empty());
+    }
+
+    /// F3-8：删除成功时不应残留孤儿记录（此前失败过、本次重删成功的组出队）。
+    #[test]
+    #[serial]
+    fn delete_provider_secrets_drops_orphan_record_on_success() {
+        let _home = TempHome::new("orphan-clear");
+        let store: Arc<dyn SecretStore> = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        state.vault = Arc::new(InMemoryVault::new());
+        crate::settings::set_onepassword_orphans(vec!["claude/p1".to_string()])
+            .expect("seed orphans");
+
+        super::delete_provider_secrets(&state, &AppType::Claude, "p1");
+        assert!(crate::settings::get_onepassword_orphans().is_empty());
+    }
+
+    /// F3-3（P1-5 / 陷阱 §12.8）：严格模式（默认开，1P 恒严格）下 `adopt_env_vars`
+    /// 直接拒绝——不 fetch、不写注册表。
+    #[test]
+    #[serial]
+    fn adopt_env_vars_rejected_in_strict_mode_without_fetch() {
+        let _home = TempHome::new("adopt-strict");
+        assert!(
+            crate::settings::strict_for(&AppType::Claude),
+            "默认设置应为严格投递"
+        );
+
+        let store: Arc<dyn SecretStore> = Arc::new(crate::secrets::InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        let provider = Provider::from_parts(
+            "p1".to_string(),
+            "P1".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        state
+            .db
+            .save_provider(AppType::Claude.as_str(), &provider)
+            .expect("seed provider");
+
+        let err = ProviderService::adopt_env_vars(
+            &state,
+            &AppType::Claude,
+            "p1",
+            &["ANTHROPIC_AUTH_TOKEN".to_string()],
+        )
+        .expect_err("严格模式必须拒绝");
+        assert!(
+            matches!(&err, crate::error::AppError::Localized { key, .. } if *key == "env_delivery.adopt_strict"),
+            "错误应为 env_delivery.adopt_strict，实际: {err:?}"
+        );
+        assert_eq!(counting.fetch_count(), 0, "拒绝路径不得触发任何取钥匙");
     }
 }

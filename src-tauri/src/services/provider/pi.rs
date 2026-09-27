@@ -462,7 +462,12 @@ fn import_one_provider(state: &AppState, id: &str) -> Result<bool, AppError> {
     //    非严格模式（凭据管理器）才真正把变量写入 HKCU\Environment。
     if in_native {
         let mut delivered = SwitchResult::default();
-        ProviderService::deliver_env_credentials_pub(state, &AppType::Pi, &provider, &mut delivered)?;
+        ProviderService::deliver_env_credentials_pub(
+            state,
+            &AppType::Pi,
+            &provider,
+            &mut delivered,
+        )?;
         for warning in &delivered.warnings {
             log::warn!("导入 Pi 供应商后投递环境变量的提醒: {warning}");
         }
@@ -638,7 +643,10 @@ mod plaintext_pending_tests {
             "live 应改写为 $VAR 引用: {live}"
         );
         assert!(!live.contains("sk-plain-pi-1"), "live 明文必须消失: {live}");
-        assert!(live.contains("https://x.example/v1"), "baseUrl 保留: {live}");
+        assert!(
+            live.contains("https://x.example/v1"),
+            "baseUrl 保留: {live}"
+        );
         // DB 行已入库且剥离明文。
         let row = state
             .db
@@ -671,17 +679,22 @@ mod plaintext_pending_tests {
         sync_native_locked(&state, &read_native()).expect("sync");
 
         // 凭据管理器（此处为内存替身）收到钥匙。
-        let key = futures::executor::block_on(store.get(&SecretTarget::provider_api_key(
-            AppType::Pi,
-            "pi-one",
-        )))
+        let key = futures::executor::block_on(
+            store.get(&SecretTarget::provider_api_key(AppType::Pi, "pi-one")),
+        )
         .expect("get")
         .expect("Windows 模式钥匙应照常落本地存储");
         assert_eq!(key.as_str(), "sk-plain-pi-1");
         // live 已改写为 $VAR 引用，DB 行已剥离入库，无 pending。
         let live = std::fs::read_to_string(&path).expect("read live");
-        assert!(live.contains("$CC_SWITCH_PI_PI_ONE_API_KEY"), "live: {live}");
-        assert!(live.contains("https://x.example/v1"), "baseUrl 保留: {live}");
+        assert!(
+            live.contains("$CC_SWITCH_PI_PI_ONE_API_KEY"),
+            "live: {live}"
+        );
+        assert!(
+            live.contains("https://x.example/v1"),
+            "baseUrl 保留: {live}"
+        );
         let row = state
             .db
             .get_provider_by_id("pi-one", PI_APP)
