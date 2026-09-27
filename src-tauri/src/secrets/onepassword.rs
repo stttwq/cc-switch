@@ -106,21 +106,32 @@ fn strip_unc(path: PathBuf) -> PathBuf {
 }
 
 /// 1Password 后端（生产唯一实现）。
+///
+/// F2-2：持有 `Arc<Database>`，`fetch` / `put` / `delete` 先查 `secret_refs`——
+/// `vault_id` 与当前配置一致且 `item_id` 是真实 1P id 时按 id 直达（标题只作兜底），
+/// 避免同名条目（用户手工复制、历史超时重复）把读取带偏（原方案 §4.3 / P1-2）。
 pub struct OnePasswordVault {
     runner: Arc<dyn OpRunner>,
     account: String,
     vault: String,
+    db: Arc<crate::database::Database>,
 }
 
 /// 串行化所有 `op` 调用（进程全局）：并发会叠加多个授权弹窗（§12.6）。
 static OP_LOCK: Mutex<()> = Mutex::new(());
 
 impl OnePasswordVault {
-    pub fn new(op_path: PathBuf, account: impl Into<String>, vault: impl Into<String>) -> Self {
+    pub fn new(
+        op_path: PathBuf,
+        account: impl Into<String>,
+        vault: impl Into<String>,
+        db: Arc<crate::database::Database>,
+    ) -> Self {
         Self {
             runner: Arc::new(ProcessOpRunner::new(op_path)),
             account: account.into(),
             vault: vault.into(),
+            db,
         }
     }
 
@@ -130,11 +141,13 @@ impl OnePasswordVault {
         runner: Arc<dyn OpRunner>,
         account: impl Into<String>,
         vault: impl Into<String>,
+        db: Arc<crate::database::Database>,
     ) -> Self {
         Self {
             runner,
             account: account.into(),
             vault: vault.into(),
+            db,
         }
     }
 
@@ -144,11 +157,12 @@ impl OnePasswordVault {
         self.runner.run(args, stdin)
     }
 
-    fn base_read_args<'a>(&'a self, title: &'a str) -> Vec<&'a str> {
+    /// `op item get` 的公共参数；`reference` 可以是条目 id（F2-2 直达）或标题（兜底）。
+    fn base_read_args<'a>(&'a self, reference: &'a str) -> Vec<&'a str> {
         vec![
             "item",
             "get",
-            title,
+            reference,
             "--vault",
             &self.vault,
             "--account",
@@ -159,6 +173,166 @@ impl OnePasswordVault {
             "--no-color",
         ]
     }
+
+    /// `op item delete`（归档）的公共参数；`reference` 同上。
+    fn base_delete_args<'a>(&'a self, reference: &'a str) -> Vec<&'a str> {
+        vec![
+            "item",
+            "delete",
+            reference,
+            "--vault",
+            &self.vault,
+            "--account",
+            &self.account,
+            "--archive",
+            "--no-color",
+        ]
+    }
+
+    // ─── F2-2：item_id 直达 / 标题兜底 / 同名冲突取最新 ─────────
+
+    /// 从 `secret_refs` 读出该组已登记的真实 item id（vault 一致且非占位形式）；
+    /// 引用行缺失、vault 不一致或 item_id 是占位（空串 / `provider/<app>/<id>` 等
+    /// v20 回填与旧后端写入的形式，§12.9）时返回 `None`。
+    fn ref_item_id(&self, group: &SecretGroup) -> Option<String> {
+        let (app, provider) = group.ref_key();
+        let (vault_id, item_id) = self
+            .db
+            .get_secret_ref_identity(&app, &provider)
+            .ok()
+            .flatten()?;
+        if vault_id != self.vault || is_placeholder_item_id(&item_id, group) {
+            return None;
+        }
+        Some(item_id)
+    }
+
+    /// 标题兜底（或 id 失效后按标题重找）命中条目后，把真实 item id 回写引用行：
+    /// 行已存在只修 id（字段清单保持原样）；无行则用 fetch 回的字段清单整行登记。
+    fn repair_ref(&self, group: &SecretGroup, item_id: &str, bundle: &SecretBundle) {
+        let (app, provider) = group.ref_key();
+        match self
+            .db
+            .repair_secret_ref_item_id(&app, &provider, &self.vault, item_id)
+        {
+            Ok(true) => {}
+            Ok(false) if !bundle.is_empty() => {
+                if let Err(e) = self.db.upsert_secret_ref(
+                    &app,
+                    &provider,
+                    &self.vault,
+                    item_id,
+                    &bundle.field_names(),
+                ) {
+                    log::warn!("回写 secret_ref 失败（不影响本次读取）: {e}");
+                }
+            }
+            Ok(false) => {}
+            Err(e) => log::warn!("回写 secret_ref 失败（不影响本次读取）: {e}"),
+        }
+    }
+
+    /// 标题命中多个（`ItemConflict`）时：`op item list --tags cc-switch`（不带
+    /// `--reveal`）筛出同标题条目，取 `updated_at` 最新的一条——不弹解锁、不自动归档，
+    /// 只告警（UI 清理由后续阶段提供入口）。找不到同标题条目时返回 `Ok(None)`，
+    /// 调用方按「条目不存在」处理。
+    fn resolve_conflicting_item_id(&self, title: &str) -> Result<Option<String>, VaultError> {
+        let args = [
+            "item",
+            "list",
+            "--vault",
+            &self.vault,
+            "--account",
+            &self.account,
+            "--tags",
+            OP_TAG,
+            "--format",
+            "json",
+            "--no-color",
+        ];
+        let bytes = self.run_op(&args, None).map_err(RunErr::into_vault)?;
+        let items: Vec<OpItemListEntry> = serde_json::from_slice(&bytes)
+            .map_err(|e| VaultError::Other(format!("parse op item list failed: {e}")))?;
+        let latest = items
+            .into_iter()
+            .filter(|i| i.title == title && !i.id.is_empty())
+            .max_by(|a, b| a.updated_at.cmp(&b.updated_at));
+        match latest {
+            Some(item) => {
+                log::warn!(
+                    "1Password 中存在同标题条目，已取最近更新的条目读取；请在 1Password 中清理重复条目（仅结构定位，不含值）"
+                );
+                Ok(Some(item.id))
+            }
+            None => Ok(None),
+        }
+    }
+
+    /// F2-2 读取主路径：id 直达 → 标题兜底 → 同名冲突取最新。命中时返回
+    /// 整包、成功那次 `op item get` 的原文（put 的 edit stdin 必须基于 op 返回的
+    /// 完整条目 JSON），以及「需要回写 ref 的 item id」（引用直达命中时为 `None`）。
+    fn fetch_item_resolved(
+        &self,
+        group: &SecretGroup,
+        title: &str,
+    ) -> Result<Option<FetchedItem>, VaultError> {
+        // 1) 引用行里的真实 item id 直达。
+        if let Some(id) = self.ref_item_id(group) {
+            match self.run_op(&self.base_read_args(&id), None) {
+                Ok(raw) => {
+                    let bundle = parse_item_bundle(&raw)?;
+                    return Ok(Some(FetchedItem {
+                        bundle,
+                        item_id: None,
+                        raw,
+                    }));
+                }
+                // id 失效（条目被删/换 vault）：按标题兜底一次。
+                Err(RunErr::NotFound) => {}
+                Err(RunErr::Vault(e)) => return Err(e),
+            }
+        }
+        // 2) 标题兜底。
+        match self.run_op(&self.base_read_args(title), None) {
+            Ok(raw) => {
+                let bundle = parse_item_bundle(&raw)?;
+                Ok(Some(FetchedItem {
+                    bundle,
+                    item_id: parse_item_id(&raw),
+                    raw,
+                }))
+            }
+            Err(RunErr::NotFound) => Ok(None),
+            // 3) 同标题多条：列条目取最新的一条按 id 读取。
+            Err(RunErr::Vault(VaultError::ItemConflict)) => {
+                let Some(id) = self.resolve_conflicting_item_id(title)? else {
+                    return Ok(None);
+                };
+                match self.run_op(&self.base_read_args(&id), None) {
+                    Ok(raw) => {
+                        let bundle = parse_item_bundle(&raw)?;
+                        Ok(Some(FetchedItem {
+                            bundle,
+                            item_id: Some(id),
+                            raw,
+                        }))
+                    }
+                    Err(RunErr::NotFound) => Ok(None),
+                    Err(RunErr::Vault(e)) => Err(e),
+                }
+            }
+            Err(RunErr::Vault(e)) => Err(e),
+        }
+    }
+}
+
+/// F2-2：一次成功定位的条目。
+struct FetchedItem {
+    bundle: SecretBundle,
+    /// 需要回写 `secret_refs` 的 item id（`None` = 引用直达命中，无需回写）。
+    item_id: Option<String>,
+    /// 成功那次 `op item get --format json` 的 stdout 原文。
+    raw: Zeroizing<Vec<u8>>,
 }
 
 /// `op` 调用抽象（F0-1）：`OnePasswordVault` 经它执行 `op`，生产实现是
@@ -329,6 +503,17 @@ pub struct OpVault {
     pub name: String,
 }
 
+/// F2-2：`op item list --format json` 行（解析同标题冲突用；只要 id / 标题 / 更新时间）。
+#[derive(Debug, Clone, Deserialize)]
+struct OpItemListEntry {
+    #[serde(default)]
+    id: String,
+    #[serde(default)]
+    title: String,
+    #[serde(default, rename = "updatedAt")]
+    updated_at: String,
+}
+
 /// 列出账户（不需解锁）。
 pub fn list_accounts(op_path: &Path) -> Result<Vec<OpAccount>, VaultError> {
     let out = exec_op(
@@ -421,6 +606,13 @@ fn is_managed_field(label: &str) -> bool {
         || label == FIELD_BASE_URL
         || label.starts_with(FIELD_ENV_PREFIX)
         || label.starts_with(FIELD_APP_PREFIX)
+}
+
+/// F2-1 / 陷阱 9：item_id 是否为「占位形式」——空串、或 v20 回填与旧后端写入的
+/// `provider/<app>/<id>` / `app/sync`（即 [`SecretGroup::key`]）。这些不能当作
+/// 1P 的 item id 使用。
+fn is_placeholder_item_id(item_id: &str, group: &SecretGroup) -> bool {
+    item_id.is_empty() || item_id == group.key()
 }
 
 // ─── op 条目 JSON（读） ──────────────────────────────────────
@@ -522,7 +714,11 @@ fn apply_managed_fields_to_item(item: &mut serde_json::Value, bundle: &SecretBun
     };
     // 先更新已存在的托管字段，非托管字段不动。
     for field in fields.iter_mut() {
-        let Some(label) = field.get("label").and_then(|l| l.as_str()).map(str::to_string) else {
+        let Some(label) = field
+            .get("label")
+            .and_then(|l| l.as_str())
+            .map(str::to_string)
+        else {
             continue;
         };
         if let Some(value) = bundle.get(&label) {
@@ -631,10 +827,15 @@ fn classify_stderr(stderr: &str) -> RunErr {
 impl SecretVault for OnePasswordVault {
     fn fetch(&self, group: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
         let title = item_title(group);
-        match self.run_op(&self.base_read_args(&title), None) {
-            Ok(bytes) => Ok(Some(parse_item_bundle(&bytes)?)),
-            Err(RunErr::NotFound) => Ok(None),
-            Err(RunErr::Vault(e)) => Err(e),
+        match self.fetch_item_resolved(group, &title)? {
+            None => Ok(None),
+            Some(fetched) => {
+                // F2-2：标题兜底 / 冲突取最新命中条目后，把真实 item id 回写引用行。
+                if let Some(id) = &fetched.item_id {
+                    self.repair_ref(group, id, &fetched.bundle);
+                }
+                Ok(Some(fetched.bundle))
+            }
         }
     }
 
@@ -646,8 +847,11 @@ impl SecretVault for OnePasswordVault {
         // （CCS 视为没钥匙），每次覆盖写还在归档里多留一份旧钥匙副本，item id 也
         // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
         // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
-        match self.run_op(&self.base_read_args(&title), None) {
-            Err(RunErr::NotFound) => {
+        // F2-2：读取定位按「id 直达 → 标题兜底 → 同名冲突取最新」。
+        let fetched = self.fetch_item_resolved(group, &title)?;
+
+        let item_id = match fetched {
+            None => {
                 // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
                 let template = build_template_json(&title, bundle)?;
                 let create_args = [
@@ -665,25 +869,27 @@ impl SecretVault for OnePasswordVault {
                 let out = self
                     .run_op(&create_args, Some(&template))
                     .map_err(RunErr::into_vault)?;
-                let item_id = parse_item_id(&out).unwrap_or_default();
-                Ok(VaultRef {
-                    vault_id: self.vault.clone(),
-                    item_id,
-                    fields: bundle.field_names(),
-                })
+                parse_item_id(&out).unwrap_or_default()
             }
-            Err(e) => Err(e.into_vault()),
-            Ok(bytes) => {
-                // 已存在：在返回的条目 JSON 上就地改托管字段后整份走 stdin edit。
-                let item_id = parse_item_id(&bytes)
-                    .ok_or_else(|| VaultError::Other("op 条目缺少 id，无法就地编辑".to_string()))?;
-                let mut item: serde_json::Value = serde_json::from_slice(&bytes)
+            Some(fetched) => {
+                // 已存在：定位到的 item id（标题兜底命中时先回写引用行）。
+                let item_id = match fetched.item_id {
+                    Some(id) => {
+                        self.repair_ref(group, &id, &fetched.bundle);
+                        id
+                    }
+                    None => self.ref_item_id(group).ok_or_else(|| {
+                        VaultError::Other("op 条目缺少 id，无法就地编辑".to_string())
+                    })?,
+                };
+                // 在条目 JSON 原文上就地改托管字段后整份走 stdin edit。
+                let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
                     .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
                 apply_managed_fields_to_item(&mut item, bundle);
-                let edited_input = Zeroizing::new(
-                    serde_json::to_vec(&item)
-                        .map_err(|e| VaultError::Other(format!("serialize op item failed: {e}")))?,
-                );
+                let edited_input =
+                    Zeroizing::new(serde_json::to_vec(&item).map_err(|e| {
+                        VaultError::Other(format!("serialize op item failed: {e}"))
+                    })?);
                 // edit 后立即 drop 反序列化用的 Value（内存卫生）。
                 drop(item);
                 let edit_args = [
@@ -718,34 +924,47 @@ impl SecretVault for OnePasswordVault {
                         delete_field_arg.as_str(),
                         "--no-color",
                     ];
-                    self.run_op(&delete_args, None).map_err(RunErr::into_vault)?;
+                    self.run_op(&delete_args, None)
+                        .map_err(RunErr::into_vault)?;
                 }
-                Ok(VaultRef {
-                    vault_id: self.vault.clone(),
-                    item_id,
-                    fields: bundle.field_names(),
-                })
+                item_id
             }
-        }
+        };
+        Ok(VaultRef {
+            vault_id: self.vault.clone(),
+            item_id,
+            fields: bundle.field_names(),
+        })
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
         let title = item_title(group);
-        let args = [
-            "item",
-            "delete",
-            &title,
-            "--vault",
-            &self.vault,
-            "--account",
-            &self.account,
-            "--archive",
-            "--no-color",
-        ];
+
+        // F2-2：id 直达，失效时按标题兜底一次；同标题多条取最新的一条按 id 删。
+        // 已不存在视为删除成功（幂等）。
+        if let Some(id) = self.ref_item_id(group) {
+            let args = self.base_delete_args(&id);
+            match self.run_op(&args, None) {
+                Ok(_) => return Ok(()),
+                Err(RunErr::NotFound) => {}
+                Err(RunErr::Vault(e)) => return Err(e),
+            }
+        }
+        let args = self.base_delete_args(title.as_str());
         match self.run_op(&args, None) {
             Ok(_) => Ok(()),
-            // 已不存在视为删除成功（幂等）。
             Err(RunErr::NotFound) => Ok(()),
+            Err(RunErr::Vault(VaultError::ItemConflict)) => {
+                let Some(id) = self.resolve_conflicting_item_id(&title)? else {
+                    return Ok(());
+                };
+                let args = self.base_delete_args(&id);
+                match self.run_op(&args, None) {
+                    Ok(_) => Ok(()),
+                    Err(RunErr::NotFound) => Ok(()),
+                    Err(RunErr::Vault(e)) => Err(e),
+                }
+            }
             Err(RunErr::Vault(e)) => Err(e),
         }
     }
@@ -773,6 +992,10 @@ impl SecretVault for OnePasswordVault {
     fn backend_name(&self) -> &'static str {
         "1password"
     }
+
+    fn vault_id(&self) -> String {
+        self.vault.clone()
+    }
 }
 
 /// 校验 op.exe 签名（D8 / §5.5）：WinVerifyTrust 确认 Authenticode 签名可信，
@@ -786,7 +1009,7 @@ impl SecretVault for OnePasswordVault {
 pub fn verify_op_signature(path: &Path) -> Result<(), VaultError> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::Cryptography::{
-        CertGetNameStringW, CERT_NAME_ATTR_TYPE, szOID_ORGANIZATION_NAME,
+        szOID_ORGANIZATION_NAME, CertGetNameStringW, CERT_NAME_ATTR_TYPE,
     };
     use windows_sys::Win32::Security::WinTrust::{
         WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust,
@@ -917,7 +1140,9 @@ pub fn op_version(op_path: &Path) -> Option<String> {
 }
 
 /// 供 §4.2 构造：读取 1Password 设置并定位 op。缺任一项则返回错误。
-pub fn from_settings() -> Result<OnePasswordVault, VaultError> {
+pub fn from_settings(
+    db: std::sync::Arc<crate::database::Database>,
+) -> Result<OnePasswordVault, VaultError> {
     let op_path = locate_op(crate::settings::get_onepassword_op_path().as_deref())
         .ok_or(VaultError::NotInstalled)?;
     // D8：默认校验 op.exe 签名（信任根），失败拒用。
@@ -928,7 +1153,7 @@ pub fn from_settings() -> Result<OnePasswordVault, VaultError> {
         .ok_or_else(|| VaultError::Other("1Password 账户未配置".to_string()))?;
     let vault = crate::settings::get_onepassword_vault()
         .ok_or_else(|| VaultError::Other("1Password vault 未配置".to_string()))?;
-    Ok(OnePasswordVault::new(op_path, account, vault))
+    Ok(OnePasswordVault::new(op_path, account, vault, db))
 }
 
 /// §4.2 / §6.7：按当前 `secret_backend` 设置构造运行时保险箱。
@@ -941,7 +1166,7 @@ pub fn build_runtime_vault(
 ) -> std::sync::Arc<dyn SecretVault> {
     use crate::secrets::vault::{LegacyWindowsVault, UnavailableVault};
     if crate::settings::is_onepassword_backend() {
-        match from_settings() {
+        match from_settings(db.clone()) {
             Ok(v) => std::sync::Arc::new(v),
             Err(e) => {
                 log::warn!(
@@ -1033,10 +1258,11 @@ mod tests {
         }
     }
 
-    /// 用 FakeOpRunner 构造被测 vault 的便捷函数。
+    /// 用 FakeOpRunner 构造被测 vault 的便捷函数（db 用内存库，引用行为空）。
     fn vault_with(script: Vec<Result<Vec<u8>, RunErr>>) -> (OnePasswordVault, Arc<FakeOpRunner>) {
         let runner = Arc::new(FakeOpRunner::new(script));
-        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x");
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x", db);
         (vault, runner)
     }
 
@@ -1061,7 +1287,9 @@ mod tests {
         let fields: Vec<String> = fields
             .iter()
             .map(|(label, ftype, value)| {
-                format!(r#"{{"id":"f-{label}","type":"{ftype}","label":"{label}","value":"{value}"}}"#)
+                format!(
+                    r#"{{"id":"f-{label}","type":"{ftype}","label":"{label}","value":"{value}"}}"#
+                )
             })
             .collect();
         format!(
@@ -1088,8 +1316,9 @@ mod tests {
                 ("api_key", "CONCEALED", "sk-old-value"),
             ],
         );
-        let (vault, runner) = vault_with(vec![Ok(existing.into_bytes()), Ok(
-            item_json(
+        let (vault, runner) = vault_with(vec![
+            Ok(existing.into_bytes()),
+            Ok(item_json(
                 "item-42",
                 &[
                     ("username", "STRING", "ignored-user"),
@@ -1098,16 +1327,22 @@ mod tests {
                     (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
                 ],
             )
-            .into_bytes(),
-        )]);
+            .into_bytes()),
+        ]);
         let group = SecretGroup::provider(AppType::Claude, "p1");
         let vref = vault.put(&group, &sample_bundle()).expect("put");
 
         assert_eq!(runner.call_count(), 2, "已存在时只能是 get + edit");
         let (get_args, _) = runner.call(0);
-        assert_eq!((get_args[0].as_str(), get_args[1].as_str()), ("item", "get"));
+        assert_eq!(
+            (get_args[0].as_str(), get_args[1].as_str()),
+            ("item", "get")
+        );
         let (edit_args, edit_stdin) = runner.call(1);
-        assert_eq!((edit_args[0].as_str(), edit_args[1].as_str()), ("item", "edit"));
+        assert_eq!(
+            (edit_args[0].as_str(), edit_args[1].as_str()),
+            ("item", "edit")
+        );
         assert_eq!(edit_args[2], "item-42", "编辑按 item id 定位");
         // item id 保持不变。
         assert_eq!(vref.item_id, "item-42");
@@ -1120,7 +1355,12 @@ mod tests {
                 .unwrap()
                 .iter()
                 .find(|f| f["label"] == label)
-                .map(|f| (f["type"].as_str().unwrap().to_string(), f["value"].as_str().unwrap().to_string()))
+                .map(|f| {
+                    (
+                        f["type"].as_str().unwrap().to_string(),
+                        f["value"].as_str().unwrap().to_string(),
+                    )
+                })
         };
         assert_eq!(
             by_label("username"),
@@ -1132,7 +1372,10 @@ mod tests {
             Some(("CONCEALED".into(), "sk-new-value".into()))
         );
         assert!(by_label("env.FOO").is_some(), "新字段必须追加");
-        assert!(by_label(SCHEMA_FIELD_LABEL).is_some(), "schema 标记必须存在");
+        assert!(
+            by_label(SCHEMA_FIELD_LABEL).is_some(),
+            "schema 标记必须存在"
+        );
         // 命令行参数中绝不出现任何值。
         runner.assert_args_contain_none_of(&["sk-new-value", "sk-old-value", "foo-new"]);
     }
@@ -1169,7 +1412,10 @@ mod tests {
         assert_eq!(runner.call_count(), 2, "失败后不得追加任何调用");
         for i in 0..runner.call_count() {
             let (args, _) = runner.call(i);
-            assert!(!args.contains(&"delete".to_string()), "任何步骤都不得 delete");
+            assert!(
+                !args.contains(&"delete".to_string()),
+                "任何步骤都不得 delete"
+            );
         }
     }
 
@@ -1269,6 +1515,143 @@ mod tests {
     fn parse_item_id_reads_id() {
         let json = br#"{"id": "xyz", "fields": []}"#;
         assert_eq!(parse_item_id(json).as_deref(), Some("xyz"));
+    }
+
+    // ─── F2-2 验收：item_id 直达 / 标题兜底回写 / 冲突取最新 ────────
+
+    /// 引用行里有真实 item id（vault 一致）时，get 直接用 id 而不是标题。
+    #[test]
+    fn fetch_uses_ref_item_id_directly() {
+        let (vault, runner) = vault_with(vec![Ok(item_json(
+            "item-real",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-1")],
+        )
+        .into_bytes())]);
+        vault
+            .db
+            .upsert_secret_ref(
+                "claude",
+                "p1",
+                "vault-x",
+                "item-real",
+                &[FIELD_API_KEY.to_string()],
+            )
+            .unwrap();
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let got = vault.fetch(&group).expect("fetch").expect("exists");
+        assert_eq!(
+            got.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-1".into())
+        );
+        assert_eq!(runner.call_count(), 1);
+        let (args, _) = runner.call(0);
+        assert_eq!(args[2], "item-real", "直达读取应按 item id");
+    }
+
+    /// 引用行的 id 失效（NotFound）→ 按标题兜底一次，并把找到的 id 回写引用行
+    /// （字段清单保持不变）。
+    #[test]
+    fn fetch_stale_id_falls_back_to_title_and_repairs_ref() {
+        let (vault, runner) = vault_with(vec![
+            Err(RunErr::NotFound),
+            Ok(item_json("item-42", &[(FIELD_API_KEY, "CONCEALED", "sk-1")]).into_bytes()),
+        ]);
+        vault
+            .db
+            .upsert_secret_ref(
+                "claude",
+                "p1",
+                "vault-x",
+                "item-gone",
+                &[FIELD_API_KEY.to_string()],
+            )
+            .unwrap();
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let got = vault.fetch(&group).expect("fetch").expect("exists");
+        assert!(got.contains(FIELD_API_KEY));
+        assert_eq!(runner.call_count(), 2, "id 失效后只兜底一次");
+        let (args0, _) = runner.call(0);
+        assert_eq!(args0[2], "item-gone");
+        let (args1, _) = runner.call(1);
+        assert_eq!(args1[2], "cc-switch/claude/p1", "兜底按标题");
+        // 回写：item_id 已修复，字段清单保持原样。
+        let (vid, iid) = vault
+            .db
+            .get_secret_ref_identity("claude", "p1")
+            .unwrap()
+            .unwrap();
+        assert_eq!((vid.as_str(), iid.as_str()), ("vault-x", "item-42"));
+        let fields = vault
+            .db
+            .get_secret_ref_fields("claude", "p1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(fields, vec![FIELD_API_KEY.to_string()]);
+    }
+
+    /// 标题命中多个（ItemConflict）→ `op item list`（不带 --reveal）筛同标题，
+    /// 取 updated_at 最新的一条按 id 读取，并把 id 回写引用行。
+    #[test]
+    fn fetch_title_conflict_picks_latest_and_repairs_ref() {
+        let list_json = br#"[
+            {"id":"aaa","title":"cc-switch/claude/p1","updatedAt":"2026-01-01T00:00:00Z"},
+            {"id":"bbb","title":"cc-switch/claude/p1","updatedAt":"2026-02-01T00:00:00Z"}
+        ]"#;
+        let (vault, runner) = vault_with(vec![
+            Err(RunErr::Vault(VaultError::ItemConflict)),
+            Ok(list_json.to_vec()),
+            Ok(item_json("bbb", &[(FIELD_API_KEY, "CONCEALED", "sk-1")]).into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let got = vault.fetch(&group).expect("fetch").expect("exists");
+        assert!(got.contains(FIELD_API_KEY));
+        assert_eq!(runner.call_count(), 3);
+        let (list_args, _) = runner.call(1);
+        assert_eq!(
+            (list_args[0].as_str(), list_args[1].as_str()),
+            ("item", "list")
+        );
+        assert!(
+            !list_args.contains(&"--reveal".to_string()),
+            "列条目不得带 --reveal"
+        );
+        assert!(
+            list_args.contains(&"cc-switch".to_string()),
+            "按 cc-switch 标签过滤"
+        );
+        let (get_args, _) = runner.call(2);
+        assert_eq!(get_args[2], "bbb", "应取 updated_at 最新的一条");
+        let (_, iid) = vault
+            .db
+            .get_secret_ref_identity("claude", "p1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(iid, "bbb");
+    }
+
+    /// 占位 item_id（v20 回填的 `provider/<app>/<id>`、空串）不能当作 1P id 使用。
+    #[test]
+    fn placeholder_item_ids_are_not_used_for_direct_access() {
+        let (vault, runner) = vault_with(vec![Err(RunErr::NotFound)]);
+        for placeholder in ["", "provider/claude/p1"] {
+            let _ = vault
+                .db
+                .upsert_secret_ref("claude", "p1", "vault-x", placeholder, &[]);
+            assert!(
+                vault
+                    .ref_item_id(&SecretGroup::provider(AppType::Claude, "p1"))
+                    .is_none(),
+                "占位 id 不应直达: {placeholder:?}"
+            );
+        }
+        // vault 不一致的引用也不能用。
+        let _ = vault
+            .db
+            .upsert_secret_ref("claude", "p1", "other-vault", "item-real", &[]);
+        assert!(vault
+            .ref_item_id(&SecretGroup::provider(AppType::Claude, "p1"))
+            .is_none());
+        assert_eq!(runner.call_count(), 0);
     }
 
     #[test]
@@ -1422,7 +1805,8 @@ mod tests {
             std::env::var("CC_SWITCH_OP_TEST_ACCOUNT").expect("设 CC_SWITCH_OP_TEST_ACCOUNT");
         let vault = std::env::var("CC_SWITCH_OP_TEST_VAULT").expect("设 CC_SWITCH_OP_TEST_VAULT");
         let op_path = locate_op(None).expect("定位 op.exe");
-        let v = OnePasswordVault::new(op_path, account, vault);
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let v = OnePasswordVault::new(op_path, account, vault, db);
 
         // 用随机后缀避免撞名（复用 provider 组，但 id 随机）。
         let suffix = std::time::SystemTime::now()

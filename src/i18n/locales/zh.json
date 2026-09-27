@@ -1826,6 +1826,12 @@
     "backfillAction": "回填端点",
     "backfillProgress": "端点回填中…（{{done}}/{{total}}，每个约 7 秒，会请求解锁）",
     "backfillDone": "端点回填完成：{{backfilled}} 个已迁移到本地端点表。",
-    "backfillDoneWithFailures": "端点回填完成：{{backfilled}} 个成功，{{failed}} 个失败（可稍后重试，切换时会自动懒迁移）。"
+    "backfillDoneWithFailures": "端点回填完成：{{backfilled}} 个成功，{{failed}} 个失败（可稍后重试，切换时会自动懒迁移）。",
+    "accountVaultLocked": "已切换到 1Password，账户与 vault 已锁定，不可修改。",
+    "migrateProgress": "迁移中…（{{done}}/{{total}}，每个约 7 秒，会请求解锁）",
+    "cleanupResidue": "清理凭据管理器残留",
+    "cleanupConfirm": "将删除凭据管理器中剩余的全部 cc-switch 条目（1Password 是唯一真源）。此操作不可恢复，继续？",
+    "cleanupDone": "已清理 {{deleted}} 个凭据管理器条目。",
+    "cleanupDoneWithFailures": "已清理 {{deleted}} 个，{{failed}} 个失败（可稍后重试）。"
   }
 }

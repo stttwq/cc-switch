@@ -1826,6 +1826,12 @@
     "backfillAction": "Backfill endpoints",
     "backfillProgress": "Backfilling endpoints… ({{done}}/{{total}}, ~7s each, may request unlock)",
     "backfillDone": "Endpoint backfill complete: {{backfilled}} migrated to the local endpoint table.",
-    "backfillDoneWithFailures": "Endpoint backfill complete: {{backfilled}} succeeded, {{failed}} failed (you can retry later; switching falls back to lazy migration)."
+    "backfillDoneWithFailures": "Endpoint backfill complete: {{backfilled}} succeeded, {{failed}} failed (you can retry later; switching falls back to lazy migration).",
+    "accountVaultLocked": "Locked to 1Password: account and vault cannot be changed.",
+    "migrateProgress": "Migrating… ({{done}}/{{total}}, about 7s each; may prompt to unlock)",
+    "cleanupResidue": "Clean up credential-manager residue",
+    "cleanupConfirm": "This will delete all remaining cc-switch entries in the Windows credential manager (1Password is now the single source of truth). This cannot be undone. Continue?",
+    "cleanupDone": "Deleted {{deleted}} credential-manager entries.",
+    "cleanupDoneWithFailures": "Deleted {{deleted}} entries, {{failed}} failed (retry later)."
   }
 }

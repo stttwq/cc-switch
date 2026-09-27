@@ -1826,6 +1826,12 @@
     "backfillAction": "エンドポイントをバックフィル",
     "backfillProgress": "エンドポイントをバックフィル中…（{{done}}/{{total}}、1 件約 7 秒、解除を要求する場合があります）",
     "backfillDone": "エンドポイントのバックフィル完了：{{backfilled}} 件をローカルのエンドポイント表へ移行しました。",
-    "backfillDoneWithFailures": "エンドポイントのバックフィル完了：{{backfilled}} 件成功、{{failed}} 件失敗（後で再試行できます。切り替え時は自動的に遅延移行されます）。"
+    "backfillDoneWithFailures": "エンドポイントのバックフィル完了：{{backfilled}} 件成功、{{failed}} 件失敗（後で再試行できます。切り替え時は自動的に遅延移行されます）。",
+    "accountVaultLocked": "1Password に切り替えたため、アカウントと vault はロックされ変更できません。",
+    "migrateProgress": "移行中…（{{done}}/{{total}}、1件あたり約7秒、解錠を求められる場合があります）",
+    "cleanupResidue": "資格情報マネージャーの残存を削除",
+    "cleanupConfirm": "資格情報マネージャーに残っている cc-switch エントリをすべて削除します（1Password が唯一の正となります）。この操作は元に戻せません。続行しますか？",
+    "cleanupDone": "{{deleted}} 件の資格情報マネージャーエントリを削除しました。",
+    "cleanupDoneWithFailures": "{{deleted}} 件削除、{{failed}} 件失敗（後で再試行できます）。"
   }
 }

@@ -20,8 +20,8 @@ pub async fn sync_e2e_set_passphrase(
     state: State<'_, AppState>,
     passphrase: String,
 ) -> Result<Value, String> {
-    let stored =
-        store_sync_passphrase(&state.vault, Some(&passphrase)).map_err(|e| e.to_string())?;
+    let stored = store_sync_passphrase(&state.vault, &state.db, Some(&passphrase))
+        .map_err(|e| e.to_string())?;
     // 口令变了（或删了）→ 缓存的 KEK 立即失效。
     state.sync_kek.invalidate();
     Ok(json!({ "stored": stored, "cleared": passphrase.is_empty() }))
@@ -255,6 +255,7 @@ mod op_count_tests {
         let counting = counting();
         store_s3_credentials(
             &(counting.clone() as Arc<dyn SecretVault>),
+            &crate::database::Database::memory().expect("db"),
             Some("AKIA123"),
             Some("secret456"),
         )

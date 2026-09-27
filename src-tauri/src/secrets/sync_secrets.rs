@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use zeroize::Zeroizing;
 
+use crate::database::Database;
 use crate::error::AppError;
 use crate::secrets::vault::{
     SecretBundle, SecretGroup, SecretVault, FIELD_APP_E2E_PASSPHRASE, FIELD_APP_S3_ACCESS_KEY_ID,
@@ -39,34 +40,48 @@ impl SyncCredentials {
 impl std::fmt::Debug for SyncCredentials {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SyncCredentials")
-            .field("webdav_password", &self.webdav_password.as_ref().map(|_| "[REDACTED]"))
-            .field("s3_access_key_id", &self.s3_access_key_id.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "webdav_password",
+                &self.webdav_password.as_ref().map(|_| "[REDACTED]"),
+            )
+            .field(
+                "s3_access_key_id",
+                &self.s3_access_key_id.as_ref().map(|_| "[REDACTED]"),
+            )
             .field(
                 "s3_secret_access_key",
                 &self.s3_secret_access_key.as_ref().map(|_| "[REDACTED]"),
             )
-            .field("e2e_passphrase", &self.e2e_passphrase.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "e2e_passphrase",
+                &self.e2e_passphrase.as_ref().map(|_| "[REDACTED]"),
+            )
             .finish()
     }
 }
 
 /// §6.9：一次往返取回应用级同步凭据整包。
-pub fn fetch_sync_credentials(
-    vault: &Arc<dyn SecretVault>,
-) -> Result<SyncCredentials, AppError> {
+pub fn fetch_sync_credentials(vault: &Arc<dyn SecretVault>) -> Result<SyncCredentials, AppError> {
     match vault.fetch(&SecretGroup::AppSync)? {
         Some(bundle) => Ok(SyncCredentials::from_bundle(&bundle)),
         None => Ok(SyncCredentials::default()),
     }
 }
 
+/// AppSync 组在 secret_refs 里的行键（§4.3）：`_app` / `_sync`。
+/// 陷阱 10：写 vault 与维护 `secret_refs` 在同一处完成（F2-2）。
+fn upsert_app_sync_ref(db: &Database, vref: &crate::secrets::VaultRef) -> Result<(), AppError> {
+    db.upsert_secret_ref("_app", "_sync", &vref.vault_id, &vref.item_id, &vref.fields)
+}
+
 /// 在 AppSync 整包上「改一格再写回」，保留其它字段。`value` 为 `None` 表示删除该字段。
 fn put_app_field(
     vault: &Arc<dyn SecretVault>,
+    db: &Database,
     field: &str,
     value: Option<&str>,
 ) -> Result<(), AppError> {
-    update_app_sync(vault, |bundle| match value {
+    update_app_sync(vault, db, |bundle| match value {
         Some(v) => {
             bundle.insert(field, Zeroizing::new(v.to_string()));
         }
@@ -80,12 +95,13 @@ fn put_app_field(
 /// 原则 1 的写侧护栏：多字段合并保存（如 S3 双密钥）不得退化成逐字段往返。
 fn update_app_sync(
     vault: &Arc<dyn SecretVault>,
+    db: &Database,
     edit: impl FnOnce(&mut SecretBundle),
 ) -> Result<(), AppError> {
     let mut bundle = vault.fetch(&SecretGroup::AppSync)?.unwrap_or_default();
     edit(&mut bundle);
-    vault.put(&SecretGroup::AppSync, &bundle)?;
-    Ok(())
+    let vref = vault.put(&SecretGroup::AppSync, &bundle)?;
+    upsert_app_sync_ref(db, &vref)
 }
 
 /// 三态语义（§5.2.5）：`None` = 前端未触碰该字段，保持现值；`Some("")` = 用户清空了
@@ -95,6 +111,7 @@ fn update_app_sync(
 /// `literal:` 前缀是历史"已迁移"占位，不覆盖真实凭据。
 pub fn store_webdav_password(
     vault: &Arc<dyn SecretVault>,
+    db: &Database,
     password: Option<&str>,
 ) -> Result<bool, AppError> {
     let Some(password) = password else {
@@ -104,10 +121,10 @@ pub fn store_webdav_password(
         return Ok(false);
     }
     if password.is_empty() {
-        put_app_field(vault, FIELD_APP_WEBDAV_PASSWORD, None)?;
+        put_app_field(vault, db, FIELD_APP_WEBDAV_PASSWORD, None)?;
         return Ok(false);
     }
-    put_app_field(vault, FIELD_APP_WEBDAV_PASSWORD, Some(password))?;
+    put_app_field(vault, db, FIELD_APP_WEBDAV_PASSWORD, Some(password))?;
     Ok(true)
 }
 
@@ -118,6 +135,7 @@ pub fn store_webdav_password(
 /// 一次保存最多 6 次 op）。
 pub fn store_s3_credentials(
     vault: &Arc<dyn SecretVault>,
+    db: &Database,
     access_key_id: Option<&str>,
     secret_access_key: Option<&str>,
 ) -> Result<bool, AppError> {
@@ -125,7 +143,7 @@ pub fn store_s3_credentials(
         return Ok(false);
     }
     let mut stored = false;
-    update_app_sync(vault, |bundle| {
+    update_app_sync(vault, db, |bundle| {
         for (field, value) in [
             (FIELD_APP_S3_ACCESS_KEY_ID, access_key_id),
             (FIELD_APP_S3_SECRET_ACCESS_KEY, secret_access_key),
@@ -153,6 +171,7 @@ pub fn store_s3_credentials(
 /// `None`=不动，`Some("")`=删除，`Some(v)`=写入。返回是否真的写入了值。
 pub fn store_sync_passphrase(
     vault: &Arc<dyn SecretVault>,
+    db: &Database,
     passphrase: Option<&str>,
 ) -> Result<bool, AppError> {
     let Some(passphrase) = passphrase else {
@@ -162,10 +181,10 @@ pub fn store_sync_passphrase(
         return Ok(false);
     }
     if passphrase.is_empty() {
-        put_app_field(vault, FIELD_APP_E2E_PASSPHRASE, None)?;
+        put_app_field(vault, db, FIELD_APP_E2E_PASSPHRASE, None)?;
         return Ok(false);
     }
-    put_app_field(vault, FIELD_APP_E2E_PASSPHRASE, Some(passphrase))?;
+    put_app_field(vault, db, FIELD_APP_E2E_PASSPHRASE, Some(passphrase))?;
     Ok(true)
 }
 
@@ -191,10 +210,17 @@ mod tests {
     #[test]
     fn store_field_preserves_other_app_secrets() {
         let (vault, _c) = counting();
-        store_webdav_password(&vault, Some("pw")).expect("webdav");
-        store_sync_passphrase(&vault, Some("pass")).expect("e2e");
+        let db = std::sync::Arc::new(Database::memory().expect("db"));
+        store_webdav_password(&vault, &db, Some("pw")).expect("webdav");
+        store_sync_passphrase(&vault, &db, Some("pass")).expect("e2e");
         // 删除 webdav（三态空串）不应连带删掉 e2e。
-        store_webdav_password(&vault, Some("")).expect("clear webdav");
+        store_webdav_password(&vault, &db, Some("")).expect("clear webdav");
+        // 陷阱 10（F2-2）：写入后 `_app/_sync` 引用行必须同步维护。
+        let (_, iid) = db
+            .get_secret_ref_identity("_app", "_sync")
+            .unwrap()
+            .unwrap();
+        assert!(!iid.is_empty(), "AppSync 写入后应登记 secret_refs 行");
 
         let creds = fetch_sync_credentials(&vault).expect("fetch");
         assert!(creds.webdav_password.is_none(), "webdav 已删");

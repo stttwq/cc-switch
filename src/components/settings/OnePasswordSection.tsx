@@ -2,9 +2,10 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { KeyRound, Loader2, RefreshCw } from "lucide-react";
+import { Eraser, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api/settings";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 interface OnePasswordStatus {
   installed: boolean;
@@ -42,9 +43,22 @@ export function OnePasswordSection() {
   const [vault, setVault] = useState<string>("");
   const [verifySignature, setVerifySignature] = useState(true);
   const [restartFailed, setRestartFailed] = useState(false);
+  const [migrateProgress, setMigrateProgress] = useState({ done: 0, total: 0 });
   const [busy, setBusy] = useState<
-    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | null
+    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | "cleanup" | null
   >(null);
+
+  // F2-3：已处于 1Password 后端时锁定 account / vault（运行中的 vault 不跟随设置变化，
+  // 换 vault 会让所有已迁移条目变成孤儿）。
+  const is1pActive = status?.backend === "onepassword";
+
+  // F2-1：迁移进度（每组完成一个事件，约 7 秒/个）。
+  useTauriEvent<{ done: number; total: number }>(
+    "onepassword-migrate-progress",
+    (payload) => {
+      setMigrateProgress(payload);
+    },
+  );
 
   const refreshStatus = useCallback(async () => {
     setBusy("status");
@@ -118,6 +132,26 @@ export function OnePasswordSection() {
     try {
       await invoke("onepassword_test_fetch");
       toast.success(t("onepassword.testOk"));
+    } catch (error) {
+      toast.error(String(error));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // F2-1：清理凭据管理器残留（迁移后 1Password 是唯一真源）。
+  const cleanupResidue = async () => {
+    if (!window.confirm(t("onepassword.cleanupConfirm"))) return;
+    setBusy("cleanup");
+    try {
+      const r = await invoke<{ deleted: number; failed: number }>(
+        "onepassword_cleanup_credential_residue",
+      );
+      if (r.failed > 0) {
+        toast.warning(t("onepassword.cleanupDoneWithFailures", r));
+      } else {
+        toast.success(t("onepassword.cleanupDone", r));
+      }
     } catch (error) {
       toast.error(String(error));
     } finally {
@@ -212,7 +246,7 @@ export function OnePasswordSection() {
           <Button
             variant="outline"
             size="sm"
-            disabled={busy !== null || !status?.installed}
+            disabled={busy !== null || !status?.installed || is1pActive}
             onClick={loadAccounts}
           >
             {busy === "accounts" ? (
@@ -222,8 +256,9 @@ export function OnePasswordSection() {
           </Button>
         </div>
         <select
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm disabled:opacity-60"
           value={account}
+          disabled={is1pActive}
           onChange={(e) => setAccount(e.target.value)}
         >
           <option value="">{t("onepassword.selectAccount")}</option>
@@ -236,6 +271,11 @@ export function OnePasswordSection() {
             <option value={account}>{account}</option>
           )}
         </select>
+        {is1pActive && (
+          <p className="text-xs text-muted-foreground">
+            {t("onepassword.accountVaultLocked")}
+          </p>
+        )}
       </div>
 
       {/* Vault（需解锁） */}
@@ -247,7 +287,7 @@ export function OnePasswordSection() {
           <Button
             variant="outline"
             size="sm"
-            disabled={busy !== null || !account}
+            disabled={busy !== null || !account || is1pActive}
             onClick={loadVaults}
           >
             {busy === "vaults" ? (
@@ -257,8 +297,9 @@ export function OnePasswordSection() {
           </Button>
         </div>
         <select
-          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm"
+          className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm disabled:opacity-60"
           value={vault}
+          disabled={is1pActive}
           onChange={(e) => setVault(e.target.value)}
         >
           <option value="">{t("onepassword.selectVault")}</option>
@@ -322,7 +363,28 @@ export function OnePasswordSection() {
           ) : null}
           {t("onepassword.migrate")}
         </Button>
+        {/* F2-1：迁移后清理凭据管理器残留（1Password 是唯一真源）。 */}
+        {is1pActive && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy !== null}
+            onClick={cleanupResidue}
+          >
+            {busy === "cleanup" ? (
+              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            ) : (
+              <Eraser className="mr-2 h-4 w-4" />
+            )}
+            {t("onepassword.cleanupResidue")}
+          </Button>
+        )}
       </div>
+      {busy === "migrate" && migrateProgress.total > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("onepassword.migrateProgress", migrateProgress)}
+        </p>
+      )}
     </div>
   );
 }

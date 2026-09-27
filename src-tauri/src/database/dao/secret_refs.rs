@@ -70,6 +70,45 @@ impl Database {
         }
     }
 
+    /// 读取引用行的身份（vault_id, item_id）；无行返回 `None`。
+    /// F2-1「已迁移」判定与 F2-2 item_id 直达读写都用它（0 次 vault 往返）。
+    pub fn get_secret_ref_identity(
+        &self,
+        app: &str,
+        provider_id: &str,
+    ) -> Result<Option<(String, String)>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let row: Option<(String, String)> = conn
+            .query_row(
+                "SELECT vault_id, item_id FROM secret_refs WHERE app = ?1 AND provider_id = ?2",
+                rusqlite::params![app, provider_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .ok();
+        Ok(row)
+    }
+
+    /// F2-2：标题兜底找到条目后，把真实 item id 回写进已有引用行（字段清单保持不变）。
+    /// 返回是否有行被更新（无行时调用方应走 `upsert_secret_ref` 整行登记）。
+    pub fn repair_secret_ref_item_id(
+        &self,
+        app: &str,
+        provider_id: &str,
+        vault_id: &str,
+        item_id: &str,
+    ) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let now = chrono::Utc::now().timestamp();
+        let n = conn
+            .execute(
+                "UPDATE secret_refs SET vault_id = ?3, item_id = ?4, updated_at = ?5
+                 WHERE app = ?1 AND provider_id = ?2",
+                rusqlite::params![app, provider_id, vault_id, item_id, now],
+            )
+            .map_err(|e| AppError::Database(format!("修复 secret_ref item_id 失败: {e}")))?;
+        Ok(n > 0)
+    }
+
     /// secret_refs 行数（诊断用）。
     pub fn count_secret_refs(&self) -> Result<i64, AppError> {
         let conn = lock_conn!(self.conn);

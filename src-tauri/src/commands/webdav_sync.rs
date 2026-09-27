@@ -181,10 +181,11 @@ pub async fn webdav_sync_download(
 /// 三态（§5.2.5）：`None` = 未触碰，保持现值；`Some("")` = 清空并删除凭据；`Some(v)` = 写入。
 async fn save_webdav_settings(
     vault: &Arc<dyn crate::secrets::SecretVault>,
+    db: &crate::database::Database,
     settings: WebDavSyncSettings,
     password: Option<&str>,
 ) -> Result<(), AppError> {
-    crate::secrets::store_webdav_password(vault, password)?;
+    crate::secrets::store_webdav_password(vault, db, password)?;
 
     let existing = settings::get_webdav_sync_settings();
     let mut sync_settings = settings;
@@ -209,7 +210,7 @@ pub async fn webdav_sync_save_settings(
     settings: WebDavSyncSettings,
     password: Option<String>,
 ) -> Result<Value, String> {
-    save_webdav_settings(&state.vault, settings, password.as_deref())
+    save_webdav_settings(&state.vault, &state.db, settings, password.as_deref())
         .await
         .map_err(|e| e.to_string())?;
     Ok(json!({ "success": true }))
@@ -238,6 +239,11 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+
+    /// 测试用内存 DB（AppSync 写入后要维护 `_app/_sync` 引用行）。
+    fn db() -> std::sync::Arc<crate::database::Database> {
+        std::sync::Arc::new(crate::database::Database::memory().expect("memory db"))
+    }
 
     #[tokio::test]
     async fn webdav_sync_mutex_is_singleton() {
@@ -453,19 +459,19 @@ mod tests {
 
         // P0-1 回归：走命令真正执行的那段代码（含入参三态），而不是绕过命令签名。
         // ① Some(v) → 写入
-        save_webdav_settings(&vault, settings(), Some("secret-password"))
+        save_webdav_settings(&vault, &db(), settings(), Some("secret-password"))
             .await
             .expect("save should succeed");
         assert_eq!(read_pw(&vault).as_deref(), Some("secret-password"));
 
         // ② None → 保持现值（不能被空值冲掉）
-        save_webdav_settings(&vault, settings(), None)
+        save_webdav_settings(&vault, &db(), settings(), None)
             .await
             .expect("save should succeed");
         assert!(read_pw(&vault).is_some());
 
         // ③ Some("") → 删除条目（清空密码框必须真的删掉）
-        save_webdav_settings(&vault, settings(), Some(""))
+        save_webdav_settings(&vault, &db(), settings(), Some(""))
             .await
             .expect("save should succeed");
         assert!(read_pw(&vault).is_none());
@@ -482,7 +488,7 @@ mod tests {
         let vault: Arc<dyn crate::secrets::SecretVault> =
             Arc::new(crate::secrets::InMemoryVault::new());
 
-        crate::secrets::store_s3_credentials(&vault, Some("AKIA-1"), Some("secret-1"))
+        crate::secrets::store_s3_credentials(&vault, &db(), Some("AKIA-1"), Some("secret-1"))
             .expect("store should succeed");
         let creds = crate::secrets::fetch_sync_credentials(&vault).expect("restore should succeed");
         assert_eq!(
@@ -495,7 +501,7 @@ mod tests {
         );
 
         // None → 两条都保持；Some("") 只删被清空的那条
-        crate::secrets::store_s3_credentials(&vault, None, Some(""))
+        crate::secrets::store_s3_credentials(&vault, &db(), None, Some(""))
             .expect("delete should succeed");
         let creds = crate::secrets::fetch_sync_credentials(&vault).expect("restore should succeed");
         assert_eq!(

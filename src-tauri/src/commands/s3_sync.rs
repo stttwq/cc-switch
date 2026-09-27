@@ -187,6 +187,7 @@ pub async fn s3_sync_save_settings(
     // 三态（§5.2.5）：None = 未触碰，保持现值；Some("") = 清空并删除该条；Some(v) = 写入。
     crate::secrets::store_s3_credentials(
         &state.vault,
+        &state.db,
         accessKeyId.as_deref(),
         secretAccessKey.as_deref(),
     )

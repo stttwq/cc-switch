@@ -95,6 +95,9 @@ pub async fn onepassword_list_vaults(
 }
 
 /// 保存 1Password 配置（account / vault / 是否校验签名）。同时把定位到的 op 绝对路径固定下来。
+///
+/// F2-3：已处于 1Password 后端时**拒绝修改 account / vault**——运行中的 vault 不跟随
+/// 设置变化，换 vault 会让所有已迁移条目变成孤儿（§7 D11）。签名校验开关仍可改。
 #[tauri::command]
 pub async fn onepassword_save_config(
     _state: State<'_, AppState>,
@@ -104,6 +107,26 @@ pub async fn onepassword_save_config(
 ) -> Result<Value, String> {
     let mut settings = crate::settings::get_settings();
     let mut op = settings.onepassword.clone().unwrap_or_default();
+    if crate::settings::is_onepassword_backend() {
+        let changed_account = account
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some_and(|a| op.account.as_deref() != Some(a));
+        let changed_vault = vault
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .is_some_and(|v| op.vault.as_deref() != Some(v));
+        if changed_account || changed_vault {
+            return Err(crate::error::AppError::localized(
+                "onepassword.account_vault_locked",
+                "已切换到 1Password 后端，无法修改账户或保险箱（需整体重新迁移）",
+                "Account/vault cannot be changed while the 1Password backend is active",
+            )
+            .to_string());
+        }
+    }
     if let Some(a) = account {
         op.account = Some(a).filter(|s| !s.trim().is_empty());
     }
@@ -154,18 +177,85 @@ pub async fn onepassword_test_fetch(_state: State<'_, AppState>) -> Result<Value
 
 /// 迁移向导（§7）：把凭据管理器里的 cc-switch 条目迁到 1Password，校验后删除并切后端。
 /// 需先在设置里选好 account/vault。会触发解锁弹窗。
+///
+/// F2-1：已处于 1Password 后端时拒绝再次执行（迁移是单向的，残留清理走专用命令）；
+/// 每完成一组上报 `onepassword-migrate-progress` 事件。
 #[tauri::command]
-pub async fn onepassword_migrate(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn onepassword_migrate(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    if crate::settings::is_onepassword_backend() {
+        return Err(crate::error::AppError::localized(
+            "onepassword.migrate.already_migrated",
+            "已处于 1Password 后端，无需再次迁移",
+            "Already on the 1Password backend; no migration needed",
+        )
+        .to_string());
+    }
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let vault =
-            crate::secrets::onepassword_from_settings().map_err(crate::error::AppError::from)?;
-        let report = crate::secrets::migrate_to_onepassword(&state, &vault)?;
-        Ok::<Value, crate::error::AppError>(json!(report))
+        let vault = crate::secrets::onepassword_from_settings(state.db.clone())
+            .map_err(crate::error::AppError::from)?;
+        // F2-1：每组完成即向前端上报进度（约 7 秒/个）。
+        let mut progress = |done: usize, total: usize| {
+            let _ = app_handle.emit(
+                "onepassword-migrate-progress",
+                serde_json::json!({ "done": done, "total": total }),
+            );
+        };
+        crate::secrets::migrate_to_onepassword(&state, &vault, &mut progress)
+            .map(|report| json!(report))
     })
     .await
     .map_err(|e| format!("迁移任务失败: {e}"))?
     .map_err(|e| e.to_string())
+}
+
+/// F2-1：清理凭据管理器残留——迁移后 1Password 是唯一真源，本命令删除凭据管理器里
+/// 剩余的 `cc-switch/*` 条目（不含探针）。仅 Windows；前端需先让用户确认。
+#[tauri::command]
+pub async fn onepassword_cleanup_credential_residue(
+    _state: State<'_, AppState>,
+) -> Result<Value, String> {
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("仅支持 Windows".to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        tauri::async_runtime::spawn_blocking(move || {
+            if !crate::settings::is_onepassword_backend() {
+                return Err(crate::error::AppError::localized(
+                    "onepassword.cleanup.not_1p",
+                    "仅 1Password 模式下可清理凭据管理器残留",
+                    "Credential residue cleanup is only available in 1Password mode",
+                ));
+            }
+            let targets = crate::secrets::windows_enumerate_targets("cc-switch/")?;
+            let mut deleted = 0usize;
+            let mut failed = 0usize;
+            for target in &targets {
+                // 探针条目不属于用户数据，跳过。
+                if target == "cc-switch/v1/probe" {
+                    continue;
+                }
+                match crate::secrets::windows_delete_credential(target) {
+                    Ok(()) => deleted += 1,
+                    Err(e) => {
+                        log::warn!("清理凭据管理器残留失败 {target}: {e}");
+                        failed += 1;
+                    }
+                }
+            }
+            Ok::<_, crate::error::AppError>(
+                serde_json::json!({ "deleted": deleted, "failed": failed }),
+            )
+        })
+        .await
+        .map_err(|e| format!("清理凭据管理器残留任务失败: {e}"))?
+        .map_err(|e| e.to_string())
+    }
 }
 
 /// 轻量查询当前凭据后端标识（不调 op）。前端据此置灰/隐藏相关区块。

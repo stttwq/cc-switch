@@ -67,6 +67,14 @@ impl SecretGroup {
             Self::AppSync => "app/sync".to_string(),
         }
     }
+
+    /// 组在 `secret_refs` 表里的行键（§4.3）。AppSync 组落在 `_app`/`_sync` 行。
+    pub fn ref_key(&self) -> (String, String) {
+        match self {
+            Self::Provider { app, provider_id } => (app.as_str().to_string(), provider_id.clone()),
+            Self::AppSync => ("_app".to_string(), "_sync".to_string()),
+        }
+    }
 }
 
 /// 字段名约定（§4.1）。
@@ -304,6 +312,10 @@ pub trait SecretVault: Send + Sync {
     /// 轻量状态检测，不取值、不强制解锁。
     fn status(&self) -> VaultStatus;
 
+    /// 本后端的 vault 标识（`secret_refs.vault_id` 与迁移「已迁移」判定比对用）。
+    /// 旧凭据管理器后端返回空串（引用行 vault_id 为空即占位，不是 1P 条目）。
+    fn vault_id(&self) -> String;
+
     /// 后端名（诊断用）。
     fn backend_name(&self) -> &'static str;
 }
@@ -341,7 +353,9 @@ impl SecretVault for InMemoryVault {
             .insert(key.clone(), bundle.clone());
         Ok(VaultRef {
             vault_id: "in-memory".to_string(),
-            item_id: key,
+            // 非 group.key() 的「伪真实」id：F2-1 的已迁移判定按 item_id 排除占位形式，
+            // 内存实现必须返回占位之外的 id 才能通过该判定（测试语义）。
+            item_id: format!("mem-{key}"),
             fields: bundle.field_names(),
         })
     }
@@ -353,6 +367,10 @@ impl SecretVault for InMemoryVault {
 
     fn status(&self) -> VaultStatus {
         VaultStatus::Ready
+    }
+
+    fn vault_id(&self) -> String {
+        "in-memory".to_string()
     }
 
     fn backend_name(&self) -> &'static str {
@@ -415,6 +433,10 @@ impl SecretVault for CountingVault {
 
     fn status(&self) -> VaultStatus {
         self.inner.status()
+    }
+
+    fn vault_id(&self) -> String {
+        self.inner.vault_id()
     }
 
     fn backend_name(&self) -> &'static str {
@@ -659,6 +681,11 @@ impl SecretVault for LegacyWindowsVault {
         VaultStatus::Ready
     }
 
+    fn vault_id(&self) -> String {
+        // 旧后端没有 1P vault 概念；put 写下的引用行 vault_id 也是空串（占位）。
+        String::new()
+    }
+
     fn backend_name(&self) -> &'static str {
         "windows-credential-manager"
     }
@@ -697,6 +724,10 @@ impl SecretVault for UnavailableVault {
         }
     }
 
+    fn vault_id(&self) -> String {
+        String::new()
+    }
+
     fn backend_name(&self) -> &'static str {
         "1password-unavailable"
     }
@@ -705,6 +736,7 @@ impl SecretVault for UnavailableVault {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn bundle_debug_redacts_values() {
@@ -817,6 +849,7 @@ mod tests {
     /// fetch / put / delete 全部返回 `vault_restart_required`，钥匙不再可能
     /// 经凭据管理器回流。
     #[test]
+    #[serial]
     fn legacy_vault_rejects_all_ops_after_retirement() {
         let vault = legacy_vault();
         let group = SecretGroup::provider(AppType::Claude, "p1");
