@@ -114,8 +114,13 @@ pub async fn onepassword_save_config(
         op.verify_signature = Some(vs);
     }
     // 固定 op 绝对路径，之后每次直接用它（防搜索路径劫持）。
+    // F1-7：固定前先校验签名（信任根不能是被篡改的二进制），失败则不写入任何设置。
     if op.op_path.is_none() {
         if let Some(path) = secrets::locate_op(None) {
+            let verify = op.verify_signature.unwrap_or(true);
+            if verify {
+                secrets::verify_op_signature(&path).map_err(|e| e.to_string())?;
+            }
             op.op_path = Some(path.to_string_lossy().to_string());
         }
     }

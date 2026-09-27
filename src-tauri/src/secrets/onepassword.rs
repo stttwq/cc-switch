@@ -380,13 +380,22 @@ pub fn probe(configured_path: Option<&str>, verify_signature: bool) -> OpProbe {
             signature_ok: None,
         };
     };
-    let signature_ok = if verify_signature {
-        Some(verify_op_signature(&path).is_ok())
+    let signature = if verify_signature {
+        Some(verify_op_signature(&path))
     } else {
         None
     };
-    let version = op_version(&path);
-    let signed_in = list_accounts(&path).map(|a| !a.is_empty()).unwrap_or(false);
+    let signature_ok = signature.as_ref().map(|r| r.is_ok());
+    // F1-7（P0-7）：签名校验失败绝不执行 op 二进制（它可能是被篡改的仿冒品），
+    // 其余字段一律为空，UI 据此提示修复而不是继续配置。
+    let (version, signed_in) = if signature.as_ref().is_some_and(|r| r.is_err()) {
+        (None, false)
+    } else {
+        (
+            op_version(&path),
+            list_accounts(&path).map(|a| !a.is_empty()).unwrap_or(false),
+        )
+    };
     OpProbe {
         installed: true,
         op_path: Some(path.to_string_lossy().to_string()),
@@ -767,20 +776,22 @@ impl SecretVault for OnePasswordVault {
 }
 
 /// 校验 op.exe 签名（D8 / §5.5）：WinVerifyTrust 确认 Authenticode 签名可信，
-/// 再确认签名主体含 AgileBits。任一失败拒用（op.exe 是整个方案的信任根）。
+/// 再确认**签名者证书**（链首）的 O 字段就是 AgileBits。任一失败拒用（op.exe 是
+/// 整个方案的信任根）。
+///
+/// F1-7（P0-7）：只认签名者证书，不再遍历证书包里的所有证书——夹带一张名字好看的
+/// 证书即可绕过子串校验；主体判定只认 O 完整等于 AgileBits，不再做
+/// "agilebits"/"1password" 子串匹配。
 #[cfg(windows)]
 pub fn verify_op_signature(path: &Path) -> Result<(), VaultError> {
     use std::os::windows::ffi::OsStrExt;
     use windows_sys::Win32::Security::Cryptography::{
-        CertCloseStore, CertEnumCertificatesInStore, CertFreeCertificateContext,
-        CertGetNameStringW, CryptQueryObject, CERT_NAME_SIMPLE_DISPLAY_TYPE,
-        CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED, CERT_QUERY_FORMAT_FLAG_BINARY,
-        CERT_QUERY_OBJECT_FILE,
+        CertGetNameStringW, CERT_NAME_ATTR_TYPE, szOID_ORGANIZATION_NAME,
     };
     use windows_sys::Win32::Security::WinTrust::{
-        WinVerifyTrust, WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_FILE_INFO,
-        WTD_CHOICE_FILE, WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY,
-        WTD_UI_NONE,
+        WTHelperGetProvSignerFromChain, WTHelperProvDataFromStateData, WinVerifyTrust,
+        WINTRUST_ACTION_GENERIC_VERIFY_V2, WINTRUST_DATA, WINTRUST_FILE_INFO, WTD_CHOICE_FILE,
+        WTD_REVOKE_NONE, WTD_STATEACTION_CLOSE, WTD_STATEACTION_VERIFY, WTD_UI_NONE,
     };
 
     let wide: Vec<u16> = path
@@ -789,9 +800,8 @@ pub fn verify_op_signature(path: &Path) -> Result<(), VaultError> {
         .chain(std::iter::once(0))
         .collect();
 
-    // 1) WinVerifyTrust：确认签名有效且链到可信根。
     // SAFETY: 结构体按 Win32 约定填充，wide 指针在调用期间有效。
-    let trust_ok = unsafe {
+    let signer_org: Option<String> = unsafe {
         let mut file_info: WINTRUST_FILE_INFO = std::mem::zeroed();
         file_info.cbStruct = std::mem::size_of::<WINTRUST_FILE_INFO>() as u32;
         file_info.pcwszFilePath = wide.as_ptr();
@@ -799,6 +809,9 @@ pub fn verify_op_signature(path: &Path) -> Result<(), VaultError> {
         let mut wtd: WINTRUST_DATA = std::mem::zeroed();
         wtd.cbStruct = std::mem::size_of::<WINTRUST_DATA>() as u32;
         wtd.dwUIChoice = WTD_UI_NONE;
+        // 保持 WTD_REVOKE_NONE（不联网查吊销）：签名来自 Azure Trusted Signing，
+        // 证书短期轮换；联网吊销检查会让每次启动都发网络请求，且吊销并非现实攻击面
+        // （信任根是「签名者 O = AgileBits」这一主体判定本身）。
         wtd.fdwRevocationChecks = WTD_REVOKE_NONE;
         wtd.dwUnionChoice = WTD_CHOICE_FILE;
         wtd.dwStateAction = WTD_STATEACTION_VERIFY;
@@ -811,90 +824,83 @@ pub fn verify_op_signature(path: &Path) -> Result<(), VaultError> {
             (&mut wtd as *mut WINTRUST_DATA).cast(),
         );
 
-        // 关闭状态数据（无论成败都要调用）。
+        // 1) 签名有效且链到可信根。失败即拒用（先关闭状态数据再返回）。
+        if status != 0 {
+            wtd.dwStateAction = WTD_STATEACTION_CLOSE;
+            WinVerifyTrust(
+                std::ptr::null_mut(),
+                &mut action,
+                (&mut wtd as *mut WINTRUST_DATA).cast(),
+            );
+            return Err(VaultError::Other(
+                "op.exe 签名无效或不受信任，已拒绝使用".to_string(),
+            ));
+        }
+
+        // 2) 从 state data 取**签名者证书**（链首），读它的 O 字段。
+        //    取完后再 WTD_STATEACTION_CLOSE。
+        let mut org = None;
+        let prov = WTHelperProvDataFromStateData(wtd.hWVTStateData);
+        if !prov.is_null() {
+            let sgnr = WTHelperGetProvSignerFromChain(prov, 0, 0, 0);
+            if !sgnr.is_null() && (*sgnr).csCertChain > 0 && !(*sgnr).pasCertChain.is_null() {
+                let cert = (*(*sgnr).pasCertChain).pCert;
+                if !cert.is_null() {
+                    // 先取所需缓冲长度，再取字符串。
+                    let len = CertGetNameStringW(
+                        cert,
+                        CERT_NAME_ATTR_TYPE,
+                        0,
+                        szOID_ORGANIZATION_NAME.cast(),
+                        std::ptr::null_mut(),
+                        0,
+                    );
+                    if len > 1 {
+                        let mut buf = vec![0u16; len as usize];
+                        CertGetNameStringW(
+                            cert,
+                            CERT_NAME_ATTR_TYPE,
+                            0,
+                            szOID_ORGANIZATION_NAME.cast(),
+                            buf.as_mut_ptr(),
+                            len,
+                        );
+                        // 返回长度含结尾 NUL（len = 字符数 + 1），剥掉它再判定。
+                        org = Some(
+                            String::from_utf16_lossy(&buf)
+                                .trim_end_matches('\0')
+                                .to_string(),
+                        );
+                    }
+                }
+            }
+        }
         wtd.dwStateAction = WTD_STATEACTION_CLOSE;
         WinVerifyTrust(
             std::ptr::null_mut(),
             &mut action,
             (&mut wtd as *mut WINTRUST_DATA).cast(),
         );
-
-        status == 0
+        org
     };
-    if !trust_ok {
+    let Some(org) = signer_org else {
         return Err(VaultError::Other(
-            "op.exe 签名无效或不受信任，已拒绝使用".to_string(),
+            "无法读取 op.exe 的签名者证书，已拒绝使用".to_string(),
         ));
-    }
-
-    // 2) 主体校验：读嵌入证书，确认签名主体含 AgileBits。
-    // SAFETY: CryptQueryObject 成功时给出 cert store 句柄，用后 CertCloseStore。
-    let subject_ok = unsafe {
-        let mut cert_store = std::ptr::null_mut();
-        let ok = CryptQueryObject(
-            CERT_QUERY_OBJECT_FILE,
-            wide.as_ptr().cast(),
-            CERT_QUERY_CONTENT_FLAG_PKCS7_SIGNED_EMBED,
-            CERT_QUERY_FORMAT_FLAG_BINARY,
-            0,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            &mut cert_store,
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-        );
-        if ok == 0 || cert_store.is_null() {
-            false
-        } else {
-            let mut found = false;
-            let mut cert_ctx = CertEnumCertificatesInStore(cert_store, std::ptr::null_mut());
-            while !cert_ctx.is_null() {
-                // 先取所需缓冲长度，再取字符串。
-                let len = CertGetNameStringW(
-                    cert_ctx,
-                    CERT_NAME_SIMPLE_DISPLAY_TYPE,
-                    0,
-                    std::ptr::null_mut(),
-                    std::ptr::null_mut(),
-                    0,
-                );
-                if len > 1 {
-                    let mut buf = vec![0u16; len as usize];
-                    CertGetNameStringW(
-                        cert_ctx,
-                        CERT_NAME_SIMPLE_DISPLAY_TYPE,
-                        0,
-                        std::ptr::null_mut(),
-                        buf.as_mut_ptr(),
-                        len,
-                    );
-                    let name = String::from_utf16_lossy(&buf);
-                    let name_lower = name.to_lowercase();
-                    if name_lower.contains("agilebits") || name_lower.contains("1password") {
-                        found = true;
-                    }
-                }
-                let next = CertEnumCertificatesInStore(cert_store, cert_ctx);
-                // CertEnumCertificatesInStore 会释放传入的 ctx，这里不额外 free。
-                cert_ctx = next;
-                if found {
-                    if !cert_ctx.is_null() {
-                        CertFreeCertificateContext(cert_ctx);
-                    }
-                    break;
-                }
-            }
-            CertCloseStore(cert_store, 0);
-            found
-        }
     };
-    if !subject_ok {
+    if !is_trusted_signer_org(&org) {
         return Err(VaultError::Other(
-            "op.exe 签名主体不是 AgileBits，已拒绝使用".to_string(),
+            "op.exe 签名者不是 AgileBits，已拒绝使用".to_string(),
         ));
     }
     Ok(())
+}
+
+/// F1-7：签名者证书 O 字段判定（纯函数，便于单测）。必须完整等于 AgileBits
+/// （忽略大小写与首尾空白）。不做 "agilebits"/"1password" 子串匹配——
+/// 子串会被夹带证书绕过（如 "O=Evil, CN=1Password Fake"）。
+pub(crate) fn is_trusted_signer_org(org: &str) -> bool {
+    org.trim().eq_ignore_ascii_case("agilebits")
 }
 
 /// 非 Windows 平台不做签名校验（本项目仅面向 Windows；留桩便于跨平台编译）。
@@ -904,20 +910,10 @@ pub fn verify_op_signature(_path: &Path) -> Result<(), VaultError> {
 }
 
 /// 探测 `op` 版本（诊断用）。不需解锁。
+/// F1-7：改走 `exec_op`（环境变量清理 + 超时 + 全局串行），不再裸起进程。
 pub fn op_version(op_path: &Path) -> Option<String> {
-    let mut cmd = Command::new(op_path);
-    cmd.arg("--version");
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        cmd.creation_flags(CREATE_NO_WINDOW);
-    }
-    let output = cmd.output().ok()?;
-    if output.status.success() {
-        Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
-    } else {
-        None
-    }
+    let out = exec_op(op_path, &["--version"], None).ok()?;
+    Some(String::from_utf8_lossy(&out).trim().to_string())
 }
 
 /// 供 §4.2 构造：读取 1Password 设置并定位 op。缺任一项则返回错误。
@@ -1398,6 +1394,21 @@ mod tests {
     fn real_op_signature_verifies() {
         let path = locate_op(None).expect("本机应能定位 op.exe");
         verify_op_signature(&path).expect("真实 op.exe 签名应通过");
+    }
+
+    /// F1-7（P0-7）：签名者 O 字段判定——只认完整等于 AgileBits，不做子串匹配。
+    #[test]
+    fn signer_org_must_be_exactly_agilebits() {
+        assert!(super::is_trusted_signer_org("Agilebits"));
+        assert!(super::is_trusted_signer_org("AGILEBITS"));
+        assert!(super::is_trusted_signer_org("  agilebits  "));
+        // 反例：空主体、别名子串、夹带证书、带城市/部门的完整主体都必须拒绝。
+        assert!(!super::is_trusted_signer_org(""));
+        assert!(!super::is_trusted_signer_org("   "));
+        assert!(!super::is_trusted_signer_org("1Password"));
+        assert!(!super::is_trusted_signer_org("Agilebits Inc"));
+        assert!(!super::is_trusted_signer_org("Evil, CN=1Password Fake"));
+        assert!(!super::is_trusted_signer_org("AgileBits Wizard"));
     }
 
     /// 端到端往返（需解锁，手动跑）：create → get → edit → get → delete。
