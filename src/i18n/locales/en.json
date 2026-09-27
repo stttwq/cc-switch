@@ -293,7 +293,9 @@
       },
       "secretStore": {
         "title": "Credential manager maintenance",
-        "description": "Clean up leftover entries in Windows Credential Manager, and move credentials between machines with an encrypted bundle"
+        "description": "Clean up leftover entries in Windows Credential Manager, and move credentials between machines with an encrypted bundle",
+        "title1P": "Credential maintenance",
+        "description1P": "Clean up orphaned 1Password items left by deleted providers, rebuild local refs from 1Password, and remove Credential Manager residue"
       }
     },
     "language": "Language",
@@ -764,6 +766,7 @@
       "passphrasePlaceholder": "Set a sync passphrase",
       "passphraseUpdatePlaceholder": "Passphrase set — type a new one to change it",
       "passphraseSetWarning": "Passphrase is stored only in this device's Credential Manager and never uploaded. If you forget it, remote data cannot be recovered.",
+      "passphraseSetWarning1P": "Passphrase is stored only in this device's 1Password and never uploaded. If you forget it, remote data cannot be recovered.",
       "passphraseRequiredWarning": "You must set a sync passphrase before enabling encryption. Remember it: forgetting it makes remote data unrecoverable.",
       "enabledToast": "End-to-end encryption enabled — upload once to create the encrypted snapshot",
       "disabledToast": "End-to-end encryption disabled",
@@ -1278,6 +1281,19 @@
     "openConfigDir": "Open config folder",
     "quit": "Quit"
   },
+  "vault": {
+    "errors": {
+      "vault_not_installed": "1Password CLI (op) not found",
+      "vault_not_signed_in": "Not signed in to 1Password; please sign in first",
+      "vault_locked": "1Password is locked, not running, or authorization was dismissed — unlock it and retry",
+      "vault_network": "Failed to reach 1Password; check your network",
+      "vault_timeout": "1Password request timed out; please retry",
+      "vault_item_conflict": "An item with the same name already exists in 1Password; clean up duplicates and retry",
+      "vault_restart_required": "Switched to 1Password; please restart CC Switch",
+      "vault_other": "1Password call failed; retry or check the logs",
+      "retry": "Retry"
+    }
+  },
   "errors": {
     "configLoadFailedTitle": "Configuration Load Failed",
     "configLoadFailedMessage": "Unable to read configuration file:\n{{path}}\n\nError details:\n{{detail}}\n\nPlease check if the JSON is valid, or restore from a backup file (e.g., config.json.bak) in the same directory.\n\nThe app will exit so you can fix this.",
@@ -1790,6 +1806,7 @@
   },
   "secretsPortable": {
     "hint": "WebDAV/S3 sync never carries credentials, and uninstalling removes every cc-switch entry from Windows Credential Manager. Export an encrypted bundle before uninstalling or moving to another machine; import it there to restore the API keys and base URLs.",
+    "hint1P": "In 1Password mode credentials sync across devices via 1Password itself, so exporting a bundle is unavailable. You can still import an existing bundle on a new machine to restore credentials (imports go into 1Password).",
     "passphraseLabel": "Passphrase (at least {{min}} characters)",
     "passphrasePlaceholder": "Use a password manager to generate one",
     "passphraseHint": "Minimum {{min}} characters. The bundle is encrypted with it; forgetting it means the bundle cannot be recovered.",
@@ -1837,6 +1854,13 @@
     "cleanupResidue": "Clean up credential-manager residue",
     "cleanupConfirm": "This will delete all remaining cc-switch entries in the Windows credential manager (1Password is now the single source of truth). This cannot be undone. Continue?",
     "cleanupDone": "Deleted {{deleted}} credential-manager entries.",
-    "cleanupDoneWithFailures": "Deleted {{deleted}} entries, {{failed}} failed (retry later)."
+    "cleanupDoneWithFailures": "Deleted {{deleted}} entries, {{failed}} failed (retry later).",
+    "requesting": "Requesting from 1Password; it may ask to unlock…",
+    "rebuildRefs": "Rebuild refs from 1Password",
+    "rebuildRefsProgress": "Rebuilding refs… ({{done}}/{{total}}, may request unlock)",
+    "rebuildRefsDone": "Rebuilt {{rebuilt}} refs ({{total}} items total).",
+    "plaintextPending": "Plaintext keys awaiting import: {{pi}} in Pi config, {{live}} in live files; plus {{imports}} deferred imports. The keys are not in 1Password until imported.",
+    "plaintextImportAction": "Import to 1Password",
+    "plaintextImportDone": "Imported {{count}} keys into 1Password."
   }
 }

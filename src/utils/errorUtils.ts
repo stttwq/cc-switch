@@ -1,9 +1,80 @@
+import i18next from "i18next";
+import { toast } from "sonner";
+
+/**
+ * 后端 vault_* 错误（F5-3）：后端把这些错误渲染成 JSON 字符串
+ * `{"code":"vault_locked","message":"…"}`，前端按 code 映射 i18n
+ * `vault.errors.<code>` 并提供「重试」。
+ */
+export interface VaultErrorInfo {
+  code: string;
+  message: string;
+}
+
+/** 从已提取的错误文本里解析 vault_* 结构化错误；未命中返回 null。 */
+const parseVaultErrorText = (text: string): VaultErrorInfo | null => {
+  if (!text.includes('"vault_')) return null;
+  // 多数路径直接返回 JSON；少数路径会把 JSON 再包进中文提示里
+  // （如「打开终端任务失败: {…}」），所以先整体 parse，失败再正则提取。
+  const candidates = [
+    text,
+    /\{[^{}]*"code"\s*:\s*"vault_[a-z_]+"[^{}]*\}/.exec(text)?.[0] ?? "",
+  ];
+  for (const candidate of candidates) {
+    if (!candidate) continue;
+    try {
+      const parsed = JSON.parse(candidate) as {
+        code?: string;
+        message?: string;
+        messageEn?: string;
+      };
+      if (
+        typeof parsed?.code === "string" &&
+        parsed.code.startsWith("vault_")
+      ) {
+        return {
+          code: parsed.code,
+          message: parsed.messageEn || parsed.message || "",
+        };
+      }
+    } catch {
+      // 不是 JSON（或被截断），继续下一个候选
+    }
+  }
+  return null;
+};
+
+/** 识别错误对象里的 vault_* 结构化错误；未命中返回 null。
+ * 注意必须解析**原始**文本（extractRawErrorMessage）：extractErrorMessage
+ * 会把 vault_* JSON 翻译成本地化文案，翻译后的文本里已经没有 code 了。 */
+export const parseVaultError = (error: unknown): VaultErrorInfo | null => {
+  if (!error) return null;
+  return parseVaultErrorText(extractRawErrorMessage(error));
+};
+
+/** vault_* 错误码 → 本地化文案（vault.errors.<code>，缺失时回退后端消息）。
+ * 用 i18next 全局单例（与 @/i18n 配置的是同一个实例），避免测试里对
+ * react-i18next 的 mock 被 @/i18n 的模块初始化踩到。 */
+export const translateVaultError = (info: VaultErrorInfo): string =>
+  i18next.t(`vault.errors.${info.code}`, {
+    defaultValue: info.message || info.code,
+  });
+
 /**
  * 从各种错误对象中提取错误信息
  * @param error 错误对象
  * @returns 提取的错误信息字符串
  */
 export const extractErrorMessage = (error: unknown): string => {
+  const raw = extractRawErrorMessage(error);
+  const vault = parseVaultErrorText(raw);
+  if (vault) {
+    return translateVaultError(vault);
+  }
+  return raw;
+};
+
+const extractRawErrorMessage = (error: unknown): string => {
   if (!error) return "";
   if (typeof error === "string") {
     return error;
@@ -35,6 +106,23 @@ export const extractErrorMessage = (error: unknown): string => {
   }
 
   return "";
+};
+
+/**
+ * vault_* 错误的统一 toast：本地化文案 + 可选「重试」按钮（F5-3）。
+ * 命中时返回 true，调用方应跳过原有错误 toast，避免重复弹。
+ */
+export const toastVaultError = (
+  error: unknown,
+  retry?: () => void,
+): boolean => {
+  const info = parseVaultError(error);
+  if (!info) return false;
+  const label = i18next.t("vault.errors.retry");
+  toast.error(translateVaultError(info), {
+    action: retry ? { label, onClick: retry } : undefined,
+  });
+  return true;
 };
 
 export const translatePiProviderMutationError = (

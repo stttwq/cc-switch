@@ -293,7 +293,9 @@
       },
       "secretStore": {
         "title": "資格情報マネージャーのメンテナンス",
-        "description": "削除済みプロバイダーが Windows 資格情報マネージャーに残したエントリを整理し、暗号化バンドルで資格情報を別マシンへ移行できます"
+        "description": "削除済みプロバイダーが Windows 資格情報マネージャーに残したエントリを整理し、暗号化バンドルで資格情報を別マシンへ移行できます",
+        "title1P": "資格情報のメンテナンス",
+        "description1P": "削除済みプロバイダーが 1Password に残した孤児エントリを整理し、1Password からローカル参照を再構築して、資格情報マネージャーの残存を削除します"
       }
     },
     "language": "言語",
@@ -764,6 +766,7 @@
       "passphrasePlaceholder": "同期パスフレーズを設定",
       "passphraseUpdatePlaceholder": "設定済み — 変更する場合は新しいものを入力",
       "passphraseSetWarning": "パスフレーズはこの端末の資格情報マネージャーにのみ保存され、アップロードされません。忘れるとリモートデータを復旧できません。",
+      "passphraseSetWarning1P": "パスフレーズはこの端末の 1Password にのみ保存され、アップロードされません。忘れるとリモートデータを復旧できません。",
       "passphraseRequiredWarning": "暗号化を有効にする前に同期パスフレーズを設定してください。忘れるとリモートデータは復旧できません。",
       "enabledToast": "エンドツーエンド暗号化を有効にしました — アップロードして暗号化スナップショットを作成してください",
       "disabledToast": "エンドツーエンド暗号化を無効にしました",
@@ -1278,6 +1281,19 @@
     "openConfigDir": "設定フォルダを開く",
     "quit": "終了"
   },
+  "vault": {
+    "errors": {
+      "vault_not_installed": "1Password CLI（op）が見つかりません",
+      "vault_not_signed_in": "1Password にサインインしていません。先にサインインしてください",
+      "vault_locked": "1Password がロックされているか、起動していないか、認証がキャンセルされました。1Password をロック解除して再試行してください",
+      "vault_network": "1Password に接続できませんでした。ネットワークを確認してください",
+      "vault_timeout": "1Password のリクエストがタイムアウトしました。再試行してください",
+      "vault_item_conflict": "1Password に同名の項目が既に存在します。重複を整理してから再試行してください",
+      "vault_restart_required": "1Password に切り替えました。CC Switch を再起動してください",
+      "vault_other": "1Password の呼び出しに失敗しました。再試行するかログを確認してください",
+      "retry": "再試行"
+    }
+  },
   "errors": {
     "configLoadFailedTitle": "設定の読み込みに失敗しました",
     "configLoadFailedMessage": "設定ファイルを読み込めません:\n{{path}}\n\nエラー詳細:\n{{detail}}\n\nJSON が正しいか確認するか、同じディレクトリのバックアップファイル（config.json.bak など）から復元してください。\n\nアプリを終了して修正してください。",
@@ -1790,6 +1806,7 @@
   },
   "secretsPortable": {
     "hint": "WebDAV/S3 同期は資格情報を一切含みません。アンインストールすると Windows 資格情報マネージャーの cc-switch エントリがすべて削除されます。アンインストール前または別マシンへの移行前に暗号化バンドルをエクスポートし、移行先でインポートすると API キーと Base URL を復元できます。",
+    "hint1P": "1Password モードでは資格情報は 1Password 自身がデバイス間で同期するため、バンドルのエクスポートは利用できません。新しい端末では既存のバンドルをインポートして資格情報を復元できます（インポート先は 1Password です）。",
     "passphraseLabel": "パスフレーズ（{{min}} 文字以上）",
     "passphrasePlaceholder": "パスワードマネージャーでの生成を推奨",
     "passphraseHint": "{{min}} 文字以上。バンドルはこれで暗号化され、忘れると復元できません。",
@@ -1837,6 +1854,13 @@
     "cleanupResidue": "資格情報マネージャーの残存を削除",
     "cleanupConfirm": "資格情報マネージャーに残っている cc-switch エントリをすべて削除します（1Password が唯一の正となります）。この操作は元に戻せません。続行しますか？",
     "cleanupDone": "{{deleted}} 件の資格情報マネージャーエントリを削除しました。",
-    "cleanupDoneWithFailures": "{{deleted}} 件削除、{{failed}} 件失敗（後で再試行できます）。"
+    "cleanupDoneWithFailures": "{{deleted}} 件削除、{{failed}} 件失敗（後で再試行できます）。",
+    "requesting": "1Password にリクエスト中です。ロック解除を求められる場合があります…",
+    "rebuildRefs": "1Password から参照を再構築",
+    "rebuildRefsProgress": "参照を再構築中…（{{done}}/{{total}}、ロック解除を求める場合があります）",
+    "rebuildRefsDone": "{{rebuilt}} 件の参照を再構築しました（全 {{total}} 件）。",
+    "plaintextPending": "インポート待ちの平文キーを検出しました：Pi 設定 {{pi}} 件、live ファイル {{live}} 件、保留中のインポート {{imports}} 件。インポートするまで 1Password には保存されません。",
+    "plaintextImportAction": "1Password にインポート",
+    "plaintextImportDone": "{{count}} 件のキーを 1Password にインポートしました。"
   }
 }

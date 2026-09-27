@@ -17,9 +17,9 @@ CC Switch is a local desktop application. It manages configuration files for AI 
 
 CC Switch 是一个本地桌面应用，用于管理本机上各 AI 编程 CLI 的配置文件。本项目不运营任何云端后端，没有多用户模型，也不与运行它的用户之间存在权限隔离。
 
-Credentials (API keys and Base URLs) are stored only in **Windows Credential Manager**. Delivery to CLIs is via **user-level environment variables** (`HKCU\Environment`); live files must not contain secret values. Those environment variables are kept in **plaintext on disk** under `HKCU\Environment`, and only the **active** provider's copy is ever present — switching providers removes the previous values before writing the new ones. Codex and Pi currently still write the **active** Base URL into live config because those CLIs have no env-var indirection for it.
+Credentials (API keys and Base URLs) are stored only in **Windows Credential Manager** (an optional 1Password backend exists since 2.3.0 — see its section below). Delivery to CLIs is via **user-level environment variables** (`HKCU\Environment`); live files must not contain secret values. Those environment variables are kept in **plaintext on disk** under `HKCU\Environment`, and only the **active** provider's copy is ever present — switching providers removes the previous values before writing the new ones. Codex and Pi currently still write the **active** Base URL into live config because those CLIs have no env-var indirection for it.
 
-密钥与 Base URL 仅存放在 **Windows 凭据管理器**。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。这些环境变量的值在 `HKCU\Environment` 中**明文存储**，且任何时刻只保留**当前激活**供应商的那一份——切换供应商时会先删掉旧值再写入新值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
+密钥与 Base URL 仅存放在 **Windows 凭据管理器**（2.3.0 起可选启用 1Password 后端，见下文专节）。向 CLI 投递的方式是**用户级环境变量**（`HKCU\Environment`）；live 文件不得含密钥值。这些环境变量的值在 `HKCU\Environment` 中**明文存储**，且任何时刻只保留**当前激活**供应商的那一份——切换供应商时会先删掉旧值再写入新值。Codex / Pi 因 CLI 没有环境变量间接引用，当前仍会把**当前激活**供应商的 Base URL 写入 live 配置。
 
 **Frontend zero-secret by default / 前端默认零密钥.** Batch reads — the provider list, cards, tray — never carry a secret value. A credential value crosses IPC only when the user **explicitly clicks "显示" for a single field of a single provider**, via the dedicated `reveal_provider_secret` command; the frontend must not place that value in a TanStack Query cache, `localStorage`, a form initial-value snapshot, or any log, and the value is dropped when the dialog closes. As an intentional exception, `get_providers` does return each provider's **Base URL** for the card display — a Base URL is far less sensitive than a key and the user explicitly wants to see which endpoint is active. It reads Credential Manager for that one non-secret field only.
 
@@ -72,6 +72,19 @@ The scoping decision above is void the moment any of the following becomes true.
   任何用户可控字符串作为内容进入 HTML sink
 - The IPC surface is exposed to a non-bundled origin
   IPC 接口暴露给非打包来源
+
+## 1Password Backend / 1Password 凭据后端
+
+v2.3.0 adds an **optional** credential backend: all secrets (provider API keys, extra env, Pi sensitive headers, WebDAV password, S3 keys, E2E sync passphrase) live in the user's 1Password vault, fetched on demand through the local 1Password CLI (`op`) with desktop-app integration. When this backend is off (the default), everything above about Credential Manager applies unchanged.
+
+v2.3.0 新增**可选**凭据后端：所有钥匙（供应商 API Key、额外环境变量、Pi 敏感请求头、WebDAV 密码、S3 两把、E2E 同步口令）存入用户的 1Password vault，经本机 1Password CLI（`op`）与桌面 App 集成按需取用。未启用时（默认），上文关于凭据管理器的描述全部不变。
+
+- **Trust root is `op.exe` / 信任根是 `op.exe`**: the binary is located at a settings-recorded absolute path and its Authenticode signature is verified with `WinVerifyTrust`; the **signer certificate's organization must exactly equal `Agilebits`** (Azure Trusted Signing rotates certificates, so the fingerprint is deliberately NOT pinned; revocation is not checked offline — `WTD_REVOKE_NONE` — to avoid turning an offline machine into a denial of service). If verification fails, no `op` subprocess is ever spawned. 1Password 集成依赖的 `op.exe` 按设置中的绝对路径定位并做 Authenticode 校验，签名者证书主体必须完整等于 `Agilebits`（证书经 Azure Trusted Signing 短期轮换，刻意不钉指纹；离线不查吊销，避免断网即瘫痪）。校验失败绝不拉起任何 op 子进程。
+- **Keys never enter command lines / 钥匙不进命令行**: item values are transferred via stdin pipe JSON only; no `field=value` assignment syntax, no temp template files. 序列化值一律走 stdin 管道 JSON，不用赋值语法、不写临时模板文件。
+- **References, not secrets, stay local / 本地只存引用**: a local `secret_refs` table stores vault/item ids and field-name lists only (not synced with the cloud). Non-credential-bearing base URLs are stored in a local endpoint table that does sync — a URL is not a secret (D3-A); credential-bearing URLs stay in the vault. 本地只存引用表（不随云同步）；不带凭据的 Base URL 存随云同步的端点表——URL 不是秘密；带凭据的 URL 仍进 vault。
+- **What it defends / 能防**: disk/DB/backup theft reveals no keys; same-account reads of Credential Manager and registry reveal nothing (both are empty after migration); while 1Password is locked nobody — CC Switch included — can retrieve anything. Errors fail closed and are never downgraded to "no key". 拷走硬盘/DB/备份拿不到钥匙；同账号翻凭据管理器与注册表一无所获；锁定期内任何人（含 CC Switch）都取不到；错误一律 fail-closed，绝不降级为「没有钥匙」。
+- **What it cannot defend / 防不住**: an already-launched terminal holds the key in its environment block (readable by same-account processes — the physical floor of "giving a CLI a key"); Codex / Pi write the active base URL into their own config files by design; while 1Password is unlocked a same-account program can call `op` too (desktop-app integration prompts per process, but a user may misapprove); CC Switch holds plaintext in memory for the seconds between fetch and injection. 已注入钥匙的终端进程环境块有明文（同账号可读——这是给 CLI 用钥匙的物理下限）；Codex / Pi 本身就会把 base_url 明文写进配置文件；解锁窗口内同账号程序也能调 `op`（按进程弹授权，用户可能误点）；取钥匙到注入完成的几秒内进程内存中有明文。
+- **Uninstall leaves the vault untouched / 卸载不动 vault**: uninstalling CC Switch never deletes or modifies 1Password items. 卸载不会删除或修改 1Password 中的条目。
 
 ## Scope / 范围
 

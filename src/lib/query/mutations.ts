@@ -17,6 +17,7 @@ import type { SwitchResult } from "@/lib/api/providers";
 import type { Provider, SessionMeta, Settings } from "@/types";
 import {
   extractErrorMessage,
+  toastVaultError,
   translatePiProviderMutationError,
 } from "@/utils/errorUtils";
 import { generateUUID } from "@/utils/uuid";
@@ -26,13 +27,13 @@ export const useAddProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
-  return useMutation({
-    mutationFn: async (
-      providerInput: Omit<Provider, "id"> & {
-        providerKey?: string;
-        addToLive?: boolean;
-      },
-    ) => {
+  type AddProviderInput = Omit<Provider, "id"> & {
+    providerKey?: string;
+    addToLive?: boolean;
+  };
+
+  const mutation = useMutation({
+    mutationFn: async (providerInput: AddProviderInput) => {
       const { providerKey: _providerKey, addToLive, ...rest } = providerInput;
 
       let id: string;
@@ -77,7 +78,11 @@ export const useAddProviderMutation = (appId: AppId) => {
         },
       );
     },
-    onError: (error: Error) => {
+    onError: (error: Error, providerInput: AddProviderInput) => {
+      // F5-3：vault_* 错误（如 1Password 锁定）走统一 toast 并带「重试」。
+      if (toastVaultError(error, () => mutation.mutate(providerInput))) {
+        return;
+      }
       const rawDetail = extractErrorMessage(error);
       const detail =
         (appId === "pi"
@@ -98,20 +103,20 @@ export const useAddProviderMutation = (appId: AppId) => {
       }
     },
   });
+  return mutation;
 };
 
 export const useUpdateProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
-  return useMutation({
-    mutationFn: async ({
-      provider,
-      originalId,
-    }: {
-      provider: Provider;
-      originalId?: string;
-    }) => {
+  type UpdateProviderInput = {
+    provider: Provider;
+    originalId?: string;
+  };
+
+  const mutation = useMutation({
+    mutationFn: async ({ provider, originalId }: UpdateProviderInput) => {
       await providersApi.update(provider, appId, originalId);
       return provider;
     },
@@ -126,7 +131,11 @@ export const useUpdateProviderMutation = (appId: AppId) => {
         },
       );
     },
-    onError: (error: Error) => {
+    onError: (error: Error, variables: UpdateProviderInput) => {
+      // F5-3：vault_* 错误（如 1Password 锁定）走统一 toast 并带「重试」。
+      if (toastVaultError(error, () => mutation.mutate(variables))) {
+        return;
+      }
       const rawDetail = extractErrorMessage(error);
       const detail =
         (appId === "pi"
@@ -147,13 +156,14 @@ export const useUpdateProviderMutation = (appId: AppId) => {
       }
     },
   });
+  return mutation;
 };
 
 export const useDeleteProviderMutation = (appId: AppId) => {
   const queryClient = useQueryClient();
   const { t } = useTranslation();
 
-  return useMutation({
+  const mutation = useMutation({
     mutationFn: async (providerId: string) => {
       await providersApi.delete(providerId, appId);
     },
@@ -178,7 +188,11 @@ export const useDeleteProviderMutation = (appId: AppId) => {
         },
       );
     },
-    onError: (error: Error) => {
+    onError: (error: Error, providerId: string) => {
+      // F5-3：vault_* 错误（如 1Password 锁定）走统一 toast 并带「重试」。
+      if (toastVaultError(error, () => mutation.mutate(providerId))) {
+        return;
+      }
       const rawDetail = extractErrorMessage(error);
       const detail =
         (appId === "pi"
@@ -199,6 +213,7 @@ export const useDeleteProviderMutation = (appId: AppId) => {
       }
     },
   });
+  return mutation;
 };
 
 /**

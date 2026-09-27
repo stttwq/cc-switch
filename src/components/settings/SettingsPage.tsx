@@ -39,6 +39,7 @@ import { settingsApi } from "@/lib/api";
 import { LanguageSettings } from "@/components/settings/LanguageSettings";
 import { GlobalProxySettings } from "@/components/settings/GlobalProxySettings";
 import { SecretStoreMaintenance } from "@/components/settings/SecretStoreMaintenance";
+import { useSecretBackend } from "@/hooks/useSecretBackend";
 import { SecretsPortableSection } from "@/components/settings/SecretsPortableSection";
 import { OnePasswordSection } from "@/components/settings/OnePasswordSection";
 import { LiveReapplyMaintenance } from "@/components/settings/LiveReapplyMaintenance";
@@ -78,6 +79,8 @@ export function SettingsPage({
   defaultTab = "general",
 }: SettingsDialogProps) {
   const { t } = useTranslation();
+  // F5-5：按后端切换「凭据管理器维护」标题与说明（1P 模式下维护的是 1Password）。
+  const secretBackend = useSecretBackend();
   const {
     settings,
     isLoading,
@@ -506,10 +509,18 @@ export function SettingsPage({
                             <ShieldCheck className="h-5 w-5 text-cyan-500" />
                             <div className="text-left">
                               <h3 className="text-base font-semibold">
-                                {t("settings.advanced.secretStore.title")}
+                                {secretBackend === "onepassword"
+                                  ? t("settings.advanced.secretStore.title1P")
+                                  : t("settings.advanced.secretStore.title")}
                               </h3>
                               <p className="text-sm text-muted-foreground font-normal">
-                                {t("settings.advanced.secretStore.description")}
+                                {secretBackend === "onepassword"
+                                  ? t(
+                                      "settings.advanced.secretStore.description1P",
+                                    )
+                                  : t(
+                                      "settings.advanced.secretStore.description",
+                                    )}
                               </p>
                             </div>
                           </div>

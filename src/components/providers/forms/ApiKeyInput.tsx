@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useState } from "react";
 import { Eye, EyeOff, Loader2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { providersApi, type AppId } from "@/lib/api";
+import { extractErrorMessage, parseVaultError } from "@/utils/errorUtils";
 
 /** 决策 A4：显示态在失焦或 60 秒后自动重新遮罩，防止编辑页开着离开座位。 */
 const REVEAL_AUTO_MASK_MS = 60_000;
@@ -86,8 +87,14 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
       setUserEdited(true);
       onChange(revealed);
       setShowKey(true);
-    } catch {
-      setRevealError(t("apiKeyInput.revealFailed"));
+    } catch (error) {
+      // F5-3：vault_* 错误显示具体原因（如 1Password 锁定），重试即再点眼睛按钮；
+      // 其余错误维持通用文案。
+      setRevealError(
+        parseVaultError(error)
+          ? extractErrorMessage(error)
+          : t("apiKeyInput.revealFailed"),
+      );
     } finally {
       setRevealing(false);
     }

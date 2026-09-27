@@ -6,6 +6,8 @@ import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { settingsApi } from "@/lib/api/settings";
+import { useSecretBackend } from "@/hooks/useSecretBackend";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import type { SyncE2eStatus } from "@/types";
 
 type Transport = "webdav" | "s3";
@@ -18,6 +20,8 @@ type Transport = "webdav" | "s3";
  */
 export function SyncEncryptionSection() {
   const { t } = useTranslation();
+  // F5-5：1P 模式下口令存 1Password，提示文案随之切换。
+  const secretBackend = useSecretBackend();
   const [status, setStatus] = useState<SyncE2eStatus | null>(null);
   const [passphrase, setPassphrase] = useState("");
   const [busy, setBusy] = useState(false);
@@ -43,7 +47,7 @@ export function SyncEncryptionSection() {
       toast.success(t("settings.syncEncryption.passphraseSaved"));
       await refresh();
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -60,7 +64,7 @@ export function SyncEncryptionSection() {
       );
       await refresh();
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -76,7 +80,7 @@ export function SyncEncryptionSection() {
       );
       await refresh();
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -104,7 +108,7 @@ export function SyncEncryptionSection() {
       toast.success(t("settings.syncEncryption.resetDone"));
       await refresh();
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -120,7 +124,7 @@ export function SyncEncryptionSection() {
       await settingsApi.syncE2eDeleteLegacyRemote(transport);
       toast.success(t("settings.syncEncryption.deleteLegacyDone"));
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -184,7 +188,9 @@ export function SyncEncryptionSection() {
         </div>
         <p className="text-xs text-destructive">
           {status?.passphraseSet
-            ? t("settings.syncEncryption.passphraseSetWarning")
+            ? secretBackend === "onepassword"
+              ? t("settings.syncEncryption.passphraseSetWarning1P")
+              : t("settings.syncEncryption.passphraseSetWarning")
             : t("settings.syncEncryption.passphraseRequiredWarning")}
         </p>
       </div>

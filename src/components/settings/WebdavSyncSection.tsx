@@ -15,6 +15,7 @@ import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -495,7 +496,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.webdavSync.testFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -532,7 +533,7 @@ export function WebdavSyncSection({
       pendingPasswordPreservationRef.current = null;
       toast.error(
         t("settings.webdavSync.saveFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
       setActionState("idle");
@@ -547,7 +548,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.warning(
         t("settings.webdavSync.saveAndTestFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -594,7 +595,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.webdavSync.uploadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -631,7 +632,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.webdavSync.downloadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -674,7 +675,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.webdavSync.downloadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -747,7 +748,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.testFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -782,7 +783,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.saveFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
       setS3ActionState("idle");
@@ -797,7 +798,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.warning(
         t("settings.s3Sync.saveAndTestFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -842,7 +843,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.uploadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -875,7 +876,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.downloadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -916,7 +917,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.downloadFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     } finally {
@@ -975,7 +976,7 @@ export function WebdavSyncSection({
     } catch (error) {
       toast.error(
         t("settings.s3Sync.mutualExclusionFailed", {
-          error: (error as Error)?.message ?? String(error),
+          error: extractErrorMessage(error),
         }),
       );
     }

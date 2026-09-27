@@ -26,6 +26,9 @@
 │   ├── 3.3 Skills 技能管理
 │   └── 3.4 会话管理器
 │
+├── 4. 凭据
+│   └── 4.1 1Password 凭据后端
+│
 └── 5. 常见问题
     ├── 5.1 配置文件说明
     ├── 5.2 FAQ
@@ -62,9 +65,13 @@
 | [3.3-skills.md](./3-extensions/3.3-skills.md) | 发现技能、安装卸载、仓库管理 |
 | [3.4-sessions.md](./3-extensions/3.4-sessions.md) | 会话浏览、搜索过滤、恢复与删除 |
 
-### 4. 凭据与投递
+### 4. 凭据
 
-密钥只保存在 Windows 凭据管理器，切换供应商时通过用户级环境变量投递给 CLI；SQLite、`settings.json`、live 配置文件、导出与同步载荷中都没有密钥值。本地 HTTP 代理与用量看板已移除；应用内也不再有更新提示，升级到新版本请下载新的 Windows 安装包覆盖安装（GitHub Releases）。
+密钥默认只保存在 Windows 凭据管理器，切换供应商时通过用户级环境变量投递给 CLI；SQLite、`settings.json`、live 配置文件、导出与同步载荷中都没有密钥值。v2.3.0 起可选启用 **1Password 凭据后端**，把所有钥匙搬进 1Password vault（见下表）。
+
+| 文件 | 内容 |
+|------|------|
+| [4.1-1password.md](./4-credentials/4.1-1password.md) | 1Password 凭据后端：迁移、诚实边界、换设备重建引用、退出码 |
 
 ### 5. 常见问题
 

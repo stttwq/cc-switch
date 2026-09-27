@@ -293,7 +293,9 @@
       },
       "secretStore": {
         "title": "認證管理員維護",
-        "description": "清理已刪除供應商在 Windows 認證管理員裡殘留的項目，並可用加密攜行包在裝置之間遷移憑證"
+        "description": "清理已刪除供應商在 Windows 認證管理員裡殘留的項目，並可用加密攜行包在裝置之間遷移憑證",
+        "title1P": "憑證維護",
+        "description1P": "清理已刪除供應商在 1Password 裡的孤兒條目、從 1Password 重建本地引用，並清理認證管理員殘留"
       }
     },
     "language": "介面語言",
@@ -764,6 +766,7 @@
       "passphrasePlaceholder": "設定同步密碼",
       "passphraseUpdatePlaceholder": "已設定密碼——輸入新的以變更",
       "passphraseSetWarning": "密碼只存在本機的憑據管理器裡、永不上傳。忘記密碼將無法恢復遠端資料。",
+      "passphraseSetWarning1P": "密碼只存在本機的 1Password 裡、永不上傳。忘記密碼將無法恢復遠端資料。",
       "passphraseRequiredWarning": "啟用加密前必須先設定同步密碼。請牢記：忘記密碼会使遠端資料不可恢復。",
       "enabledToast": "已啟用端到端加密——請點上傳產生加密快照",
       "disabledToast": "已關閉端到端加密",
@@ -1278,6 +1281,19 @@
     "openConfigDir": "開啟設定目錄",
     "quit": "結束"
   },
+  "vault": {
+    "errors": {
+      "vault_not_installed": "未偵測到 1Password 命令列工具（op）",
+      "vault_not_signed_in": "尚未登入 1Password，請先登入",
+      "vault_locked": "1Password 已鎖定、未執行或授權被取消，請開啟並解鎖 1Password 後重試",
+      "vault_network": "連線 1Password 失敗，請檢查網路",
+      "vault_timeout": "1Password 請求逾時，請重試",
+      "vault_item_conflict": "1Password 中已存在同名條目，請清理重複條目後重試",
+      "vault_restart_required": "已切換到 1Password，請重新啟動 CC Switch",
+      "vault_other": "1Password 呼叫失敗，請重試或查看日誌",
+      "retry": "重試"
+    }
+  },
   "errors": {
     "configLoadFailedTitle": "設定載入失敗",
     "configLoadFailedMessage": "無法讀取設定檔：\n{{path}}\n\n錯誤詳情：\n{{detail}}\n\n請手動檢查 JSON 是否有效，或從同目錄的備份檔案（如 config.json.bak）還原。\n\n應用程式將退出以便您進行修復。",
@@ -1790,6 +1806,7 @@
   },
   "secretsPortable": {
     "hint": "WebDAV/S3 同步不攜帶任何憑證，卸載則會把 Windows 認證管理員裡的 cc-switch 項目全部刪除。卸載前或換機前先匯出加密攜行包；在新機器上匯入即可還原 API Key 與 Base URL。",
+    "hint1P": "1Password 模式下憑證由 1Password 自行跨裝置同步，匯出攜行包不可用；在新裝置上仍可匯入既有攜行包恢復憑證（匯入會寫入 1Password）。",
     "passphraseLabel": "口令（至少 {{min}} 字元）",
     "passphrasePlaceholder": "建議用密碼管理器產生",
     "passphraseHint": "至少 {{min}} 字元。攜行包用它加密，忘記口令則無法還原。",
@@ -1837,6 +1854,13 @@
     "cleanupResidue": "清理憑證管理器殘留",
     "cleanupConfirm": "將刪除憑證管理器中剩餘的全部 cc-switch 條目（1Password 是唯一真源）。此操作不可復原，要繼續嗎？",
     "cleanupDone": "已清理 {{deleted}} 個憑證管理器條目。",
-    "cleanupDoneWithFailures": "已清理 {{deleted}} 個，{{failed}} 個失敗（可稍後重試）。"
+    "cleanupDoneWithFailures": "已清理 {{deleted}} 個，{{failed}} 個失敗（可稍後重試）。",
+    "requesting": "正在向 1Password 請求，可能需要解鎖…",
+    "rebuildRefs": "從 1Password 重建引用",
+    "rebuildRefsProgress": "重建引用中…（{{done}}/{{total}}，會請求解鎖）",
+    "rebuildRefsDone": "已重建 {{rebuilt}} 個引用（共 {{total}} 個條目）。",
+    "plaintextPending": "偵測到待匯入的明文金鑰：Pi 設定 {{pi}} 個、live 檔案 {{live}} 個；另有 {{imports}} 個匯入暫留。匯入後 1Password 裡才會有這些金鑰。",
+    "plaintextImportAction": "匯入到 1Password",
+    "plaintextImportDone": "已匯入 {{count}} 把金鑰到 1Password。"
   }
 }

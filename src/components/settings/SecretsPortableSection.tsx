@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { Download, Loader2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -69,7 +70,7 @@ export function SecretsPortableSection() {
         );
       }
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -98,7 +99,7 @@ export function SecretsPortableSection() {
         );
       }
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(null);
     }
@@ -107,7 +108,9 @@ export function SecretsPortableSection() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        {t("secretsPortable.hint")}
+        {isOnePassword
+          ? t("secretsPortable.hint1P")
+          : t("secretsPortable.hint")}
       </p>
 
       <div className="space-y-2">

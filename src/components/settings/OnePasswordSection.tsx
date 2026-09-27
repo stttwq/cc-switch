@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Eraser, KeyRound, Loader2, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api/settings";
+import { extractErrorMessage, toastVaultError } from "@/utils/errorUtils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 interface OnePasswordStatus {
@@ -31,6 +32,15 @@ interface OpVault {
 }
 
 /**
+ * F5-3：vault_* 错误（锁定/断网/超时等）统一 toast + 「重试」；其余显示原始信息。
+ * 模块级纯展示辅助，不依赖组件状态。
+ */
+const showVaultAwareError = (error: unknown, retry: () => void) => {
+  if (toastVaultError(error, retry)) return;
+  toast.error(extractErrorMessage(error) || String(error));
+};
+
+/**
  * 1Password 后端设置（§8）：显示状态（未安装/未登录/正常 + op 版本/路径/签名），
  * 选择 account/vault，测试取钥匙。真正切换后端在迁移向导里完成（P4）。
  */
@@ -44,8 +54,9 @@ export function OnePasswordSection() {
   const [verifySignature, setVerifySignature] = useState(true);
   const [restartFailed, setRestartFailed] = useState(false);
   const [migrateProgress, setMigrateProgress] = useState({ done: 0, total: 0 });
+  const [rebuildProgress, setRebuildProgress] = useState({ done: 0, total: 0 });
   const [busy, setBusy] = useState<
-    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | "cleanup" | null
+    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | "cleanup" | "rebuild" | null
   >(null);
 
   // F2-3：已处于 1Password 后端时锁定 account / vault（运行中的 vault 不跟随设置变化，
@@ -60,6 +71,30 @@ export function OnePasswordSection() {
     },
   );
 
+  // F4-5：重建引用进度（N+1 次 op，逐条上报）。
+  useTauriEvent<{ done: number; total: number }>(
+    "onepassword-rebuild-refs-progress",
+    (payload) => {
+      setRebuildProgress(payload);
+    },
+  );
+
+  // F4-5（D14）：从 1Password 重建 secret_refs——云同步恢复 / 换设备后引用会
+  // 脱节（引用不随云同步）。用户显式动作，N+1 次 op（可能弹解锁）。
+  const rebuildRefs = async () => {
+    setBusy("rebuild");
+    try {
+      const r = await invoke<{ total: number; rebuilt: number; skipped: string[] }>(
+        "onepassword_rebuild_refs",
+      );
+      toast.success(t("onepassword.rebuildRefsDone", r));
+    } catch (error) {
+      showVaultAwareError(error, () => void rebuildRefs());
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const refreshStatus = useCallback(async () => {
     setBusy("status");
     try {
@@ -69,7 +104,7 @@ export function OnePasswordSection() {
       if (s.account) setAccount(s.account);
       if (s.vault) setVault(s.vault);
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void refreshStatus());
     } finally {
       setBusy(null);
     }
@@ -88,7 +123,7 @@ export function OnePasswordSection() {
         setAccount(list[0].account_uuid || list[0].email);
       }
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void loadAccounts());
     } finally {
       setBusy(null);
     }
@@ -104,7 +139,7 @@ export function OnePasswordSection() {
       setVaults(list);
       if (!vault && list.length > 0) setVault(list[0].id);
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void loadVaults());
     } finally {
       setBusy(null);
     }
@@ -121,7 +156,7 @@ export function OnePasswordSection() {
       toast.success(t("onepassword.saved"));
       await refreshStatus();
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void save());
     } finally {
       setBusy(null);
     }
@@ -133,7 +168,7 @@ export function OnePasswordSection() {
       await invoke("onepassword_test_fetch");
       toast.success(t("onepassword.testOk"));
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void testFetch());
     } finally {
       setBusy(null);
     }
@@ -153,7 +188,7 @@ export function OnePasswordSection() {
         toast.success(t("onepassword.cleanupDone", r));
       }
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void cleanupResidue());
     } finally {
       setBusy(null);
     }
@@ -182,7 +217,7 @@ export function OnePasswordSection() {
         setRestartFailed(true);
       }
     } catch (error) {
-      toast.error(String(error));
+      showVaultAwareError(error, () => void migrate());
     } finally {
       setBusy(null);
     }
@@ -365,24 +400,53 @@ export function OnePasswordSection() {
         </Button>
         {/* F2-1：迁移后清理凭据管理器残留（1Password 是唯一真源）。 */}
         {is1pActive && (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={busy !== null}
-            onClick={cleanupResidue}
-          >
-            {busy === "cleanup" ? (
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-            ) : (
-              <Eraser className="mr-2 h-4 w-4" />
-            )}
-            {t("onepassword.cleanupResidue")}
-          </Button>
+          <>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={cleanupResidue}
+            >
+              {busy === "cleanup" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Eraser className="mr-2 h-4 w-4" />
+              )}
+              {t("onepassword.cleanupResidue")}
+            </Button>
+            {/* F4-5（D14）：换设备 / 云同步恢复后重建 secret_refs。 */}
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={rebuildRefs}
+            >
+              {busy === "rebuild" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : null}
+              {t("onepassword.rebuildRefs")}
+            </Button>
+          </>
         )}
       </div>
       {busy === "migrate" && migrateProgress.total > 0 && (
         <p className="text-xs text-muted-foreground">
           {t("onepassword.migrateProgress", migrateProgress)}
+        </p>
+      )}
+      {busy === "rebuild" && rebuildProgress.total > 0 && (
+        <p className="text-xs text-muted-foreground">
+          {t("onepassword.rebuildRefsProgress", rebuildProgress)}
+        </p>
+      )}
+      {/* F5-4：可能触发 op 的操作进行中，统一提示可能弹解锁。 */}
+      {(busy === "accounts" ||
+        busy === "vaults" ||
+        busy === "test" ||
+        busy === "migrate" ||
+        busy === "rebuild") && (
+        <p className="text-xs text-muted-foreground">
+          {t("onepassword.requesting")}
         </p>
       )}
     </div>

@@ -27,6 +27,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   全查该表，零后端往返。
 - 凭据后端读取失败（锁定/断网/取消授权）一律明确报错，绝不静默降级为「没有钥匙」。
 
+### Fixed
+
+- **1Password 模式接入审查修复（2.3.x 加固）。** 对 `main...1password` 全量 diff 的审查发现 8 个 P0 问题，全部修复：
+  - `base_url` 不再进出保险箱：非敏感 URL 存本地端点表（随云同步、零 op 读取），带凭据的 URL 仍存 vault；Codex 写 live、列表卡片、Pi 投递统一走 `resolve_base_url`，杜绝「从已清空的凭据管理器读 base_url」。
+  - `OnePasswordVault::put` 改为原子的「读取 → 就地编辑」（`op item edit` 整份 JSON 走 stdin），不再「先归档删除、再新建」；item id 保持稳定，归档里不再堆积旧钥匙副本。
+  - 编辑供应商时数据库写失败不再删除该供应商已有钥匙（仅新增路径保留归档回滚）。
+  - Pi `models.json` 里的明文 key 在 1Password 模式不再被静默丢弃：保留原文件、记入待导入清单，用户确认后一键导入。
+  - 堵住明文回流 Windows 凭据管理器的路径：SQL 导入 / 备份恢复 / 云同步下载 / 便携包导入在 1Password 模式改走 vault，写入失败保留明文并提示重试；便携包导出由后端直接拒绝。
+  - 迁移提交后旧后端立即失效（返回 `vault_restart_required`），前端迁移成功后强制重启，杜绝钥匙写回凭据管理器。
+  - 启动剥离改为「就地、定点、有备份才剥」：不再整文件重写 live（用户在 CCS 外的改动不再被吞），`auth.json` 只在有备份时删 `OPENAI_API_KEY`。
+  - `op.exe` 签名校验只认签名者证书（O=Agilebits 完整匹配），不再遍历证书包子串匹配；校验失败绝不执行任何 op 子进程。
+  - 其余健壮性加固：stderr 分类先剔除回显、状态探测不抢全局锁、后端判定 fail-closed、`secret_refs` 不随云同步（提供「从 1Password 重建引用」）、注册表清理保留登记等。
+  - 读写按 `secret_refs` 的 item_id 直达（标题只作兜底），归档条目一律视为不存在；迁移用本地标记判定「已迁移」，每组上报进度。
+  - 可能触发 op 的 Tauri 命令全部改 async + `spawn_blocking`；`ccs env` 退出码分级（6 = vault 锁定，7 = 网络/超时）。
+
+## [2.2.9] - 2026-09-25
+
+### Added
 
 - **Encrypted credential bundle for moving credentials between machines.** Credentials live only in Windows Credential Manager and are never part of the WebDAV/S3 payload, so uninstalling deletes them for good — "uninstall + reinstall + sync" used to lose every API key and base URL permanently. Settings → Advanced → Credential manager maintenance now offers **Export credentials** / **Import credentials**: every `cc-switch/*` entry is sealed into one file with a passphrase (20-character minimum) using the same Argon2id + XChaCha20-Poly1305 construction as end-to-end sync, in a format of its own so the two payloads cannot be mistaken for each other. On import the bundle wins over local values and entries that exist only locally are kept. Neither plaintext credentials nor the passphrase ever appear in the file.
 

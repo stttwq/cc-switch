@@ -280,6 +280,18 @@ export interface Settings {
       migratedStateRows?: number;
     };
   };
+
+  // ===== 1Password 凭据后端（F5-5）=====
+  // 凭据后端："windows"（默认）| "onepassword"
+  secretBackend?: string;
+  // 1P 模式：导入/恢复时写 vault 失败、明文暂留 DB 的供应商清单（<app>/<id>，只记 id）
+  secretsImportPending?: string[];
+  // 1P 模式：Pi models.json 里的明文钥匙待导入清单（provider id）
+  piPlaintextPending?: string[];
+  // 1P 模式：live 文件里的明文钥匙待导入清单（<app>/<id>）
+  livePlaintextPending?: string[];
+  // 1P 模式：删除供应商时 vault.delete 失败、1P 条目尚未归档的组键清单
+  onepasswordOrphans?: string[];
 }
 
 export interface SessionMeta {

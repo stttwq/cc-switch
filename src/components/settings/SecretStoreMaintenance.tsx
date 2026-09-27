@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { extractErrorMessage } from "@/utils/errorUtils";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
@@ -46,7 +47,7 @@ export function SecretStoreMaintenance() {
         t("secretsMigration.cleanupOrphansDone", { count: removed }),
       );
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }
@@ -65,7 +66,7 @@ export function SecretStoreMaintenance() {
       }
       setOrphans(candidates);
     } catch (error) {
-      toast.error(String(error));
+      toast.error(extractErrorMessage(error));
     } finally {
       setBusy(false);
     }

@@ -4,6 +4,7 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { toastVaultError } from "@/utils/errorUtils";
 import { useTauriEvent } from "@/hooks/useTauriEvent";
 
 /**
@@ -68,6 +69,8 @@ export function EndpointBackfillBanner() {
       setPending(0);
       sessionStorage.setItem("endpoint_backfill_banner_dismissed", "true");
     } catch (error) {
+      // F5-3：vault_* 错误（如 1Password 锁定）统一 toast + 「重试」。
+      if (toastVaultError(error, () => void backfill())) return;
       toast.error(String(error));
     } finally {
       setRunning(false);

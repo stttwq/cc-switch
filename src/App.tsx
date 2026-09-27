@@ -39,6 +39,7 @@ import { useLastValidValue } from "@/hooks/useLastValidValue";
 import { useScanUnmanagedSkills } from "@/hooks/useSkills";
 import {
   extractErrorMessage,
+  toastVaultError,
   translatePiProviderMutationError,
 } from "@/utils/errorUtils";
 import { isTextEditableTarget } from "@/utils/domUtils";
@@ -59,6 +60,7 @@ import { ConfirmDialog } from "@/components/ConfirmDialog";
 import { SettingsPage } from "@/components/settings/SettingsPage";
 import { EnvWarningBanner } from "@/components/env/EnvWarningBanner";
 import { EndpointBackfillBanner } from "@/components/EndpointBackfillBanner";
+import { PlaintextPendingBanner } from "@/components/PlaintextPendingBanner";
 import UnifiedMcpPanel from "@/components/mcp/UnifiedMcpPanel";
 import PromptPanel, {
   type PromptPanelHandle,
@@ -729,6 +731,10 @@ function App() {
       );
     } catch (error) {
       console.error("[App] Failed to launch provider terminal", error);
+      // F5-3：vault_* 错误（如 1Password 锁定）走统一 toast 并带「重试」。
+      if (toastVaultError(error, () => launchProviderShell(provider, runCli))) {
+        return;
+      }
       const errorMessage = extractErrorMessage(error);
       toast.error(
         t("provider.terminalOpenFailed", {
@@ -1016,6 +1022,8 @@ function App() {
       )}
       {/* F1-2（D3-A）：存量 base_url 端点回填提示（vault → 本地端点表） */}
       <EndpointBackfillBanner />
+      {/* F5-5：1P 模式下明文待导入提示（Pi models.json / live 文件 / 导入暂留） */}
+      <PlaintextPendingBanner />
 
       <header
         className="fixed z-50 w-full transition-all duration-300 bg-background/80 backdrop-blur-md"

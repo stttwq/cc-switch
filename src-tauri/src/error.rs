@@ -3,6 +3,17 @@ use std::sync::PoisonError;
 
 use thiserror::Error;
 
+/// `Localized` 错误的 Display 渲染。`vault_*` key（1Password 后端错误分类）输出
+/// JSON 字符串，保证 `to_string()` / 序列化 / `format!` 包装等所有路径一致，
+/// 前端可解析出 code；其余 key 维持原有的 `{zh} ({en})` 双语格式。
+fn render_localized(key: &str, zh: &str, en: &str) -> String {
+    if key.starts_with("vault_") {
+        serde_json::json!({ "code": key, "message": zh, "messageEn": en }).to_string()
+    } else {
+        format!("{zh} ({en})")
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum AppError {
     #[error("配置错误: {0}")]
@@ -49,7 +60,10 @@ pub enum AppError {
     Message(String),
     #[error("HTTP {status}: {body}")]
     HttpStatus { status: u16, body: String },
-    #[error("{zh} ({en})")]
+    /// F5-3：`vault_*` 错误对前端渲染为 JSON 字符串 `{"code":"vault_locked","message":"…"}`，
+    /// 前端按 code 映射 i18n 并提供「重试」（沿用 ENV_CONFLICT 的 JSON-in-string 约定）；
+    /// 其它 key 维持 `{zh} ({en})`。CLI 侧取文案直接读字段（`error_message_zh/en`），不经这里。
+    #[error("{rendered}", rendered = render_localized(.key, .zh, .en))]
     Localized {
         key: &'static str,
         zh: String,
@@ -142,4 +156,40 @@ pub fn format_skill_error(
         // 如果 JSON 序列化失败，返回简单格式
         format!("ERROR:{code}")
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn vault_localized_renders_json_payload() {
+        let err = AppError::localized(
+            "vault_locked",
+            "1Password 已锁定，请解锁后重试",
+            "1Password is locked; unlock it and retry",
+        );
+        let text = err.to_string();
+        let parsed: serde_json::Value =
+            serde_json::from_str(&text).expect("vault_* 错误的 Display 应输出可解析的 JSON");
+        assert_eq!(parsed["code"], "vault_locked");
+        assert_eq!(parsed["message"], "1Password 已锁定，请解锁后重试");
+        assert_eq!(
+            parsed["messageEn"],
+            "1Password is locked; unlock it and retry"
+        );
+    }
+
+    #[test]
+    fn non_vault_localized_keeps_bilingual_format() {
+        let err = AppError::localized(
+            "env_delivery.adopt_strict",
+            "严格模式下不可用",
+            "unavailable in strict mode",
+        );
+        assert_eq!(
+            err.to_string(),
+            "严格模式下不可用 (unavailable in strict mode)"
+        );
+    }
 }
