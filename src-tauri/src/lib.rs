@@ -1137,6 +1137,7 @@ pub fn run() {
             // Pi native provider and session views
             commands::get_pi_current_state,
             commands::get_pi_session_discovery,
+            commands::import_pi_plaintext_to_onepassword,
             // Profile management (项目配置方案)
             commands::list_profiles,
             commands::create_profile,

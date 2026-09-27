@@ -508,6 +508,11 @@ pub struct AppSettings {
     /// 非空时 UI 提示「解锁 1Password 后重试导入钥匙」；重试成功后清空。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub secrets_import_pending: Option<Vec<String>>,
+    /// F1-4：Pi 原生同步在 1P 模式下检测到 models.json 里有明文钥匙、等待用户
+    /// 「导入到 1Password」的 provider id 清单。存本机设置（不随云同步）。
+    /// 每次原生同步全量重建；导入成功（或明文消失）后自动出队。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pi_plaintext_pending: Option<Vec<String>>,
 
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
@@ -580,6 +585,7 @@ impl Default for AppSettings {
             secret_backend: None,
             onepassword: None,
             secrets_import_pending: None,
+            pi_plaintext_pending: None,
         }
     }
 }
@@ -1235,6 +1241,21 @@ pub fn set_secrets_import_pending(items: Vec<String>) -> Result<(), AppError> {
     let items = if items.is_empty() { None } else { Some(items) };
     mutate_settings(|settings| {
         settings.secrets_import_pending = items;
+    })
+}
+
+// ===== Pi 明文钥匙待导入（F1-4，本机设置） =====
+
+/// F1-4：读取「Pi 明文钥匙待导入 1Password」的 provider id 清单。
+pub fn get_pi_plaintext_pending() -> Vec<String> {
+    get_settings().pi_plaintext_pending.unwrap_or_default()
+}
+
+/// F1-4：写入清单。空清单 = 清除标记（全部导入成功 / 本轮同步无明文）。
+pub fn set_pi_plaintext_pending(items: Vec<String>) -> Result<(), AppError> {
+    let items = if items.is_empty() { None } else { Some(items) };
+    mutate_settings(|settings| {
+        settings.pi_plaintext_pending = items;
     })
 }
 

@@ -253,7 +253,9 @@ fn sync_native_locked(
     native: &IndexMap<String, Value>,
 ) -> Result<usize, AppError> {
     let saved = state.db.get_all_providers(PI_APP)?;
+    let is_1p = crate::settings::is_onepassword_backend();
     let mut changed = 0;
+    let mut plaintext_pending: Vec<String> = Vec::new();
 
     for (id, config) in native {
         let mut provider = saved.get(id).cloned().unwrap_or_else(|| {
@@ -271,6 +273,36 @@ fn sync_native_locked(
         merge_native_config(&mut provider, config.clone());
         let extracted =
             SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
+
+        // F1-4 步骤 1：baseUrl 落端点表（两种模式都做，0 次 vault 往返）。这一步做完，
+        // 就不会再出现「每次启动因重抽 baseUrl 而触发 op」。敏感 URL（带凭据）不落
+        // 端点表，视同明文钥匙走下面的 pending 分支，由「导入到 1Password」收进 vault。
+        if let Some(url) = extracted.secrets.base_url.as_ref() {
+            if !crate::secrets::is_credential_bearing_url(url.as_str()) {
+                state
+                    .db
+                    .upsert_provider_endpoint(PI_APP, &provider.id, url.as_str())?;
+            }
+        }
+
+        // F1-4 步骤 2（1P 模式）：models.json 里有明文钥匙时，不改写 models.json、
+        // 不保存 DB 行（行保持原样；新供应商不入库），记入 pending 等用户点
+        // 「导入到 1Password」。原则 5 的启动 0 次 op 不能拿丢数据换——明文本来就在
+        // 用户自己的 models.json 里，推迟处理不会更糟；凭据管理器模式照旧立即收编。
+        if is_1p
+            && (extracted.secrets.api_key.is_some()
+                || !extracted.secrets.extra_env.is_empty()
+                || extracted
+                    .secrets
+                    .base_url
+                    .as_ref()
+                    .is_some_and(|url| crate::secrets::is_credential_bearing_url(url.as_str())))
+        {
+            log::info!("Pi 供应商 {id} 的 models.json 里有明文钥匙，待用户导入 1Password");
+            plaintext_pending.push(provider.id.clone());
+            continue;
+        }
+
         let live_rewritten =
             crate::services::provider::pi_sanitizer::sanitize_pi_provider_for_live_write(
                 &provider.id,
@@ -307,6 +339,12 @@ fn sync_native_locked(
 
         state.db.save_provider(PI_APP, &provider)?;
         changed += 1;
+    }
+
+    // pending 全量重建：本轮没触发的 id（明文被用户自己处理、或条目已从
+    // models.json 移除）自动出队；无变化不落盘。
+    if crate::settings::get_pi_plaintext_pending() != plaintext_pending {
+        crate::settings::set_pi_plaintext_pending(plaintext_pending)?;
     }
 
     Ok(changed)
@@ -357,16 +395,299 @@ fn strip_and_store_pi_secrets(
     )
 }
 
-/// 原生 sync（启动重建 DB）专用：1Password 模式下不写 vault（§6.7 启动不取钥匙）。
-/// 秘密已在 1P（迁移时写入），原生 sync 只同步 DB 元数据；否则每次启动都会因
-/// 从 models.json 重抽 baseUrl 而触发 op / 解锁。凭据管理器模式照常写（本地快）。
+/// 原生 sync（启动重建 DB）专用：把抽取结果落库。
+///
+/// F1-4：删除了 1P 模式的短路——sync 路径在 1P 下到达这里时必然没有明文钥匙
+/// （api_key / 敏感 header / 敏感 URL 都已走 pending 分支），`store_provider_bundle`
+/// 拆掉非敏感 baseUrl 后整包为空、直接返回，不产生任何 vault 往返（§6.7 启动不取钥匙）。
+/// 凭据管理器模式照常写（本地快）。
 fn persist_pi_sync_secrets(
     state: &AppState,
     provider_id: &str,
     secrets: &crate::secrets::ProviderSecrets,
 ) -> Result<(), AppError> {
-    if crate::settings::is_onepassword_backend() {
-        return Ok(());
-    }
     super::store_provider_bundle(state, &AppType::Pi, provider_id, secrets, true)
+}
+
+/// F1-4：「导入到 1Password」——把 pending 里 Pi 供应商的明文钥匙收进 vault，
+/// 再把 models.json 改写为 $VAR 引用、DB 行保存剥离后的配置、出队 pending。
+/// 用户主动触发（允许 op 往返与解锁弹窗）。返回本轮成功导入的供应商数。
+pub(crate) fn import_pi_plaintext_to_vault(state: &AppState) -> Result<usize, AppError> {
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
+    let pending = crate::settings::get_pi_plaintext_pending();
+    let mut imported = 0;
+    let mut remaining = Vec::new();
+    for id in &pending {
+        match import_one_provider(state, id) {
+            Ok(true) => imported += 1,
+            Ok(false) => {}
+            Err(error) => {
+                log::warn!("Pi 供应商 {id} 导入 1Password 失败，保留 pending 待重试: {error}");
+                remaining.push(id.clone());
+            }
+        }
+    }
+    if remaining.len() != pending.len() {
+        crate::settings::set_pi_plaintext_pending(remaining)?;
+    }
+    Ok(imported)
+}
+
+/// 导入单个供应商。返回 `false` 表示 live 与 DB 里都已不存在（pending 直接出队）。
+/// 次序与 enable / update 一致：①写 vault → ②投变量 → ③改写 models.json → ④存 DB。
+fn import_one_provider(state: &AppState, id: &str) -> Result<bool, AppError> {
+    let existing = state.db.get_provider_by_id(id, PI_APP)?;
+    let native = crate::pi_config::read_pi_native_provider(id)?;
+    let (config, in_native) = match native {
+        Some(config) => (config, true),
+        None => match &existing {
+            Some(provider) => (provider.settings_config.clone(), false),
+            None => return Ok(false),
+        },
+    };
+    let mut provider = existing.unwrap_or_else(|| {
+        let name = native_provider_name(&config).unwrap_or(id).to_string();
+        let mut imported = Provider::with_id(id.to_string());
+        imported.name = name;
+        imported.category = Some("custom".to_string());
+        imported.icon = Some("pi".to_string());
+        imported
+    });
+
+    let extracted = SecretExtractor::extract(id, &AppType::Pi, &config)?;
+    // ① 钥匙进 vault（merge 语义；非敏感 baseUrl 由 store_provider_bundle 拆去端点表）。
+    super::store_provider_bundle(state, &AppType::Pi, id, &extracted.secrets, true)?;
+    // ② 与 update 同序：live 节点马上要引用 $VAR，先走一次投递。严格模式（1P 恒
+    //    严格）下这是 no-op——钥匙由「打开终端 / ccs env」注入，不写用户环境变量；
+    //    非严格模式（凭据管理器）才真正把变量写入 HKCU\Environment。
+    if in_native {
+        let mut delivered = SwitchResult::default();
+        ProviderService::deliver_env_credentials_pub(state, &AppType::Pi, &provider, &mut delivered)?;
+        for warning in &delivered.warnings {
+            log::warn!("导入 Pi 供应商后投递环境变量的提醒: {warning}");
+        }
+        // ③ expected 传当前原生配置：期间被用户改过会冲突报错，pending 保留待重试。
+        crate::pi_config::replace_pi_provider(id, &config, &config)?;
+    }
+    // ④ DB 行保存剥离后的配置（新供应商在此入库）。
+    provider.settings_config = extracted.stripped;
+    state.db.save_provider(PI_APP, &provider)?;
+    Ok(true)
+}
+
+#[cfg(test)]
+mod plaintext_pending_tests {
+    //! F1-4 回归（P0-4）：1P 模式下原生同步检测到 models.json 里的明文钥匙时，
+    //! 不改写 models.json、不动 DB 行，记 `pi_plaintext_pending`，vault 零往返；
+    //! 「导入到 1Password」再把钥匙收进 vault、改写 live、入库剥离后的行。
+    use super::*;
+    use crate::secrets::{
+        CountingVault, InMemorySecretStore, InMemoryVault, SecretGroup, SecretStore, SecretTarget,
+        SecretVault,
+    };
+    use serial_test::serial;
+    use std::sync::Arc;
+
+    const PLAINTEXT_MODELS: &str = r#"{"providers":{"pi-one":{"name":"One","baseUrl":"https://x.example/v1","apiKey":"sk-plain-pi-1"}}}"#;
+
+    /// 隔离本机设置文件（settings 落盘路径），同时让 env sink 走内存实现。
+    struct TempHome {
+        dir: std::path::PathBuf,
+        prev: Option<std::ffi::OsString>,
+    }
+
+    impl TempHome {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("cc-switch-pi-1p-{tag}"));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(dir.join(".cc-switch")).expect("mkdir");
+            std::fs::write(dir.join(".cc-switch").join("cc-switch.db"), b"").expect("placeholder");
+            let prev = std::env::var_os("CC_SWITCH_TEST_HOME");
+            std::env::set_var("CC_SWITCH_TEST_HOME", &dir);
+            Self { dir, prev }
+        }
+    }
+
+    impl Drop for TempHome {
+        fn drop(&mut self) {
+            match &self.prev {
+                Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    /// 测试卫生：设置是进程级全局，离开测试前复位后端与 pending 标记。
+    struct OnePBackend;
+
+    impl OnePBackend {
+        fn enable() -> Self {
+            let mut settings = crate::settings::get_settings();
+            settings.secret_backend = Some("onepassword".to_string());
+            settings.pi_plaintext_pending = None;
+            crate::settings::update_settings(settings).expect("switch backend");
+            Self
+        }
+    }
+
+    impl Drop for OnePBackend {
+        fn drop(&mut self) {
+            let mut settings = crate::settings::get_settings();
+            settings.secret_backend = None;
+            settings.pi_plaintext_pending = None;
+            settings.secrets_import_pending = None;
+            let _ = crate::settings::update_settings(settings);
+        }
+    }
+
+    fn onepassword_pi_state() -> (AppState, Arc<InMemoryVault>, Arc<CountingVault>) {
+        let store: Arc<dyn crate::secrets::SecretStore> = Arc::new(InMemorySecretStore::new());
+        let mut state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store,
+        );
+        let vault = Arc::new(InMemoryVault::new());
+        let counting = Arc::new(CountingVault::new(vault.clone()));
+        state.vault = counting.clone();
+        (state, vault, counting)
+    }
+
+    fn write_models(content: &str) -> std::path::PathBuf {
+        let path = crate::pi_config::get_pi_models_path().expect("models path");
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, content).expect("write models");
+        path
+    }
+
+    fn read_native() -> IndexMap<String, Value> {
+        crate::pi_config::read_pi_native_providers().expect("read native")
+    }
+
+    #[test]
+    #[serial]
+    fn sync_1p_keeps_plaintext_models_marks_pending_and_never_touches_vault() {
+        let _home = TempHome::new("sync-1p");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let path = write_models(PLAINTEXT_MODELS);
+        let before = std::fs::read_to_string(&path).expect("read before");
+        let _onep = OnePBackend::enable();
+        let (state, _vault, counting) = onepassword_pi_state();
+
+        sync_native_locked(&state, &read_native()).expect("sync");
+
+        // models.json 字节不变；新供应商不入库（等导入命令）。
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read after"),
+            before,
+            "models.json 必须字节不变"
+        );
+        assert!(
+            state
+                .db
+                .get_provider_by_id("pi-one", PI_APP)
+                .expect("db")
+                .is_none(),
+            "检测到明文时不得保存 DB 行"
+        );
+        // vault 零往返（= 0 次 op）。
+        assert_eq!(counting.fetch_count(), 0, "同步不得 fetch");
+        assert_eq!(counting.put_count(), 0, "同步不得 put");
+        assert_eq!(counting.delete_count(), 0);
+        // pending 已记录；非敏感 baseUrl 已落端点表（之后读取 0 次 op 的前提）。
+        assert_eq!(
+            crate::settings::get_pi_plaintext_pending(),
+            vec!["pi-one".to_string()]
+        );
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint(PI_APP, "pi-one")
+                .expect("endpoint"),
+            Some("https://x.example/v1".to_string())
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn import_moves_key_into_vault_rewrites_models_and_clears_pending() {
+        let _home = TempHome::new("import-1p");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let path = write_models(PLAINTEXT_MODELS);
+        let _onep = OnePBackend::enable();
+        let (state, vault, counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("sync");
+        counting.reset();
+
+        let imported = import_pi_plaintext_to_vault(&state).expect("import");
+        assert_eq!(imported, 1, "应导入 1 个供应商");
+
+        // vault 里有这把 key。
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Pi, "pi-one"))
+            .expect("fetch")
+            .expect("vault 应有整包");
+        assert_eq!(
+            bundle.get("api_key").map(|v| v.to_string()),
+            Some("sk-plain-pi-1".into())
+        );
+        // models.json 变成 $VAR 引用，明文消失，baseUrl 保留。
+        let live = std::fs::read_to_string(&path).expect("read live");
+        assert!(
+            live.contains("$CC_SWITCH_PI_PI_ONE_API_KEY"),
+            "live 应改写为 $VAR 引用: {live}"
+        );
+        assert!(!live.contains("sk-plain-pi-1"), "live 明文必须消失: {live}");
+        assert!(live.contains("https://x.example/v1"), "baseUrl 保留: {live}");
+        // DB 行已入库且剥离明文。
+        let row = state
+            .db
+            .get_provider_by_id("pi-one", PI_APP)
+            .expect("db")
+            .expect("导入后入库");
+        assert!(
+            !row.settings_config.to_string().contains("sk-plain-pi-1"),
+            "DB 行必须剥离明文: {}",
+            row.settings_config
+        );
+        // pending 清空。
+        assert!(crate::settings::get_pi_plaintext_pending().is_empty());
+        // 钥匙确实进了 vault（≥1 次 put；fetch 来自投递/回读，允许但不强制）。
+        assert!(counting.put_count() >= 1, "导入必须写 vault");
+    }
+
+    #[test]
+    #[serial]
+    fn sync_windows_mode_still_stores_plaintext_locally() {
+        let _home = TempHome::new("sync-win");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let path = write_models(PLAINTEXT_MODELS);
+        let store = Arc::new(InMemorySecretStore::new());
+        let state = AppState::new(
+            Arc::new(crate::database::Database::memory().expect("memory db")),
+            store.clone(),
+        );
+
+        sync_native_locked(&state, &read_native()).expect("sync");
+
+        // 凭据管理器（此处为内存替身）收到钥匙。
+        let key = futures::executor::block_on(store.get(&SecretTarget::provider_api_key(
+            AppType::Pi,
+            "pi-one",
+        )))
+        .expect("get")
+        .expect("Windows 模式钥匙应照常落本地存储");
+        assert_eq!(key.as_str(), "sk-plain-pi-1");
+        // live 已改写为 $VAR 引用，DB 行已剥离入库，无 pending。
+        let live = std::fs::read_to_string(&path).expect("read live");
+        assert!(live.contains("$CC_SWITCH_PI_PI_ONE_API_KEY"), "live: {live}");
+        assert!(live.contains("https://x.example/v1"), "baseUrl 保留: {live}");
+        let row = state
+            .db
+            .get_provider_by_id("pi-one", PI_APP)
+            .expect("db")
+            .expect("Windows 模式照常入库");
+        assert!(!row.settings_config.to_string().contains("sk-plain-pi-1"));
+        assert!(crate::settings::get_pi_plaintext_pending().is_empty());
+    }
 }
