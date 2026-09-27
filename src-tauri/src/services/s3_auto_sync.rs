@@ -108,7 +108,8 @@ async fn run_auto_sync_upload(
     };
 
     // D4/§6.9：1Password 后端下跳过后台自动同步（避免周期性解锁弹窗）；手动同步照常。
-    if crate::settings::is_onepassword_backend() {
+    // F4-4：判定 fail-closed——读取失败按 1P 处理（宁可跳过同步，不可泄钥匙）。
+    if crate::settings::backend_is_onepassword_or_unknown() {
         log::debug!("1Password 模式：跳过 S3 自动同步（请手动同步）");
         return Ok(());
     }

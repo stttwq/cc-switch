@@ -173,26 +173,33 @@ pub async fn get_diagnostics_bundle(state: State<'_, AppState>) -> Result<String
         .map(|v| v.len())
         .unwrap_or(0);
     // 凭据后端概要（不含值）：后端名 + 1P 状态/版本/路径 + secret_refs 行数。
+    // F4-3：1P 探测会拉起 op 子进程（定位 + 签名校验 + account list），是阻塞调用，
+    // 不能在 async 命令里直接跑——包进 spawn_blocking。
     let backend = crate::settings::get_secret_backend();
-    let backend_info = if backend == "onepassword" {
-        let verify = crate::settings::onepassword_verify_signature();
-        let probe = crate::secrets::onepassword_probe(
-            crate::settings::get_onepassword_op_path().as_deref(),
-            verify,
-        );
-        format!(
-            "1password (installed={}, signedIn={}, version={}, refs={})",
-            probe.installed,
-            probe.signed_in,
-            probe.version.as_deref().unwrap_or("?"),
-            state.db.count_secret_refs().unwrap_or(0)
-        )
-    } else {
-        format!(
-            "windows-credential-manager (refs={})",
-            state.db.count_secret_refs().unwrap_or(0)
-        )
-    };
+    let db = state.db.clone();
+    let backend_info = tauri::async_runtime::spawn_blocking(move || {
+        if backend == "onepassword" {
+            let verify = crate::settings::onepassword_verify_signature();
+            let probe = crate::secrets::onepassword_probe(
+                crate::settings::get_onepassword_op_path().as_deref(),
+                verify,
+            );
+            format!(
+                "1password (installed={}, signedIn={}, version={}, refs={})",
+                probe.installed,
+                probe.signed_in,
+                probe.version.as_deref().unwrap_or("?"),
+                db.count_secret_refs().unwrap_or(0)
+            )
+        } else {
+            format!(
+                "windows-credential-manager (refs={})",
+                db.count_secret_refs().unwrap_or(0)
+            )
+        }
+    })
+    .await
+    .map_err(|e| format!("诊断探测任务失败: {e}"))?;
     // 目标名计数与已脱敏的日志尾拼成纯文本；整段绝不含明文密钥、供应商名或完整 Base URL。
     Ok(build_bundle(&secrets, tail, known_targets, &backend_info))
 }

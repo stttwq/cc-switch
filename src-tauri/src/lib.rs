@@ -1187,6 +1187,7 @@ pub fn run() {
             commands::onepassword_test_fetch,
             commands::onepassword_migrate,
             commands::onepassword_cleanup_credential_residue,
+            commands::onepassword_rebuild_refs,
             commands::secret_backend_name,
             commands::secrets_endpoint_backfill_status,
             commands::secrets_backfill_endpoints,

@@ -1244,20 +1244,26 @@ impl ProviderService {
     /// B5：开启严格投递模式时把已投递到 `HKCU\Environment` 的所有受管变量全部收回并清空登记，
     /// 让开关即时生效（不必等下一次切换）。按登记的名字逐条 remove，不枚举注册表（keyring 式
     /// 枚举有越界风险），因此只清理 cc-switch 自己投递过的变量，不碰用户自设的同名变量之外的东西。
+    /// F4-6（P2-7）：与 `ccs env --clear` 一致——**删成功才摘登记**，删除失败的变量保留
+    /// 登记以待下次清理，避免「值还在、登记没了」的孤儿态。
     pub(crate) fn purge_all_env_delivery(state: &AppState) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
 
         let sink = state.env_sink.as_ref();
         let mut managed = ManagedEnvVars::load(&state.db)?;
         let names: Vec<String> = managed.entries.keys().cloned().collect();
+        let mut removed = 0usize;
         for name in &names {
-            if let Err(e) = sink.remove(name) {
-                log::warn!("严格模式清理环境变量 {name} 失败: {e}");
+            match sink.remove(name) {
+                Ok(()) => {
+                    managed.unregister(name);
+                    removed += 1;
+                }
+                Err(e) => log::warn!("严格模式清理环境变量 {name} 失败，保留登记待下次清理: {e}"),
             }
         }
-        managed.entries.clear();
         managed.save(&state.db)?;
-        if !names.is_empty() {
+        if removed > 0 {
             if let Err(e) = sink.broadcast() {
                 log::warn!("严格模式清理环境变量后广播失败: {e}");
             }
@@ -1268,6 +1274,7 @@ impl ProviderService {
     /// 2.2 方案 P2：只收回指定 app 集合的已投递变量（分级清理粒度跟分级走）。
     /// 不误伤仍宽松的其他 app 变量。Pi 按 app 圈定 = 收回该 app 下全部 Pi 变量（additive
     /// 场景由 P1 的 `ccs env pi <id>` 提供 per-provider 精确清理，这里是全局/按-app 开关侧）。
+    /// F4-6：同 [`Self::purge_all_env_delivery`]——删成功才摘登记。
     pub fn purge_env_delivery_for_apps(state: &AppState, apps: &[String]) -> Result<(), AppError> {
         use crate::env_delivery::ManagedEnvVars;
 
@@ -1279,14 +1286,18 @@ impl ProviderService {
             .filter(|(_, entry)| apps.iter().any(|a| a == &entry.app))
             .map(|(name, _)| name.clone())
             .collect();
+        let mut removed = 0usize;
         for name in &names {
-            if let Err(e) = sink.remove(name) {
-                log::warn!("严格模式清理环境变量 {name} 失败: {e}");
+            match sink.remove(name) {
+                Ok(()) => {
+                    managed.unregister(name);
+                    removed += 1;
+                }
+                Err(e) => log::warn!("严格模式清理环境变量 {name} 失败，保留登记待下次清理: {e}"),
             }
-            managed.unregister(name);
         }
         managed.save(&state.db)?;
-        if !names.is_empty() {
+        if removed > 0 {
             if let Err(e) = sink.broadcast() {
                 log::warn!("严格模式清理环境变量后广播失败: {e}");
             }

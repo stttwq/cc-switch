@@ -897,6 +897,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn legacy_provider_roundtrip_and_env_deletion() {
         let vault = legacy_vault();
         let group = SecretGroup::provider(AppType::Claude, "p1");
@@ -951,6 +952,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn legacy_app_sync_roundtrip() {
         let vault = legacy_vault();
         let group = SecretGroup::AppSync;

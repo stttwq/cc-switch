@@ -844,7 +844,8 @@ pub fn env_delivery_strict_mode_enabled() -> bool {
 /// 否则看该 app 是否在"按应用"列表里。投递/预检/清理按此逐 app 决策。
 pub fn strict_for(app: &AppType) -> bool {
     // §6.8：1Password 后端下恒为严格——钥匙绝不写 `HKCU\Environment`（同账号程序可读）。
-    if is_onepassword_backend() {
+    // F4-4：读取失败按 1P 处理（fail-closed）。
+    if backend_is_onepassword_or_unknown() {
         return true;
     }
     get_settings().is_strict_for(app)
@@ -1217,6 +1218,21 @@ pub fn is_onepassword_backend() -> bool {
     get_secret_backend() == "onepassword"
 }
 
+/// F4-4（P2-5）：1P 后端判定（fail-closed 版）。设置读取失败（锁毒化）时**按 1P 处理**——
+/// 严格投递、KEK 不缓存、自动同步跳过这类安全侧判断宁可收紧，不能因读取失败放宽成
+/// windows（fail-open）。展示类场景（诊断、UI 文案）仍用 [`is_onepassword_backend`]。
+pub fn backend_is_onepassword_or_unknown() -> bool {
+    match settings_store().read() {
+        Ok(s) => secret_backend_is_onepassword(s.secret_backend.as_deref()),
+        Err(_) => true,
+    }
+}
+
+/// 纯函数（便于单测）：后端标识是否为 1P（`None` 视为缺省 windows）。
+fn secret_backend_is_onepassword(backend: Option<&str>) -> bool {
+    backend == Some("onepassword")
+}
+
 pub fn get_onepassword_settings() -> Option<OnePasswordSettings> {
     settings_store().read().ok()?.onepassword.clone()
 }
@@ -1395,6 +1411,15 @@ pub fn grandfather_existing_insecure_http() -> Result<bool, AppError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn secret_backend_is_onepassword_only_for_exact_match() {
+        // F4-4：缺省（None）与 windows 都不是 1P；只有精确的 "onepassword" 是。
+        assert!(secret_backend_is_onepassword(Some("onepassword")));
+        assert!(!secret_backend_is_onepassword(None));
+        assert!(!secret_backend_is_onepassword(Some("windows")));
+        assert!(!secret_backend_is_onepassword(Some("onepassword ")));
+    }
 
     #[test]
     fn override_paths_expand_windows_style_tilde_separators() {

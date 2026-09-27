@@ -6,6 +6,7 @@ use serde_json::{json, Value};
 use tauri::{Emitter, State};
 
 use crate::secrets;
+use crate::secrets::SecretVault as _;
 use crate::store::AppState;
 
 /// F1-8：「导入到 1Password 并剥离」——把启动剥离检测到的 live 文件明文钥匙
@@ -256,6 +257,76 @@ pub async fn onepassword_cleanup_credential_residue(
         .map_err(|e| format!("清理凭据管理器残留任务失败: {e}"))?
         .map_err(|e| e.to_string())
     }
+}
+
+/// F4-5（D14）：「从 1Password 重建引用」——云同步恢复 / 换设备后 `secret_refs`
+/// 与真实条目可能脱节（引用不随云同步，本机保留）。枚举 vault 中带 `cc-switch`
+/// 标签的条目（`op item list`，结构信息不含值），按标题解析归属组，再逐条
+/// `op item get`（不带 `--reveal`，只取托管字段 label）重建 `secret_refs`。
+/// 用户显式动作：N+1 次 op，逐个上报 `onepassword-rebuild-refs-progress` 事件。
+#[tauri::command]
+pub async fn onepassword_rebuild_refs(
+    app_handle: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Value, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        if !crate::settings::is_onepassword_backend() {
+            return Err(crate::error::AppError::localized(
+                "onepassword.rebuild_refs.not_1p",
+                "仅 1Password 模式下可重建引用",
+                "Ref rebuild is only available in 1Password mode",
+            ));
+        }
+        let vault = crate::secrets::onepassword_from_settings(state.db.clone())
+            .map_err(crate::error::AppError::from)?;
+        let items = vault
+            .list_tagged_items()
+            .map_err(crate::error::AppError::from)?;
+        let total = items.len();
+        let mut rebuilt = 0usize;
+        let mut skipped: Vec<String> = Vec::new();
+        for (idx, item) in items.iter().enumerate() {
+            let _ = app_handle.emit(
+                "onepassword-rebuild-refs-progress",
+                serde_json::json!({ "done": idx, "total": total }),
+            );
+            // 标题解析不出归属组的条目（用户手工建的同前缀条目、AppSync 之外的形态）跳过。
+            let Some(group) = crate::secrets::parse_group_from_title(&item.title) else {
+                skipped.push(item.title.clone());
+                continue;
+            };
+            match vault.read_item_labels(&item.id) {
+                Ok(labels) => {
+                    let (app, provider) = group.ref_key();
+                    state.db.upsert_secret_ref(
+                        &app,
+                        &provider,
+                        &vault.vault_id(),
+                        &item.id,
+                        &labels,
+                    )?;
+                    rebuilt += 1;
+                }
+                Err(e) => {
+                    log::warn!("重建引用失败（{}）: {e}", item.title);
+                    skipped.push(item.title.clone());
+                }
+            }
+        }
+        let _ = app_handle.emit(
+            "onepassword-rebuild-refs-progress",
+            serde_json::json!({ "done": total, "total": total }),
+        );
+        Ok::<_, crate::error::AppError>(serde_json::json!({
+            "total": total,
+            "rebuilt": rebuilt,
+            "skipped": skipped,
+        }))
+    })
+    .await
+    .map_err(|e| format!("重建引用任务失败: {e}"))?
+    .map_err(|e| e.to_string())
 }
 
 /// 轻量查询当前凭据后端标识（不调 op）。前端据此置灰/隐藏相关区块。

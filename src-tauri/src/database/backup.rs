@@ -83,10 +83,13 @@ fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hoo
 }
 
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
-const SYNC_SKIP_TABLES: &[&str] = &[];
+/// F4-5（D14）：`secret_refs` 的语义依赖本机后端与 vault——换设备后引用指向的
+/// item id 在新设备的 vault 里未必成立。导出不带（避免把本机引用灌给别的设备），
+/// 导入时保留本机行；新设备用「从 1Password 重建引用」动作补齐。
+const SYNC_SKIP_TABLES: &[&str] = &["secret_refs"];
 
 /// Tables whose local data is preserved from the live database during WebDAV import.
-const SYNC_PRESERVE_TABLES: &[&str] = &[];
+const SYNC_PRESERVE_TABLES: &[&str] = &["secret_refs"];
 
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
@@ -2364,6 +2367,61 @@ mod tests {
             .collect::<Result<Vec<_>, _>>()?;
         provider_ids.sort();
         assert_eq!(provider_ids, vec!["first-source", "second-source"]);
+        Ok(())
+    }
+
+    /// F4-5（D14）：`secret_refs` 不随云同步——导出 SQL 不含其数据行，
+    /// 导入后本机的引用行原样保留（引用语义依赖本机后端与 vault）。
+    #[test]
+    #[serial]
+    fn sync_skips_secret_refs_on_export_and_preserves_local_rows_on_import() -> Result<(), AppError>
+    {
+        let _test_home = TestHomeGuard::new();
+        let insert_ref = |conn: &Connection, item_id: &str| -> Result<(), AppError> {
+            conn.execute(
+                "INSERT INTO secret_refs (app, provider_id, vault_id, item_id, fields, updated_at)
+                 VALUES ('claude', 'p1', 'vault-x', ?1, '[\"api_key\"]', 0)",
+                [item_id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            Ok(())
+        };
+
+        let remote_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(remote_db.conn);
+            insert_ref(&conn, "item-remote")?;
+        }
+        let remote_sql = remote_db.export_sql_string_for_sync()?;
+        assert!(
+            !remote_sql.contains("item-remote"),
+            "同步导出不得携带 secret_refs 数据行"
+        );
+
+        let local_db = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute("DELETE FROM secret_refs", [])
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            insert_ref(&conn, "item-local")?;
+        }
+        local_db.import_sql_string_for_sync(&remote_sql)?;
+
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            let item_id: String = conn
+                .query_row(
+                    "SELECT item_id FROM secret_refs WHERE app = 'claude' AND provider_id = 'p1'",
+                    [],
+                    |row| row.get(0),
+                )
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            assert_eq!(item_id, "item-local", "导入必须保留本机 secret_refs 行");
+            let count: i64 = conn
+                .query_row("SELECT COUNT(*) FROM secret_refs", [], |row| row.get(0))
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            assert_eq!(count, 1, "远端引用不得灌入本机");
+        }
         Ok(())
     }
 

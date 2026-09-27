@@ -27,7 +27,8 @@ impl SyncKekCache {
         kdf: &crate::services::sync_e2e::KdfParams,
     ) -> Result<Arc<crate::services::sync_e2e::Kek>, AppError> {
         // D6：1Password 模式下不缓存 KEK（与“CCS 一把不留”一致），每次现取口令现派生。
-        if crate::settings::is_onepassword_backend() {
+        // F4-4：判定 fail-closed——读取失败按 1P 处理，不落缓存。
+        if crate::settings::backend_is_onepassword_or_unknown() {
             return Ok(Arc::new(crate::services::sync_e2e::derive_kek(
                 passphrase, kdf,
             )?));

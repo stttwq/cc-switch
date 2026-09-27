@@ -23,6 +23,11 @@ pub struct MigrationReport {
     pub deleted_targets: usize,
     /// 不阻断的告警（只含字段名/分类，不含值）。
     pub warnings: Vec<String>,
+    /// F4-6：迁移收尾从 `HKCU\Environment` 删除的 `CC_SWITCH_*` 残留变量数。
+    pub deleted_env_vars: usize,
+    /// F4-6：发现但**未删除**的敏感变量名（可能是用户自设，如 ANTHROPIC_AUTH_TOKEN）。
+    /// 只列名字，绝不含值。
+    pub leftover_sensitive_env_vars: Vec<String>,
 }
 
 /// 一个待迁移组：目标组 + 字段名→凭据管理器 target 名。
@@ -292,7 +297,40 @@ pub fn migrate_to_onepassword(
         report.warnings.push("purge_env_failed".to_string());
     }
 
+    // F4-6：再扫一遍 `HKCU\Environment`——登记可能早已丢失的 `CC_SWITCH_*` 残留
+    // 变量直接删除；其它敏感名只在报告里列出（可能是用户自设）。
+    let (deleted_env_vars, leftover_sensitive_env_vars) = sweep_registry_env_delivery(state);
+    report.deleted_env_vars = deleted_env_vars;
+    report.leftover_sensitive_env_vars = leftover_sensitive_env_vars;
+
     Ok(report)
+}
+
+/// F4-6（P2-7）：迁移收尾扫描 `HKCU\Environment`：
+/// - `CC_SWITCH_` 前缀的变量是 CCS 旧投递残留（登记可能已丢），直接删除；
+/// - 投递白名单内的其它敏感名（如 `ANTHROPIC_AUTH_TOKEN`）**只列出不删**——
+///   无法区分是残留还是用户自设。
+///
+/// 测试模式（`CC_SWITCH_TEST_HOME`）与非 Windows 下枚举返回空清单，本函数为 no-op。
+fn sweep_registry_env_delivery(state: &AppState) -> (usize, Vec<String>) {
+    let mut deleted = 0usize;
+    let mut leftovers = Vec::new();
+    for name in crate::env_delivery::list_registry_env_names() {
+        if name.to_uppercase().starts_with("CC_SWITCH_") {
+            match state.env_sink.remove(&name) {
+                Ok(()) => deleted += 1,
+                Err(e) => log::warn!("迁移收尾删除注册表残留变量 {name} 失败: {e}"),
+            }
+        } else if crate::env_delivery::is_sensitive_env_name(&name) {
+            leftovers.push(name);
+        }
+    }
+    if deleted > 0 {
+        if let Err(e) = state.env_sink.broadcast() {
+            log::warn!("迁移收尾清理注册表残留后广播失败: {e}");
+        }
+    }
+    (deleted, leftovers)
 }
 
 #[cfg(test)]
@@ -303,11 +341,25 @@ mod tests {
     use std::sync::Arc;
 
     /// 测试卫生：迁移会切全局设置并退役旧 vault（进程级），离开测试前复位，
-    /// 避免污染并行的其它测试。
-    struct GlobalStateGuard;
+    /// 避免污染并行的其它测试。F4-6：迁移收尾还会扫 `HKCU\Environment`，
+    /// 测试期间保持 `CC_SWITCH_TEST_HOME`（枚举返回空清单），绝不触碰真实注册表。
+    struct GlobalStateGuard {
+        prev_test_home: Option<std::ffi::OsString>,
+    }
+    impl GlobalStateGuard {
+        fn new() -> Self {
+            Self {
+                prev_test_home: std::env::var_os("CC_SWITCH_TEST_HOME"),
+            }
+        }
+    }
     impl Drop for GlobalStateGuard {
         fn drop(&mut self) {
             crate::secrets::vault::reset_legacy_vault_retirement_for_tests();
+            match self.prev_test_home.take() {
+                Some(v) => std::env::set_var("CC_SWITCH_TEST_HOME", v),
+                None => std::env::remove_var("CC_SWITCH_TEST_HOME"),
+            }
             let mut settings = crate::settings::get_settings();
             if settings.secret_backend.as_deref() == Some("onepassword") {
                 settings.secret_backend = None;
@@ -318,6 +370,8 @@ mod tests {
     }
 
     fn state_with_seed() -> (AppState, Vec<String>) {
+        // F4-6：置测试模式，迁移收尾的注册表扫描变为 no-op。
+        std::env::set_var("CC_SWITCH_TEST_HOME", std::env::temp_dir());
         let db = Arc::new(crate::database::Database::memory().expect("db"));
         let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
         // 播种凭据管理器：一个 Claude 供应商 + 一个 AppSync 口令。
@@ -346,7 +400,7 @@ mod tests {
     #[test]
     #[serial]
     fn migrate_writes_verifies_and_registers_refs() {
-        let _guard = GlobalStateGuard;
+        let _guard = GlobalStateGuard::new();
         let (state, _targets) = state_with_seed();
         let vault = InMemoryVault::new();
         let mut progress_seen: Vec<(usize, usize)> = Vec::new();
@@ -403,7 +457,7 @@ mod tests {
     #[test]
     #[serial]
     fn migrate_is_rerunnable() {
-        let _guard = GlobalStateGuard;
+        let _guard = GlobalStateGuard::new();
         let (state, _t) = state_with_seed();
         let vault = InMemoryVault::new();
         migrate_to_onepassword(&state, &vault, &mut |_, _| {}).expect("first");
@@ -420,7 +474,7 @@ mod tests {
     #[test]
     #[serial]
     fn migrate_stops_on_item_conflict_without_touching_source() {
-        let _guard = GlobalStateGuard;
+        let _guard = GlobalStateGuard::new();
         let (state, targets) = state_with_seed();
         struct ConflictingVault;
         impl SecretVault for ConflictingVault {

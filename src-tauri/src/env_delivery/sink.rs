@@ -98,8 +98,50 @@ fn validate_env_name(name: &str) -> Result<(), AppError> {
     )))
 }
 
-// ─── In-memory implementation for testing ────────────────────
+/// F4-6：该名字是否属于「CCS 投递白名单内的敏感变量」（非 `CC_SWITCH_` 前缀）。
+/// 迁移收尾时这类名字**只列出不删**——可能是用户自己设置的（如手工配的
+/// `ANTHROPIC_AUTH_TOKEN`），不能想当然清掉。
+pub fn is_sensitive_env_name(name: &str) -> bool {
+    let name_upper = name.to_uppercase();
+    if name_upper.starts_with("CC_SWITCH_") {
+        return false;
+    }
+    let shaped = name_upper
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    shaped
+        && (name_upper.starts_with("ANTHROPIC_")
+            || name_upper == "OPENAI_API_KEY"
+            || crate::secrets::is_sensitive_config_key(name))
+}
 
+/// F4-6：枚举 `HKCU\Environment` 的全部变量名（只报名字，不读值）。
+/// 测试模式（`CC_SWITCH_TEST_HOME`，见 [`default_sink`]）与非 Windows 返回空清单，
+/// 保证测试不触碰真实注册表。
+pub fn list_registry_env_names() -> Vec<String> {
+    if std::env::var_os("CC_SWITCH_TEST_HOME").is_some() {
+        return Vec::new();
+    }
+    #[cfg(target_os = "windows")]
+    {
+        use winreg::enums::*;
+        use winreg::RegKey;
+
+        let hkcu = RegKey::predef(HKEY_CURRENT_USER);
+        let Ok(env) = hkcu.open_subkey("Environment") else {
+            return Vec::new();
+        };
+        env.enum_values()
+            .filter_map(|r| r.ok().map(|(name, _)| name))
+            .collect()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Vec::new()
+    }
+}
+
+// ─── In-memory implementation for testing ────────────────────
 /// In-memory environment variable sink for testing
 ///
 /// 当进程环境存在 `CC_SWITCH_TEST_HOME` 时，`default_sink()` 会返回此实现，
@@ -361,6 +403,17 @@ mod tests {
         assert!(sink
             .set("RANDOM_VAR", &Zeroizing::new("bad".to_string()))
             .is_err());
+    }
+
+    /// F4-6：敏感名判定——ANTHROPIC_* / OPENAI_API_KEY / 敏感键名单收，
+    /// CC_SWITCH_ 前缀不算（由迁移收尾直接删），白名单外不收。
+    #[test]
+    fn is_sensitive_env_name_covers_whitelist_minus_cc_switch() {
+        assert!(is_sensitive_env_name("ANTHROPIC_AUTH_TOKEN"));
+        assert!(is_sensitive_env_name("OPENAI_API_KEY"));
+        assert!(is_sensitive_env_name("ANTHROPIC_BASE_URL"));
+        assert!(!is_sensitive_env_name("CC_SWITCH_CODEX_API_KEY"));
+        assert!(!is_sensitive_env_name("MY_CUSTOM_VAR"));
     }
 
     /// §10 要求的真实注册表往返测试的 RAII 清理：变量在 `Drop` 里删除，

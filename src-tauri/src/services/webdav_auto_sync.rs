@@ -109,7 +109,8 @@ async fn run_auto_sync_upload(
 
     // D4/§6.9：1Password 后端下后台自动同步会周期性触发解锁弹窗，不可接受。
     // 跳过本轮（不弹窗）；手动同步照常（用户主动，可解锁）。
-    if crate::settings::is_onepassword_backend() {
+    // F4-4：判定 fail-closed——读取失败按 1P 处理（宁可跳过同步，不可泄钥匙）。
+    if crate::settings::backend_is_onepassword_or_unknown() {
         log::debug!("1Password 模式：跳过 WebDAV 自动同步（请手动同步）");
         return Ok(());
     }

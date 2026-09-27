@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use zeroize::Zeroizing;
 
+use crate::app_config::AppType;
 use crate::secrets::vault::{
     SecretBundle, SecretGroup, SecretVault, VaultError, VaultRef, VaultStatus, FIELD_API_KEY,
     FIELD_APP_PREFIX, FIELD_BASE_URL, FIELD_ENV_PREFIX,
@@ -62,10 +63,13 @@ pub fn locate_op(configured: Option<&str>) -> Option<PathBuf> {
             return Some(path);
         }
     }
-    // 2) where.exe op（转绝对路径）。
+    // 2) where.exe op（转绝对路径）。用 System32 绝对路径，不依赖 PATH 解析（F4-7）。
     #[cfg(windows)]
     {
-        if let Ok(output) = Command::new("where.exe").arg("op").output() {
+        let where_exe = std::env::var_os("SystemRoot")
+            .map(|root| Path::new(&root).join("System32").join("where.exe"))
+            .unwrap_or_else(|| PathBuf::from(r"C:\Windows\System32\where.exe"));
+        if let Ok(output) = Command::new(where_exe).arg("op").output() {
             if output.status.success() {
                 if let Ok(text) = String::from_utf8(output.stdout) {
                     for line in text.lines() {
@@ -153,8 +157,10 @@ impl OnePasswordVault {
 
     /// 执行一次 `op`（§5.2）。`stdin` 需要时以管道写入后立即关闭。
     /// 返回 stdout（`Zeroizing`，解析后立刻丢弃，永不写日志）。
+    ///
+    /// item 子命令可能弹授权，必须拿全局锁串行（F4-3）。
     fn run_op(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-        self.runner.run(args, stdin)
+        self.runner.run(args, stdin, true)
     }
 
     /// `op item get` 的公共参数；`reference` 可以是条目 id（F2-2 直达）或标题（兜底）。
@@ -263,6 +269,25 @@ impl OnePasswordVault {
         }
     }
 
+    /// F4-5：「从 1Password 重建引用」原语——按 id 读单个条目的托管字段 label 清单
+    /// （不带 `--reveal`，CONCEALED 字段无值，绝不含钥匙明文）。
+    pub(crate) fn read_item_labels(&self, item_id: &str) -> Result<Vec<String>, VaultError> {
+        let args = [
+            "item",
+            "get",
+            item_id,
+            "--vault",
+            &self.vault,
+            "--account",
+            &self.account,
+            "--format",
+            "json",
+            "--no-color",
+        ];
+        let bytes = self.run_op(&args, None).map_err(RunErr::into_vault)?;
+        parse_item_labels(&bytes)
+    }
+
     /// 标题命中多个（`ItemConflict`）时：`op item list --tags cc-switch`（不带
     /// `--reveal`）筛出同标题条目，取 `updated_at` 最新的一条——不弹解锁、不自动归档，
     /// 只告警（UI 清理由后续阶段提供入口）。找不到同标题条目时返回 `Ok(None)`，
@@ -359,7 +384,15 @@ struct FetchedItem {
 /// put 原子性、item_id 优先、「命令行不含任何值」这些关键性质由此可单测。
 pub(crate) trait OpRunner: Send + Sync {
     /// 执行一次 `op`；`stdin` 需要时以管道写入。返回 stdout（含秘密，永不写日志）。
-    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr>;
+    /// `take_lock`：可能弹授权的命令（item 子命令、`vault list`）必须串行（true）；
+    /// 非交互命令（`account list`、`--version`，不会弹授权）传 false，避免一次等解锁
+    /// 的调用把状态探测卡在全局锁上（F4-3）。
+    fn run(
+        &self,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+        take_lock: bool,
+    ) -> Result<Zeroizing<Vec<u8>>, RunErr>;
 }
 
 /// 生产实现：真实拉起 `op` 子进程（复用 [`exec_op`]）。
@@ -374,19 +407,26 @@ impl ProcessOpRunner {
 }
 
 impl OpRunner for ProcessOpRunner {
-    fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-        exec_op(&self.op_path, args, stdin)
+    fn run(
+        &self,
+        args: &[&str],
+        stdin: Option<&[u8]>,
+        take_lock: bool,
+    ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+        exec_op(&self.op_path, args, stdin, take_lock)
     }
 }
 
-/// 执行一次 `op`（§5.2）；进程全局串行。`stdin` 需要时管道写入后立即关闭。
-/// 返回 stdout（`Zeroizing`，解析后立即丢弃，永不写日志）。
+/// 执行一次 `op`；`take_lock` 为真时进程全局串行（并发授权弹窗会叠加，§12.6）。
+/// `stdin` 需要时管道写入后立即关闭。返回 stdout（`Zeroizing`，解析后立即丢弃，
+/// 永不写日志）。
 fn exec_op(
     op_path: &Path,
     args: &[&str],
     stdin: Option<&[u8]>,
+    take_lock: bool,
 ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-    let _guard = OP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let _guard = take_lock.then(|| OP_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
 
     let mut cmd = Command::new(op_path);
     cmd.args(args);
@@ -534,12 +574,13 @@ pub(crate) struct OpItemListEntry {
     pub(crate) updated_at: String,
 }
 
-/// 列出账户（不需解锁）。
+/// 列出账户（不需解锁）。F4-3：不抢全局锁。
 pub fn list_accounts(op_path: &Path) -> Result<Vec<OpAccount>, VaultError> {
     let out = exec_op(
         op_path,
         &["account", "list", "--format", "json", "--no-color"],
         None,
+        false,
     )
     .map_err(RunErr::into_vault)?;
     let raw: Vec<OpAccountRaw> = serde_json::from_slice(&out)
@@ -561,6 +602,7 @@ pub fn list_vaults(op_path: &Path, account: &str) -> Result<Vec<OpVault>, VaultE
             "--no-color",
         ],
         None,
+        true,
     )
     .map_err(RunErr::into_vault)?;
     serde_json::from_slice(&out).map_err(|e| VaultError::Other(format!("parse vaults failed: {e}")))
@@ -620,6 +662,22 @@ fn item_title(group: &SecretGroup) -> String {
     }
 }
 
+/// F4-5：[`item_title`] 的逆运算——把条目标题解析回所属组。
+/// 「从 1Password 重建引用」按标题识别哪些条目属于 CC Switch；解析失败（用户手工
+/// 建的同前缀条目等）返回 `None`，重建时跳过。
+pub fn parse_group_from_title(title: &str) -> Option<SecretGroup> {
+    let rest = title.strip_prefix("cc-switch/")?;
+    if rest == "app/sync" {
+        return Some(SecretGroup::AppSync);
+    }
+    let (app_str, provider_id) = rest.split_once('/')?;
+    if provider_id.is_empty() {
+        return None;
+    }
+    let app = app_str.parse::<AppType>().ok()?;
+    Some(SecretGroup::provider(app, provider_id.to_string()))
+}
+
 /// 该字段名是否属于 CC Switch 管理的秘密字段（过滤掉 op 默认字段与 schema 标记）。
 fn is_managed_field(label: &str) -> bool {
     label == FIELD_API_KEY
@@ -667,6 +725,7 @@ struct OpFieldRead {
 }
 
 /// 把 `op item get --format json` 的输出解析成整包（只取 CC Switch 管理的字段）。
+/// F4-2：空字符串值视为「无此字段」——否则会把空钥匙注入 live 配置（P2-2）。
 fn parse_item_bundle(bytes: &[u8]) -> Result<SecretBundle, VaultError> {
     let item: OpItemRead = serde_json::from_slice(bytes)
         .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
@@ -675,12 +734,25 @@ fn parse_item_bundle(bytes: &[u8]) -> Result<SecretBundle, VaultError> {
         let (Some(label), Some(value)) = (field.label, field.value) else {
             continue;
         };
-        if !is_managed_field(&label) {
+        if !is_managed_field(&label) || value.is_empty() {
             continue;
         }
         bundle.insert(label, Zeroizing::new(value));
     }
     Ok(bundle)
+}
+
+/// F4-5：从条目 JSON 提取托管字段 label 清单（不含值）。「从 1Password 重建引用」
+/// 用——`op item get` 不带 `--reveal` 时 CONCEALED 字段没有值，只有 label 可靠。
+fn parse_item_labels(bytes: &[u8]) -> Result<Vec<String>, VaultError> {
+    let item: OpItemRead = serde_json::from_slice(bytes)
+        .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+    Ok(item
+        .fields
+        .into_iter()
+        .filter_map(|f| f.label)
+        .filter(|l| is_managed_field(l) || l == SCHEMA_FIELD_LABEL)
+        .collect())
 }
 
 /// 从 `op item get` 输出解析条目 id（写回 secret_refs 的 item_id）。
@@ -693,44 +765,51 @@ fn parse_item_id(bytes: &[u8]) -> Option<String> {
 // ─── op 条目模板 JSON（写，走 stdin） ────────────────────────
 
 #[derive(Serialize)]
-struct OpItemTemplate {
-    title: String,
+struct OpItemTemplate<'a> {
+    title: &'a str,
     category: &'static str,
-    tags: Vec<&'static str>,
-    fields: Vec<OpFieldTemplate>,
+    tags: &'a [&'static str],
+    fields: Vec<OpFieldTemplate<'a>>,
 }
 
 #[derive(Serialize)]
-struct OpFieldTemplate {
-    label: String,
+struct OpFieldTemplate<'a> {
+    label: &'a str,
     #[serde(rename = "type")]
     field_type: &'static str,
-    value: String,
+    value: &'a str,
 }
 
 /// 构造 create 用的条目模板 JSON（stdin 管道）。所有秘密字段 CONCEALED，
 /// 另加一个非秘密 STRING 标记字段。绝不把值放进命令行参数（§3.4 / §12.3）。
-fn build_template_json(title: &str, bundle: &SecretBundle) -> Result<Vec<u8>, VaultError> {
+/// F4-2：字段名/值用 `&str` 借用（不留多余 String 副本）；序列化结果用
+/// `Zeroizing<Vec<u8>>` 承载（含钥匙的明文字节）。
+fn build_template_json(
+    title: &str,
+    bundle: &SecretBundle,
+) -> Result<Zeroizing<Vec<u8>>, VaultError> {
+    const TAGS: [&str; 1] = [OP_TAG];
     let mut fields: Vec<OpFieldTemplate> = bundle
         .iter()
         .map(|(label, value)| OpFieldTemplate {
-            label: label.clone(),
+            label: label.as_str(),
             field_type: "CONCEALED",
-            value: value.to_string(),
+            value: value.as_str(),
         })
         .collect();
     fields.push(OpFieldTemplate {
-        label: SCHEMA_FIELD_LABEL.to_string(),
+        label: SCHEMA_FIELD_LABEL,
         field_type: "STRING",
-        value: SCHEMA_FIELD_VALUE.to_string(),
+        value: SCHEMA_FIELD_VALUE,
     });
     let template = OpItemTemplate {
-        title: title.to_string(),
+        title,
         category: OP_CATEGORY,
-        tags: vec![OP_TAG],
+        tags: &TAGS,
         fields,
     };
     serde_json::to_vec(&template)
+        .map(Zeroizing::new)
         .map_err(|e| VaultError::Other(format!("serialize op template failed: {e}")))
 }
 
@@ -809,8 +888,60 @@ fn leftover_managed_labels(edited: &serde_json::Value, bundle: &SecretBundle) ->
 
 // ─── stderr 分类（§5.2；关键字以本机实测为准，样本入单测） ───
 
+/// F4-1（P2-1）：把 stderr 中成对引号里的内容替换成占位符——op 会在这些位置回显
+/// 条目标题、vault 名等用户可控字符串，子串匹配会被它们带偏（如 id 为
+/// `unlocked-proxy` 的条目不存在时，`locked` 子串会让「条目不存在」被判成 Locked）。
+///
+/// 双引号一律成对剔除；单引号只在「词边界开始、词边界结束」时成对剔除，
+/// 避免 "isn't" 这类撇号把 not-found 关键字夹进占位符里。
+fn mask_quoted_spans(stderr: &str) -> String {
+    let chars: Vec<char> = stderr.chars().collect();
+    let mut out = String::with_capacity(stderr.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let close = match c {
+            '"' => chars[i + 1..]
+                .iter()
+                .position(|&x| x == '"')
+                .map(|p| p + i + 1),
+            '\'' => {
+                // 开引号必须是词边界（前一个字符不是字母数字）。
+                let opens_at_boundary = i == 0 || !chars[i - 1].is_alphanumeric();
+                if opens_at_boundary {
+                    chars[i + 1..]
+                        .iter()
+                        .position(|&x| x == '\'')
+                        .map(|p| p + i + 1)
+                        .filter(|&close| {
+                            // 闭引号也必须是词边界（后一个字符不是字母数字）。
+                            close + 1 >= chars.len() || !chars[close + 1].is_alphanumeric()
+                        })
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        match close {
+            Some(close) => {
+                out.push('"');
+                out.push('…');
+                out.push('"');
+                i = close + 1;
+            }
+            None => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
 fn classify_stderr(stderr: &str) -> RunErr {
-    let lower = stderr.to_lowercase();
+    // F4-1：先剔除引号回显再匹配关键字（§12.6 陷阱：stderr 会回显条目名与 vault 名）。
+    let lower = mask_quoted_spans(stderr).to_lowercase();
     let has = |needle: &str| lower.contains(needle);
 
     if has("not currently signed in")
@@ -821,11 +952,12 @@ fn classify_stderr(stderr: &str) -> RunErr {
     {
         return RunErr::Vault(VaultError::NotSignedIn);
     }
+    // F4-1：不再匹配裸 "locked"（会被回显的条目名误命中），只认明确短语。
     if has("authorization prompt dismissed")
         || has("authorization timeout")
         || has("is not unlocked")
         || has("account is not unlocked")
-        || has("locked")
+        || has("is locked")
         || has("cannot connect to 1password")
         || has("connecting to desktop app")
         || has("make sure it is running")
@@ -900,7 +1032,7 @@ impl SecretVault for OnePasswordVault {
                     "-",
                 ];
                 let out = self
-                    .run_op(&create_args, Some(&template))
+                    .run_op(&create_args, Some(template.as_slice()))
                     .map_err(RunErr::into_vault)?;
                 parse_item_id(&out).unwrap_or_default()
             }
@@ -1004,8 +1136,10 @@ impl SecretVault for OnePasswordVault {
 
     fn status(&self) -> VaultStatus {
         // 不需解锁、不联网或极快：判断「已安装 + 已配置账户」。
+        // F4-3：`account list` 不会弹授权，不抢全局锁——一次等解锁的 item 调用
+        // 不该把状态查询卡住最长 120 秒。
         let args = ["account", "list", "--format", "json", "--no-color"];
-        match self.run_op(&args, None) {
+        match self.runner.run(&args, None, false) {
             Ok(bytes) => {
                 let accounts: Vec<serde_json::Value> =
                     serde_json::from_slice(&bytes).unwrap_or_default();
@@ -1165,10 +1299,10 @@ pub fn verify_op_signature(_path: &Path) -> Result<(), VaultError> {
     Ok(())
 }
 
-/// 探测 `op` 版本（诊断用）。不需解锁。
-/// F1-7：改走 `exec_op`（环境变量清理 + 超时 + 全局串行），不再裸起进程。
+/// 探测 `op` 版本（诊断用）。不需解锁。F4-3：不抢全局锁。
+/// F1-7：改走 `exec_op`（环境变量清理 + 超时），不再裸起进程。
 pub fn op_version(op_path: &Path) -> Option<String> {
-    let out = exec_op(op_path, &["--version"], None).ok()?;
+    let out = exec_op(op_path, &["--version"], None, false).ok()?;
     Some(String::from_utf8_lossy(&out).trim().to_string())
 }
 
@@ -1277,7 +1411,12 @@ mod tests {
     }
 
     impl OpRunner for FakeOpRunner {
-        fn run(&self, args: &[&str], stdin: Option<&[u8]>) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+        fn run(
+            &self,
+            args: &[&str],
+            stdin: Option<&[u8]>,
+            _take_lock: bool,
+        ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
             self.calls.lock().unwrap().push(RecordedCall {
                 args: args.iter().map(|s| s.to_string()).collect(),
                 stdin: stdin.map(|b| b.to_vec()),
@@ -1581,6 +1720,123 @@ mod tests {
         assert_eq!(parse_item_id(json).as_deref(), Some("xyz"));
     }
 
+    /// F4-2 验收：空字符串值视为「无此字段」，不得把空钥匙注入 bundle（P2-2）。
+    #[test]
+    fn parse_item_bundle_treats_empty_value_as_missing() {
+        let json = br#"{
+            "id": "abc",
+            "fields": [
+                {"id": "f1", "type": "CONCEALED", "label": "api_key", "value": ""},
+                {"id": "f2", "type": "CONCEALED", "label": "env.FOO", "value": "foo"}
+            ]
+        }"#;
+        let bundle = parse_item_bundle(json).expect("parse");
+        assert!(bundle.get(FIELD_API_KEY).is_none(), "空值不得进入整包");
+        assert!(bundle.contains("env.FOO"));
+    }
+
+    /// F4-5：「从 1Password 重建引用」按标题识别归属组；解析不出（未知 app、
+    /// 缺 provider id、非 cc-switch 前缀）返回 None，重建时跳过。
+    #[test]
+    fn parse_group_from_title_inverts_item_title() {
+        let group = parse_group_from_title("cc-switch/claude/p1").expect("provider 组");
+        assert_eq!(group.ref_key(), ("claude".to_string(), "p1".to_string()));
+        assert!(matches!(
+            parse_group_from_title("cc-switch/app/sync"),
+            Some(SecretGroup::AppSync)
+        ));
+        // 解析失败形态：非 cc-switch 前缀、未知 app、缺 id。
+        assert!(parse_group_from_title("other/claude/p1").is_none());
+        assert!(parse_group_from_title("cc-switch/notanapp/p1").is_none());
+        assert!(parse_group_from_title("cc-switch/claude/").is_none());
+        assert!(parse_group_from_title("cc-switch/claude").is_none());
+    }
+
+    /// F4-5：`read_item_labels` 的解析——只取托管字段 label（含 schema 标记），
+    /// 不含值（`op item get` 不带 `--reveal` 时 CONCEALED 字段本来就没有值）。
+    #[test]
+    fn parse_item_labels_keeps_managed_and_schema_labels() {
+        let json = br#"{
+            "id": "abc",
+            "fields": [
+                {"id": "u", "type": "STRING", "label": "username", "value": "me"},
+                {"id": "k", "type": "CONCEALED", "label": "api_key", "value": ""},
+                {"id": "e", "type": "CONCEALED", "label": "env.FOO", "value": ""},
+                {"id": "s", "type": "STRING", "label": "cc-switch-schema", "value": "1"}
+            ]
+        }"#;
+        let labels = parse_item_labels(json).expect("parse");
+        assert!(labels.contains(&FIELD_API_KEY.to_string()));
+        assert!(labels.contains(&"env.FOO".to_string()));
+        assert!(labels.contains(&SCHEMA_FIELD_LABEL.to_string()));
+        assert!(!labels.iter().any(|l| l == "username"), "op 默认字段不收");
+    }
+
+    /// F4-5：`read_item_labels` 走 `op item get`（不带 `--reveal`，不含值）。
+    #[test]
+    fn read_item_labels_calls_get_without_reveal() {
+        let (vault, runner) = vault_with(vec![Ok(br#"{"id":"item-9","fields":[]}"#.to_vec())]);
+        let labels = vault.read_item_labels("item-9").expect("labels");
+        assert!(labels.is_empty());
+        assert_eq!(runner.call_count(), 1);
+        let (args, stdin) = runner.call(0);
+        assert_eq!((args[0].as_str(), args[1].as_str()), ("item", "get"));
+        assert_eq!(args[2], "item-9");
+        assert!(
+            !args.iter().any(|a| a == "--reveal"),
+            "重建引用不得带 --reveal（只取 label，不取值）"
+        );
+        assert!(stdin.is_none());
+    }
+
+    /// F4-5 验收：重建引用的组合流程——`op item list` 按标题解析归属组
+    /// （解析不出则跳过），逐条取 label 后重建 `secret_refs` 行（0 次值读取）。
+    #[test]
+    fn rebuild_refs_reconstructs_rows_from_listed_items() {
+        let list_json = br#"[
+            {"id":"aaa","title":"cc-switch/claude/p1","updatedAt":"2026-01-01T00:00:00Z"},
+            {"id":"bbb","title":"cc-switch/app/sync","updatedAt":"2026-01-02T00:00:00Z"},
+            {"id":"ccc","title":"user-made-item","updatedAt":"2026-01-03T00:00:00Z"}
+        ]"#;
+        let labels_a = br#"{"id":"aaa","fields":[
+            {"id":"k","type":"CONCEALED","label":"api_key","value":""},
+            {"id":"s","type":"STRING","label":"cc-switch-schema","value":"1"}
+        ]}"#;
+        let labels_b = br#"{"id":"bbb","fields":[
+            {"id":"p","type":"CONCEALED","label":"app.e2e_passphrase","value":""}
+        ]}"#;
+        let (vault, runner) = vault_with(vec![
+            Ok(list_json.to_vec()),
+            Ok(labels_a.to_vec()),
+            Ok(labels_b.to_vec()),
+        ]);
+        // 模拟命令的主循环（commands/onepassword.rs `onepassword_rebuild_refs`）。
+        let items = vault.list_tagged_items().expect("list");
+        let mut rebuilt = 0;
+        let mut skipped = 0;
+        for item in &items {
+            let Some(group) = parse_group_from_title(&item.title) else {
+                skipped += 1;
+                continue;
+            };
+            let labels = vault.read_item_labels(&item.id).expect("labels");
+            let (app, provider) = group.ref_key();
+            vault
+                .db
+                .upsert_secret_ref(&app, &provider, "vault-x", &item.id, &labels)
+                .unwrap();
+            rebuilt += 1;
+        }
+        assert_eq!(rebuilt, 2, "provider 组与 AppSync 组重建");
+        assert_eq!(skipped, 1, "非 cc-switch 命名规则的条目跳过");
+        assert_eq!(runner.call_count(), 3, "list + 2 次 get（N+1 次 op）");
+        let fields = vault.db.get_secret_ref_fields("claude", "p1").unwrap();
+        assert_eq!(
+            fields.unwrap(),
+            vec![FIELD_API_KEY.to_string(), SCHEMA_FIELD_LABEL.to_string()]
+        );
+    }
+
     // ─── F2-2 验收：item_id 直达 / 标题兜底回写 / 冲突取最新 ────────
 
     /// 引用行里有真实 item id（vault 一致）时，get 直接用 id 而不是标题。
@@ -1821,7 +2077,7 @@ mod tests {
         let mut bundle = SecretBundle::new();
         bundle.insert(FIELD_API_KEY, Zeroizing::new("super-secret".to_string()));
         let bytes = build_template_json("t", &bundle).unwrap();
-        let text = String::from_utf8(bytes).unwrap();
+        let text = String::from_utf8_lossy(&bytes).to_string();
         assert!(text.contains("super-secret"), "值应在模板 JSON 里");
     }
 
@@ -1870,6 +2126,41 @@ mod tests {
             classify_stderr("no item matching that identifier was found"),
             RunErr::NotFound
         ));
+    }
+
+    /// F4-1 验收：引号里回显的条目名 / vault 名不得参与关键字匹配——
+    /// id 为 `unlocked-proxy` 的条目不存在时，回显里的 "locked" 子串
+    /// 不能把「条目不存在」判成 Locked（P2-1）。
+    #[test]
+    fn classify_stderr_quoted_display_text_is_masked() {
+        assert!(matches!(
+            classify_stderr(r#"[ERROR] "unlocked-proxy" isn't an item. Specify an existing item."#),
+            RunErr::NotFound
+        ));
+        assert!(matches!(
+            classify_stderr(r#"[ERROR] "my locked vault" no item matching that identifier"#),
+            RunErr::NotFound
+        ));
+        // 真正的锁定错误（关键字在引号外）仍判 Locked。
+        assert!(matches!(
+            classify_stderr(r#"vault "personal" is locked. Unlock it and try again."#),
+            RunErr::Vault(VaultError::Locked)
+        ));
+    }
+
+    /// F4-1：成对引号整体替换为占位符；撇号（isn't）不成对、未闭合引号不动。
+    #[test]
+    fn mask_quoted_spans_masks_pairs_not_apostrophes() {
+        assert_eq!(
+            mask_quoted_spans("vault \"my vault\" is locked"),
+            "vault \"…\" is locked"
+        );
+        // 词中的撇号不是开引号：not-found 关键字不能被夹进占位符。
+        assert_eq!(mask_quoted_spans("isn't an item"), "isn't an item");
+        // 词边界上的成对单引号同样剔除。
+        assert_eq!(mask_quoted_spans("a 'unlocked-proxy' b"), "a \"…\" b");
+        // 未闭合的引号原样保留（不做半截剔除）。
+        assert_eq!(mask_quoted_spans("vault \"my"), "vault \"my");
     }
 
     #[test]
