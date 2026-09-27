@@ -180,11 +180,12 @@ pub fn migrate_to_onepassword(
             continue;
         }
 
-        // F1-2（§7 D3-A / F2-1）：非敏感 base_url 直接写本地端点表，**不进 1P**——
-        // Codex / Pi 本来就把 URL 明文写进各自的配置文件，放 vault 挡不住文件泄露，
-        // 只会让每次切换多 7 秒并弹解锁。敏感 URL（userinfo / 敏感 query 参数）仍走 1P。
-        let mut vault_bundle = SecretBundle::new();
-        for (field, value) in bundle.iter() {
+        // 2026-09-27（D3-B）：base_url 整包写入 1Password（非敏感 URL 在条目里以
+        // 可见 STRING 字段存在）——1Password 成为钥匙 + 端点的持久真源，数据库
+        // 重置后「重建引用」即可整体恢复。端点表照常 upsert（仅作读取缓存），
+        // 迁移完成后读取仍是 0 次 op。
+        let vault_bundle = bundle;
+        for (field, value) in vault_bundle.iter() {
             if field == crate::secrets::FIELD_BASE_URL
                 && !crate::secrets::is_credential_bearing_url(value.as_str())
             {
@@ -192,21 +193,8 @@ pub fn migrate_to_onepassword(
                     state
                         .db
                         .upsert_provider_endpoint(app.as_str(), provider_id, value.as_str())?;
-                    report.migrated_fields += 1;
                 }
-            } else {
-                vault_bundle.insert(field.clone(), value.clone());
             }
-        }
-
-        // 拆分后 vault 侧没有要写的字段（例如这组只有 base_url）→ 跳过写 1P，
-        // 也不建 refs（端点表才是 base_url 的读取来源）。
-        if vault_bundle.is_empty() {
-            report.migrated_groups += 1;
-            written_targets.extend(pending.fields.values().cloned());
-            done += 1;
-            progress(done, total);
-            continue;
         }
 
         // 写入 1Password（F2-2：put 内部按 id 直达 / 标题兜底 / 同名冲突取最新；
@@ -415,7 +403,7 @@ mod tests {
         assert!(!progress_seen.is_empty(), "应上报迁移进度");
         let &(last_done, last_total) = progress_seen.last().unwrap();
         assert_eq!(last_done, last_total, "最后一帧进度应为 done == total");
-        // 1P 里能读回（F1-2：非敏感 base_url 不进 1P，只落端点表）。
+        // 1P 里能读回（D3-B：base_url 随整包进 1P，端点表只作读取缓存）。
         let got = vault
             .fetch(&SecretGroup::provider(AppType::Claude, "p1"))
             .unwrap()
@@ -424,11 +412,12 @@ mod tests {
             got.get("api_key").map(|v| v.to_string()),
             Some("sk-1".into())
         );
-        assert!(
-            got.get("base_url").is_none(),
-            "非敏感 base_url 不应进 vault"
+        assert_eq!(
+            got.get("base_url").map(|v| v.to_string()),
+            Some("https://x".into()),
+            "base_url 随整包进 vault（D3-B）"
         );
-        // base_url 已写端点表。
+        // base_url 已写端点表（缓存）。
         assert_eq!(
             state.db.get_provider_endpoint("claude", "p1").unwrap(),
             Some("https://x".to_string())

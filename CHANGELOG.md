@@ -18,6 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `op.exe` 默认校验 Authenticode 签名（主体须为 AgileBits），失败拒用。
   - 1Password 模式下强制严格投递（钥匙绝不写 `HKCU\Environment`）；后台自动同步跳过
     （避免周期性解锁弹窗），手动同步照常；便携包导出隐藏（1Password 自带跨设备同步）。
+  - **base_url 随整包进 1Password**（D3-B）：非敏感 URL 以可见字段、带凭据的 URL 以
+    隐藏字段存入条目，1Password 成为钥匙与端点的持久真源；本地端点表降级为读取缓存
+    （命中 0 次 op），数据库重置 / 换设备后「从 1Password 重建引用」可整体恢复。
+  - **条目标题 = 供应商显示名**：改名后下次保存自动同步；`provider_id` 移入条目内的
+    `cc-switch-group` 字段，「重建引用」按该字段识别归属，同名校验不再误绑。
 
 ### Changed
 

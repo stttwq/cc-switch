@@ -27,6 +27,10 @@ const OP_CATEGORY: &str = "API_CREDENTIAL";
 /// 兼容性判断用的非秘密标记字段。
 const SCHEMA_FIELD_LABEL: &str = "cc-switch-schema";
 const SCHEMA_FIELD_VALUE: &str = "1";
+/// 方案 B（2026-09-27）：条目归属标识字段——标题只保留用户起的供应商名，
+/// `provider_id` 以 `cc-switch-group: <app>/<provider_id>`（AppSync 为 `app/sync`）
+/// 存在条目字段里（非秘密 STRING）。「从 1Password 重建引用」优先读它认归属。
+const GROUP_FIELD_LABEL: &str = "cc-switch-group";
 /// 条目标签。
 const OP_TAG: &str = "cc-switch";
 /// `op` 调用超时（给 Windows Hello 解锁弹窗留人手操作时间；网络本身约 6~9 秒）。
@@ -195,6 +199,35 @@ impl OnePasswordVault {
         ]
     }
 
+    /// 方案 B：条目的**首选标题** = 用户起的供应商显示名（清洗后）。
+    /// 供应商不在库（数据库重置 / 已删除）或名字清洗后为空时，回落到旧格式
+    /// `cc-switch/<app>/<id>`，保证任何情况下都有可定位的标题。
+    fn display_title(&self, group: &SecretGroup) -> String {
+        match group {
+            SecretGroup::Provider { app, provider_id } => {
+                let name = self
+                    .db
+                    .get_provider_by_id(provider_id, app.as_str())
+                    .ok()
+                    .flatten()
+                    .and_then(|p| sanitize_display_name(&p.name));
+                name.unwrap_or_else(|| item_title(group))
+            }
+            SecretGroup::AppSync => item_title(group),
+        }
+    }
+
+    /// 定位条目时依次尝试的标题：新格式（显示名）优先，旧格式（结构化标题）
+    /// 兜底——存量条目在下次保存前仍是旧标题。
+    fn candidate_titles(&self, group: &SecretGroup) -> Vec<String> {
+        let mut titles = vec![self.display_title(group)];
+        let legacy = item_title(group);
+        if titles[0] != legacy {
+            titles.push(legacy);
+        }
+        titles
+    }
+
     // ─── F2-2：item_id 直达 / 标题兜底 / 同名冲突取最新 ─────────
 
     /// 从 `secret_refs` 读出该组已登记的真实 item id（vault 一致且非占位形式）；
@@ -270,8 +303,12 @@ impl OnePasswordVault {
     }
 
     /// F4-5：「从 1Password 重建引用」原语——按 id 读单个条目的托管字段 label 清单
-    /// （不带 `--reveal`，CONCEALED 字段无值，绝不含钥匙明文）。
-    pub(crate) fn read_item_labels(&self, item_id: &str) -> Result<Vec<String>, VaultError> {
+    /// 与 `cc-switch-group` 归属值（不带 `--reveal`，CONCEALED 字段无值，绝不含
+    /// 钥匙明文；归属字段是非秘密 STRING）。
+    pub(crate) fn read_item_meta(
+        &self,
+        item_id: &str,
+    ) -> Result<(Vec<String>, Option<String>), VaultError> {
         let args = [
             "item",
             "get",
@@ -285,28 +322,53 @@ impl OnePasswordVault {
             "--no-color",
         ];
         let bytes = self.run_op(&args, None).map_err(RunErr::into_vault)?;
-        parse_item_labels(&bytes)
+        parse_item_meta(&bytes)
     }
 
     /// 标题命中多个（`ItemConflict`）时：`op item list --tags cc-switch`（不带
-    /// `--reveal`）筛出同标题条目，取 `updated_at` 最新的一条——不弹解锁、不自动归档，
-    /// 只告警（UI 清理由后续阶段提供入口）。找不到同标题条目时返回 `Ok(None)`，
-    /// 调用方按「条目不存在」处理。
-    fn resolve_conflicting_item_id(&self, title: &str) -> Result<Option<String>, VaultError> {
+    /// `--reveal`）筛出同标题条目，再逐个确认归属——方案 B 后标题是用户起的
+    /// 供应商名，可能撞名，必须核对条目里的 `cc-switch-group` 字段（旧格式条目
+    /// 则按标题解析）。按 `updated_at` 新到旧尝试，取第一条归属相符的——不弹解锁、
+    /// 不自动归档，只告警（UI 清理由后续阶段提供入口）。找不到归属相符的条目时
+    /// 返回 `Ok(None)`，调用方按「条目不存在」处理。
+    fn resolve_conflicting_item_id(
+        &self,
+        title: &str,
+        group: &SecretGroup,
+    ) -> Result<Option<String>, VaultError> {
         let items = self.list_tagged_items()?;
-        let latest = items
-            .into_iter()
+        let mut candidates: Vec<&OpItemListEntry> = items
+            .iter()
             .filter(|i| i.title == title && !i.id.is_empty())
-            .max_by(|a, b| a.updated_at.cmp(&b.updated_at));
-        match latest {
-            Some(item) => {
+            .collect();
+        candidates.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
+        let expected = group_field_value(group);
+        for item in candidates {
+            // 旧格式标题本身承载归属，无需额外读取。
+            if parse_group_from_title(&item.title).as_ref() == Some(group) {
                 log::warn!(
                     "1Password 中存在同标题条目，已取最近更新的条目读取；请在 1Password 中清理重复条目（仅结构定位，不含值）"
                 );
-                Ok(Some(item.id))
+                return Ok(Some(item.id.clone()));
             }
-            None => Ok(None),
+            // 方案 B 条目：读条目核对 cc-switch-group 字段（不带 --reveal）。
+            let bytes = self
+                .run_op(&self.base_read_args(&item.id), None)
+                .map_err(RunErr::into_vault)?;
+            if is_archived_item(&bytes) {
+                continue;
+            }
+            if matches!(
+                parse_item_group_field(&bytes),
+                Some(v) if v == expected
+            ) {
+                log::warn!(
+                    "1Password 中存在同标题条目，已按 cc-switch-group 定位对应条目；请在 1Password 中清理重复条目（仅结构定位，不含值）"
+                );
+                return Ok(Some(item.id.clone()));
+            }
         }
+        Ok(None)
     }
 
     /// F2-2 读取主路径：id 直达 → 标题兜底 → 同名冲突取最新。命中时返回
@@ -315,11 +377,7 @@ impl OnePasswordVault {
     ///
     /// 真机实测（op 2.39）：`op item get <id>` 会命中**归档区**条目（返回 JSON 带
     /// `"state":"ARCHIVED"`），按标题则不会。归档 = 已删除，一律按 NotFound 处理。
-    fn fetch_item_resolved(
-        &self,
-        group: &SecretGroup,
-        title: &str,
-    ) -> Result<Option<FetchedItem>, VaultError> {
+    fn fetch_item_resolved(&self, group: &SecretGroup) -> Result<Option<FetchedItem>, VaultError> {
         // 1) 引用行里的真实 item id 直达。
         if let Some(id) = self.ref_item_id(group) {
             match self.run_op(&self.base_read_args(&id), None) {
@@ -331,42 +389,46 @@ impl OnePasswordVault {
                         raw,
                     }));
                 }
-                // id 失效（条目被删/已归档/换 vault）：按标题兜底一次。
+                // id 失效（条目被删/已归档/换 vault）：按标题兜底。
                 Ok(_) | Err(RunErr::NotFound) => {}
                 Err(RunErr::Vault(e)) => return Err(e),
             }
         }
-        // 2) 标题兜底（按标题不会命中归档区，无需再查状态）。
-        match self.run_op(&self.base_read_args(title), None) {
-            Ok(raw) => {
-                let bundle = parse_item_bundle(&raw)?;
-                Ok(Some(FetchedItem {
-                    bundle,
-                    item_id: parse_item_id(&raw),
-                    raw,
-                }))
-            }
-            Err(RunErr::NotFound) => Ok(None),
-            // 3) 同标题多条：列条目取最新的一条按 id 读取。
-            Err(RunErr::Vault(VaultError::ItemConflict)) => {
-                let Some(id) = self.resolve_conflicting_item_id(title)? else {
-                    return Ok(None);
-                };
-                match self.run_op(&self.base_read_args(&id), None) {
-                    Ok(raw) if !is_archived_item(&raw) => {
-                        let bundle = parse_item_bundle(&raw)?;
-                        Ok(Some(FetchedItem {
-                            bundle,
-                            item_id: Some(id),
-                            raw,
-                        }))
-                    }
-                    Ok(_) | Err(RunErr::NotFound) => Ok(None),
-                    Err(RunErr::Vault(e)) => Err(e),
+        // 2) 标题兜底（按标题不会命中归档区，无需再查状态）。方案 B 后依次尝试
+        // 显示名标题与旧格式标题（存量条目在下次保存前仍是旧标题）。
+        for title in self.candidate_titles(group) {
+            match self.run_op(&self.base_read_args(&title), None) {
+                Ok(raw) => {
+                    let bundle = parse_item_bundle(&raw)?;
+                    return Ok(Some(FetchedItem {
+                        bundle,
+                        item_id: parse_item_id(&raw),
+                        raw,
+                    }));
                 }
+                Err(RunErr::NotFound) => continue,
+                // 3) 同标题多条：列条目并核对 cc-switch-group，取归属相符的最新一条。
+                Err(RunErr::Vault(VaultError::ItemConflict)) => {
+                    let Some(id) = self.resolve_conflicting_item_id(&title, group)? else {
+                        continue;
+                    };
+                    match self.run_op(&self.base_read_args(&id), None) {
+                        Ok(raw) if !is_archived_item(&raw) => {
+                            let bundle = parse_item_bundle(&raw)?;
+                            return Ok(Some(FetchedItem {
+                                bundle,
+                                item_id: Some(id),
+                                raw,
+                            }));
+                        }
+                        Ok(_) | Err(RunErr::NotFound) => continue,
+                        Err(RunErr::Vault(e)) => return Err(e),
+                    }
+                }
+                Err(RunErr::Vault(e)) => return Err(e),
             }
-            Err(RunErr::Vault(e)) => Err(e),
         }
+        Ok(None)
     }
 }
 
@@ -662,9 +724,49 @@ fn item_title(group: &SecretGroup) -> String {
     }
 }
 
-/// F4-5：[`item_title`] 的逆运算——把条目标题解析回所属组。
-/// 「从 1Password 重建引用」按标题识别哪些条目属于 CC Switch；解析失败（用户手工
-/// 建的同前缀条目等）返回 `None`，重建时跳过。
+/// 条目归属标识字段的值：`<app>/<provider_id>`（AppSync 为 `app/sync`）。
+fn group_field_value(group: &SecretGroup) -> String {
+    match group {
+        SecretGroup::Provider { app, provider_id } => {
+            format!("{}/{}", app.as_str(), provider_id)
+        }
+        SecretGroup::AppSync => "app/sync".to_string(),
+    }
+}
+
+/// [`group_field_value`] 的逆运算——「从 1Password 重建引用」按条目里的
+/// `cc-switch-group` 字段识别归属（方案 B：标题不再承载结构信息）。
+pub fn parse_group_from_group_value(value: &str) -> Option<SecretGroup> {
+    if value == "app/sync" {
+        return Some(SecretGroup::AppSync);
+    }
+    let (app_str, provider_id) = value.split_once('/')?;
+    if provider_id.is_empty() {
+        return None;
+    }
+    let app = app_str.parse::<AppType>().ok()?;
+    Some(SecretGroup::provider(app, provider_id.to_string()))
+}
+
+/// 清洗用户可见的供应商名，作为 1Password 条目标题（方案 B）。
+/// 剔除路径分隔符与控制字符（防干扰解析 / 破坏条目结构）；清洗后为空返回 None，
+/// 调用方回落到旧格式标题。
+fn sanitize_display_name(name: &str) -> Option<String> {
+    let cleaned: String = name
+        .chars()
+        .filter(|c| !matches!(c, '/' | '\\') && !c.is_control())
+        .collect();
+    let trimmed = cleaned.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// F4-5：[`item_title`] 的逆运算——把条目标题解析回所属组（旧格式条目兼容）。
+/// 「从 1Password 重建引用」在条目没有 `cc-switch-group` 字段时按标题识别；
+/// 解析失败（用户手工建的同前缀条目等）返回 `None`，重建时跳过。
 pub fn parse_group_from_title(title: &str) -> Option<SecretGroup> {
     let rest = title.strip_prefix("cc-switch/")?;
     if rest == "app/sync" {
@@ -742,17 +844,37 @@ fn parse_item_bundle(bytes: &[u8]) -> Result<SecretBundle, VaultError> {
     Ok(bundle)
 }
 
-/// F4-5：从条目 JSON 提取托管字段 label 清单（不含值）。「从 1Password 重建引用」
-/// 用——`op item get` 不带 `--reveal` 时 CONCEALED 字段没有值，只有 label 可靠。
-fn parse_item_labels(bytes: &[u8]) -> Result<Vec<String>, VaultError> {
+/// F4-5：从条目 JSON 提取托管字段 label 清单（不含值）与 `cc-switch-group` 归属值。
+/// 「从 1Password 重建引用」用——`op item get` 不带 `--reveal` 时 CONCEALED 字段
+/// 没有值，只有 label 可靠；归属字段是非秘密 STRING，值可直接读出。
+fn parse_item_meta(bytes: &[u8]) -> Result<(Vec<String>, Option<String>), VaultError> {
     let item: OpItemRead = serde_json::from_slice(bytes)
         .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
-    Ok(item
-        .fields
+    let mut labels = Vec::new();
+    let mut group = None;
+    for field in item.fields {
+        let Some(label) = field.label else {
+            continue;
+        };
+        if label == GROUP_FIELD_LABEL {
+            group = field.value.filter(|v| !v.is_empty());
+            continue;
+        }
+        if is_managed_field(&label) || label == SCHEMA_FIELD_LABEL {
+            labels.push(label);
+        }
+    }
+    Ok((labels, group))
+}
+
+/// 从 `op item get` 输出提取 `cc-switch-group` 归属值（同名冲突核对用）。
+fn parse_item_group_field(bytes: &[u8]) -> Option<String> {
+    let item: OpItemRead = serde_json::from_slice(bytes).ok()?;
+    item.fields
         .into_iter()
-        .filter_map(|f| f.label)
-        .filter(|l| is_managed_field(l) || l == SCHEMA_FIELD_LABEL)
-        .collect())
+        .find(|f| f.label.as_deref() == Some(GROUP_FIELD_LABEL))
+        .and_then(|f| f.value)
+        .filter(|v| !v.is_empty())
 }
 
 /// 从 `op item get` 输出解析条目 id（写回 secret_refs 的 item_id）。
@@ -780,23 +902,44 @@ struct OpFieldTemplate<'a> {
     value: &'a str,
 }
 
-/// 构造 create 用的条目模板 JSON（stdin 管道）。所有秘密字段 CONCEALED，
-/// 另加一个非秘密 STRING 标记字段。绝不把值放进命令行参数（§3.4 / §12.3）。
+/// 某个托管字段写入 1P 时的类型：非敏感 base_url 与归属标识字段用 STRING
+/// （在 1Password 界面可见，方便人眼核对），其余（钥匙 / 敏感 env / 敏感 URL）
+/// 一律 CONCEALED。
+fn field_type_for(label: &str, value: &str) -> &'static str {
+    if label == GROUP_FIELD_LABEL
+        || (label == crate::secrets::FIELD_BASE_URL
+            && !crate::secrets::is_credential_bearing_url(value))
+    {
+        "STRING"
+    } else {
+        "CONCEALED"
+    }
+}
+
+/// 构造 create 用的条目模板 JSON（stdin 管道）。秘密字段 CONCEALED，另加
+/// 归属标识（`cc-switch-group`，STRING）与非秘密 schema 标记字段。绝不把值放进
+/// 命令行参数（§3.4 / §12.3）。
 /// F4-2：字段名/值用 `&str` 借用（不留多余 String 副本）；序列化结果用
 /// `Zeroizing<Vec<u8>>` 承载（含钥匙的明文字节）。
 fn build_template_json(
     title: &str,
     bundle: &SecretBundle,
+    group_value: &str,
 ) -> Result<Zeroizing<Vec<u8>>, VaultError> {
     const TAGS: [&str; 1] = [OP_TAG];
     let mut fields: Vec<OpFieldTemplate> = bundle
         .iter()
         .map(|(label, value)| OpFieldTemplate {
             label: label.as_str(),
-            field_type: "CONCEALED",
+            field_type: field_type_for(label.as_str(), value.as_str()),
             value: value.as_str(),
         })
         .collect();
+    fields.push(OpFieldTemplate {
+        label: GROUP_FIELD_LABEL,
+        field_type: "STRING",
+        value: group_value,
+    });
     fields.push(OpFieldTemplate {
         label: SCHEMA_FIELD_LABEL,
         field_type: "STRING",
@@ -816,15 +959,20 @@ fn build_template_json(
 /// F1-1：在 `op item get` 返回的条目 JSON 上**就地**应用目标整包（edit 的 stdin 输入）。
 ///
 /// - 非托管字段（op 默认字段、用户自加字段）原样保留；
-/// - 托管字段（[`is_managed_field`]）按目标整包设置值（类型 CONCEALED）；
+/// - 托管字段（[`is_managed_field`]）按目标整包设置值（类型见 [`field_type_for`]）；
+/// - `cc-switch-group` 归属标识字段按目标组更新（存在则改值，缺失则追加）；
 /// - 目标里没有的托管字段**不包含**在编辑输入里——若 op 的管道编辑是「合并」语义，
 ///   残留字段由调用方用 `'<label>[delete]'` 定点删除（参数里只有字段名，§12.3）；
 /// - 确保 `cc-switch-schema` 标记字段存在。
-fn apply_managed_fields_to_item(item: &mut serde_json::Value, bundle: &SecretBundle) {
+fn apply_managed_fields_to_item(
+    item: &mut serde_json::Value,
+    bundle: &SecretBundle,
+    group_value: &str,
+) {
     let Some(fields) = item.get_mut("fields").and_then(|f| f.as_array_mut()) else {
         return;
     };
-    // 先更新已存在的托管字段，非托管字段不动。
+    // 先更新已存在的托管字段与归属标识字段，非托管字段不动。
     for field in fields.iter_mut() {
         let Some(label) = field
             .get("label")
@@ -833,8 +981,14 @@ fn apply_managed_fields_to_item(item: &mut serde_json::Value, bundle: &SecretBun
         else {
             continue;
         };
+        if label == GROUP_FIELD_LABEL {
+            field["type"] = serde_json::Value::String("STRING".to_string());
+            field["value"] = serde_json::Value::String(group_value.to_string());
+            continue;
+        }
         if let Some(value) = bundle.get(&label) {
-            field["type"] = serde_json::Value::String("CONCEALED".to_string());
+            field["type"] =
+                serde_json::Value::String(field_type_for(&label, value.as_str()).to_string());
             field["value"] = serde_json::Value::String(value.to_string());
         }
     }
@@ -847,12 +1001,19 @@ fn apply_managed_fields_to_item(item: &mut serde_json::Value, bundle: &SecretBun
         if !existing_labels.iter().any(|l| l == label) {
             fields.push(serde_json::json!({
                 "label": label,
-                "type": "CONCEALED",
+                "type": field_type_for(label.as_str(), value.as_str()),
                 "value": value.to_string(),
             }));
         }
     }
-    // schema 标记字段。
+    // 归属标识与 schema 标记字段。
+    if !existing_labels.iter().any(|l| l == GROUP_FIELD_LABEL) {
+        fields.push(serde_json::json!({
+            "label": GROUP_FIELD_LABEL,
+            "type": "STRING",
+            "value": group_value,
+        }));
+    }
     if !existing_labels.iter().any(|l| l == SCHEMA_FIELD_LABEL) {
         fields.push(serde_json::json!({
             "label": SCHEMA_FIELD_LABEL,
@@ -879,10 +1040,13 @@ fn managed_labels_of(item: &serde_json::Value) -> Vec<String> {
 /// F1-1：edit 之后校验「托管字段集合 == 目标集合」。op 的管道编辑若为合并语义，
 /// 目标里已删除的托管字段会残留——对每个残留字段发一次 `'<label>[delete]'`，
 /// 参数里只有字段名、没有值（§12.3），保证整包语义最终成立。
+/// 归属标识与 schema 标记字段始终存在，不参与残留判定。
 fn leftover_managed_labels(edited: &serde_json::Value, bundle: &SecretBundle) -> Vec<String> {
     managed_labels_of(edited)
         .into_iter()
-        .filter(|label| label != SCHEMA_FIELD_LABEL && !bundle.contains(label))
+        .filter(|label| {
+            label != SCHEMA_FIELD_LABEL && label != GROUP_FIELD_LABEL && !bundle.contains(label)
+        })
         .collect()
 }
 
@@ -991,8 +1155,7 @@ fn classify_stderr(stderr: &str) -> RunErr {
 
 impl SecretVault for OnePasswordVault {
     fn fetch(&self, group: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
-        let title = item_title(group);
-        match self.fetch_item_resolved(group, &title)? {
+        match self.fetch_item_resolved(group)? {
             None => Ok(None),
             Some(fetched) => {
                 // F2-2：标题兜底 / 冲突取最新命中条目后，把真实 item id 回写引用行。
@@ -1005,20 +1168,21 @@ impl SecretVault for OnePasswordVault {
     }
 
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
-        let title = item_title(group);
+        let title = self.display_title(group);
+        let group_value = group_field_value(group);
 
         // F1-1（P0-2）：覆盖写改为原子的「读取 → 就地编辑」，不再先归档删除再新建。
         // 旧实现（delete + create）非原子：删除成功、新建失败会把条目留在归档里
         // （CCS 视为没钥匙），每次覆盖写还在归档里多留一份旧钥匙副本，item id 也
         // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
         // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
-        // F2-2：读取定位按「id 直达 → 标题兜底 → 同名冲突取最新」。
-        let fetched = self.fetch_item_resolved(group, &title)?;
+        // F2-2：读取定位按「id 直达 → 标题兜底（新旧标题都试）→ 同名核对归属」。
+        let fetched = self.fetch_item_resolved(group)?;
 
         let item_id = match fetched {
             None => {
                 // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
-                let template = build_template_json(&title, bundle)?;
+                let template = build_template_json(&title, bundle, &group_value)?;
                 let create_args = [
                     "item",
                     "create",
@@ -1050,7 +1214,9 @@ impl SecretVault for OnePasswordVault {
                 // 在条目 JSON 原文上就地改托管字段后整份走 stdin edit。
                 let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
                     .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
-                apply_managed_fields_to_item(&mut item, bundle);
+                // 方案 B：标题同步为当前显示名（供应商改名后，下次保存时 1P 条目跟随）。
+                item["title"] = serde_json::Value::String(title.clone());
+                apply_managed_fields_to_item(&mut item, bundle, &group_value);
                 let edited_input =
                     Zeroizing::new(serde_json::to_vec(&item).map_err(|e| {
                         VaultError::Other(format!("serialize op item failed: {e}"))
@@ -1103,10 +1269,8 @@ impl SecretVault for OnePasswordVault {
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
-        let title = item_title(group);
-
-        // F2-2：id 直达，失效时按标题兜底一次；同标题多条取最新的一条按 id 删。
-        // 已不存在视为删除成功（幂等）。
+        // F2-2：id 直达，失效时按标题兜底（新旧标题都试）；同标题多条核对归属后
+        // 按 id 删。已不存在视为删除成功（幂等）。
         if let Some(id) = self.ref_item_id(group) {
             let args = self.base_delete_args(&id);
             match self.run_op(&args, None) {
@@ -1115,23 +1279,26 @@ impl SecretVault for OnePasswordVault {
                 Err(RunErr::Vault(e)) => return Err(e),
             }
         }
-        let args = self.base_delete_args(title.as_str());
-        match self.run_op(&args, None) {
-            Ok(_) => Ok(()),
-            Err(RunErr::NotFound) => Ok(()),
-            Err(RunErr::Vault(VaultError::ItemConflict)) => {
-                let Some(id) = self.resolve_conflicting_item_id(&title)? else {
-                    return Ok(());
-                };
-                let args = self.base_delete_args(&id);
-                match self.run_op(&args, None) {
-                    Ok(_) => Ok(()),
-                    Err(RunErr::NotFound) => Ok(()),
-                    Err(RunErr::Vault(e)) => Err(e),
+        for title in self.candidate_titles(group) {
+            let args = self.base_delete_args(&title);
+            match self.run_op(&args, None) {
+                Ok(_) => return Ok(()),
+                Err(RunErr::NotFound) => continue,
+                Err(RunErr::Vault(VaultError::ItemConflict)) => {
+                    let Some(id) = self.resolve_conflicting_item_id(&title, group)? else {
+                        continue;
+                    };
+                    let args = self.base_delete_args(&id);
+                    match self.run_op(&args, None) {
+                        Ok(_) => return Ok(()),
+                        Err(RunErr::NotFound) => continue,
+                        Err(RunErr::Vault(e)) => return Err(e),
+                    }
                 }
+                Err(RunErr::Vault(e)) => return Err(e),
             }
-            Err(RunErr::Vault(e)) => Err(e),
         }
+        Ok(())
     }
 
     fn status(&self) -> VaultStatus {
@@ -1752,8 +1919,9 @@ mod tests {
         assert!(parse_group_from_title("cc-switch/claude").is_none());
     }
 
-    /// F4-5：`read_item_labels` 的解析——只取托管字段 label（含 schema 标记），
-    /// 不含值（`op item get` 不带 `--reveal` 时 CONCEALED 字段本来就没有值）。
+    /// F4-5：`read_item_meta` 的解析——只取托管字段 label（含 schema 标记），
+    /// 并提取 `cc-switch-group` 归属值（不带 `--reveal` 时 CONCEALED 字段本来
+    /// 就没有值；归属字段是非秘密 STRING，值可读出）。
     #[test]
     fn parse_item_labels_keeps_managed_and_schema_labels() {
         let json = br#"{
@@ -1762,22 +1930,27 @@ mod tests {
                 {"id": "u", "type": "STRING", "label": "username", "value": "me"},
                 {"id": "k", "type": "CONCEALED", "label": "api_key", "value": ""},
                 {"id": "e", "type": "CONCEALED", "label": "env.FOO", "value": ""},
+                {"id": "g", "type": "STRING", "label": "cc-switch-group", "value": "claude/p1"},
                 {"id": "s", "type": "STRING", "label": "cc-switch-schema", "value": "1"}
             ]
         }"#;
-        let labels = parse_item_labels(json).expect("parse");
+        let (labels, group) = parse_item_meta(json).expect("parse");
         assert!(labels.contains(&FIELD_API_KEY.to_string()));
         assert!(labels.contains(&"env.FOO".to_string()));
         assert!(labels.contains(&SCHEMA_FIELD_LABEL.to_string()));
+        // 归属字段只用于识别，不进引用表字段清单（put 写的 refs 也不含它）。
+        assert!(!labels.iter().any(|l| l == GROUP_FIELD_LABEL));
         assert!(!labels.iter().any(|l| l == "username"), "op 默认字段不收");
+        assert_eq!(group.as_deref(), Some("claude/p1"));
     }
 
-    /// F4-5：`read_item_labels` 走 `op item get`（不带 `--reveal`，不含值）。
+    /// F4-5：`read_item_meta` 走 `op item get`（不带 `--reveal`，不含值）。
     #[test]
     fn read_item_labels_calls_get_without_reveal() {
         let (vault, runner) = vault_with(vec![Ok(br#"{"id":"item-9","fields":[]}"#.to_vec())]);
-        let labels = vault.read_item_labels("item-9").expect("labels");
+        let (labels, group) = vault.read_item_meta("item-9").expect("meta");
         assert!(labels.is_empty());
+        assert!(group.is_none());
         assert_eq!(runner.call_count(), 1);
         let (args, stdin) = runner.call(0);
         assert_eq!((args[0].as_str(), args[1].as_str()), ("item", "get"));
@@ -1789,8 +1962,9 @@ mod tests {
         assert!(stdin.is_none());
     }
 
-    /// F4-5 验收：重建引用的组合流程——`op item list` 按标题解析归属组
-    /// （解析不出则跳过），逐条取 label 后重建 `secret_refs` 行（0 次值读取）。
+    /// F4-5 验收：重建引用的组合流程——归属识别优先读条目里的 `cc-switch-group`
+    /// 字段（方案 B），旧格式条目回落标题解析（解析不出则跳过），逐条取 label 后
+    /// 重建 `secret_refs` 行（0 次值读取）。
     #[test]
     fn rebuild_refs_reconstructs_rows_from_listed_items() {
         let list_json = br#"[
@@ -1809,17 +1983,24 @@ mod tests {
             Ok(list_json.to_vec()),
             Ok(labels_a.to_vec()),
             Ok(labels_b.to_vec()),
+            Ok(br#"{"id":"ccc","fields":[]}"#.to_vec()),
         ]);
         // 模拟命令的主循环（commands/onepassword.rs `onepassword_rebuild_refs`）。
+        // 方案 B 后归属识别要读条目（cc-switch-group 字段），所以无法跳过任何条目
+        // 的 get——N+1 次 op 变成对全部条目成立。
         let items = vault.list_tagged_items().expect("list");
         let mut rebuilt = 0;
         let mut skipped = 0;
         for item in &items {
-            let Some(group) = parse_group_from_title(&item.title) else {
+            let (labels, group_field) = vault.read_item_meta(&item.id).expect("meta");
+            let group = group_field
+                .as_deref()
+                .and_then(parse_group_from_group_value)
+                .or_else(|| parse_group_from_title(&item.title));
+            let Some(group) = group else {
                 skipped += 1;
                 continue;
             };
-            let labels = vault.read_item_labels(&item.id).expect("labels");
             let (app, provider) = group.ref_key();
             vault
                 .db
@@ -1829,12 +2010,67 @@ mod tests {
         }
         assert_eq!(rebuilt, 2, "provider 组与 AppSync 组重建");
         assert_eq!(skipped, 1, "非 cc-switch 命名规则的条目跳过");
-        assert_eq!(runner.call_count(), 3, "list + 2 次 get（N+1 次 op）");
+        assert_eq!(runner.call_count(), 4, "list + 3 次 get（N+1 次 op）");
         let fields = vault.db.get_secret_ref_fields("claude", "p1").unwrap();
         assert_eq!(
             fields.unwrap(),
             vec![FIELD_API_KEY.to_string(), SCHEMA_FIELD_LABEL.to_string()]
         );
+    }
+
+    /// 方案 B：条目里的 `cc-switch-group` 字段是归属识别的第一优先来源——
+    /// 标题只是显示名（可能改名 / 撞名），不参与归属判断。
+    #[test]
+    fn rebuild_refs_prefers_group_field_over_title() {
+        let list_json = br#"[
+            {"id":"ddd","title":"any","updatedAt":"2026-01-01T00:00:00Z"}
+        ]"#;
+        let meta = br#"{"id":"ddd","fields":[
+            {"id":"k","type":"CONCEALED","label":"api_key","value":""},
+            {"id":"g","type":"STRING","label":"cc-switch-group","value":"codex/junde-1"},
+            {"id":"s","type":"STRING","label":"cc-switch-schema","value":"1"}
+        ]}"#;
+        let (vault, _runner) = vault_with(vec![Ok(list_json.to_vec()), Ok(meta.to_vec())]);
+        let items = vault.list_tagged_items().expect("list");
+        let item = &items[0];
+        let (labels, group_field) = vault.read_item_meta(&item.id).expect("meta");
+        let group = group_field
+            .as_deref()
+            .and_then(parse_group_from_group_value)
+            .or_else(|| parse_group_from_title(&item.title))
+            .expect("group 字段识别归属");
+        assert_eq!(
+            group.ref_key(),
+            ("codex".to_string(), "junde-1".to_string())
+        );
+        assert!(labels.contains(&FIELD_API_KEY.to_string()));
+        let (app, provider) = group.ref_key();
+        vault
+            .db
+            .upsert_secret_ref(&app, &provider, "vault-x", &item.id, &labels)
+            .unwrap();
+        assert!(vault
+            .db
+            .get_secret_ref_fields("codex", "junde-1")
+            .unwrap()
+            .is_some());
+    }
+
+    /// 方案 B：`parse_group_from_group_value` 是 `group_field_value` 的逆运算。
+    #[test]
+    fn parse_group_from_group_value_inverts_group_field_value() {
+        let group = SecretGroup::provider(AppType::Codex, "p1".to_string());
+        assert_eq!(
+            parse_group_from_group_value(&group_field_value(&group)),
+            Some(group)
+        );
+        assert!(matches!(
+            parse_group_from_group_value("app/sync"),
+            Some(SecretGroup::AppSync)
+        ));
+        assert!(parse_group_from_group_value("notanapp/p1").is_none());
+        assert!(parse_group_from_group_value("claude/").is_none());
+        assert!(parse_group_from_group_value("claude").is_none());
     }
 
     // ─── F2-2 验收：item_id 直达 / 标题兜底回写 / 冲突取最新 ────────
@@ -2055,20 +2291,59 @@ mod tests {
         let mut bundle = SecretBundle::new();
         bundle.insert(FIELD_API_KEY, Zeroizing::new("sk-x".to_string()));
         bundle.insert("env.FOO", Zeroizing::new("foo".to_string()));
-        let bytes = build_template_json("cc-switch/claude/p1", &bundle).expect("build");
+        let bytes = build_template_json("any", &bundle, &group_field_value(&group_fixture()))
+            .expect("build");
         let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-        assert_eq!(value["title"], "cc-switch/claude/p1");
+        assert_eq!(value["title"], "any");
         assert_eq!(value["category"], "API_CREDENTIAL");
         assert_eq!(value["tags"][0], "cc-switch");
         let fields = value["fields"].as_array().unwrap();
-        // 2 个秘密字段 + 1 个 schema 标记。
-        assert_eq!(fields.len(), 3);
+        // 2 个秘密字段 + 1 个归属标识 + 1 个 schema 标记。
+        assert_eq!(fields.len(), 4);
         assert!(fields.iter().any(|f| f["label"] == "cc-switch-schema"
             && f["type"] == "STRING"
             && f["value"] == "1"));
+        assert!(fields.iter().any(|f| f["label"] == GROUP_FIELD_LABEL
+            && f["type"] == "STRING"
+            && f["value"] == group_field_value(&group_fixture())));
         assert!(fields
             .iter()
             .any(|f| f["label"] == "api_key" && f["type"] == "CONCEALED"));
+    }
+
+    fn group_fixture() -> SecretGroup {
+        SecretGroup::provider(AppType::Claude, "p1".to_string())
+    }
+
+    /// D3-B：base_url 写进条目——非敏感 URL 用可见 STRING，敏感 URL（带凭据）
+    /// 仍用 CONCEALED。
+    #[test]
+    fn build_template_json_uses_string_for_plain_base_url() {
+        let mut plain = SecretBundle::new();
+        plain.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://api.example.com/v1".to_string()),
+        );
+        let bytes = build_template_json("t", &plain, "claude/p1").unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["label"] == FIELD_BASE_URL && f["type"] == "STRING"));
+
+        let mut sensitive = SecretBundle::new();
+        sensitive.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://user:pass@secret.example.com".to_string()),
+        );
+        let bytes = build_template_json("t", &sensitive, "claude/p1").unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value["fields"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["label"] == FIELD_BASE_URL && f["type"] == "CONCEALED"));
     }
 
     #[test]
@@ -2076,7 +2351,7 @@ mod tests {
         // 值只出现在 JSON 的 value 字段里（走 stdin），不构造任何命令行参数。
         let mut bundle = SecretBundle::new();
         bundle.insert(FIELD_API_KEY, Zeroizing::new("super-secret".to_string()));
-        let bytes = build_template_json("t", &bundle).unwrap();
+        let bytes = build_template_json("t", &bundle, "claude/p1").unwrap();
         let text = String::from_utf8_lossy(&bytes).to_string();
         assert!(text.contains("super-secret"), "值应在模板 JSON 里");
     }

@@ -291,13 +291,19 @@ pub async fn onepassword_rebuild_refs(
                 "onepassword-rebuild-refs-progress",
                 serde_json::json!({ "done": idx, "total": total }),
             );
-            // 标题解析不出归属组的条目（用户手工建的同前缀条目、AppSync 之外的形态）跳过。
-            let Some(group) = crate::secrets::parse_group_from_title(&item.title) else {
-                skipped.push(item.title.clone());
-                continue;
-            };
-            match vault.read_item_labels(&item.id) {
-                Ok(labels) => {
+            // 归属识别：优先读条目里的 cc-switch-group 字段（方案 B，标题只显示名）；
+            // 旧格式条目没有该字段时回落到标题解析。两者都识别不出（用户手工建的
+            // 同前缀条目、AppSync 之外的形态）跳过。
+            match vault.read_item_meta(&item.id) {
+                Ok((labels, group_field)) => {
+                    let group = group_field
+                        .as_deref()
+                        .and_then(crate::secrets::parse_group_from_group_value)
+                        .or_else(|| crate::secrets::parse_group_from_title(&item.title));
+                    let Some(group) = group else {
+                        skipped.push(item.title.clone());
+                        continue;
+                    };
                     let (app, provider) = group.ref_key();
                     state.db.upsert_secret_ref(
                         &app,

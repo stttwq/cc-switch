@@ -2227,10 +2227,11 @@ fn strip_and_store_provider_secrets(
 
 /// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
 ///
-/// F1-2（§7 D3-A）：`base_url` 先按 [`is_credential_bearing_url`] 拆分——非敏感的
-/// 写本地端点表 `provider_endpoints`（随云同步，读取 0 次 op），并从准备写入 vault
-/// 的整包里去掉；敏感 URL（userinfo / 敏感 query 参数）保持整包语义仍存 vault。
-/// 拆分后若 vault 整包没有新内容（例如只改了端点）→ **不 fetch 也不 put**。
+/// 2026-09-27（用户决策，D3-A → D3-B 演进）：`base_url` **保留在 vault 整包里**
+/// （非敏感 URL 以可见 STRING 字段、敏感 URL 以 CONCEALED 写入）——1Password 成为
+/// 钥匙 + 端点的持久真源，数据库被重置 / 换设备后「重建引用」即可整体恢复。
+/// 本地端点表 `provider_endpoints` 降级为**读取缓存**：写入时照常 upsert，
+/// 读取（[`resolve_base_url`]）端点表命中即 0 次 op，未命中再 fetch 一次并回填缓存。
 pub(crate) fn store_provider_bundle(
     state: &AppState,
     app_type: &AppType,
@@ -2240,14 +2241,13 @@ pub(crate) fn store_provider_bundle(
 ) -> Result<(), AppError> {
     use crate::secrets::{SecretBundle, SecretGroup};
     let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
-    let mut new_bundle = SecretBundle::from_provider_secrets(secrets);
-    // F1-2：非敏感 base_url 落端点表；vault 整包不再托管它。
+    let new_bundle = SecretBundle::from_provider_secrets(secrets);
+    // 端点表缓存：非敏感 URL 写入，读取路径不用碰 vault。
     if let Some(url) = secrets.base_url.as_ref() {
         if !crate::secrets::is_credential_bearing_url(url.as_str()) {
             state
                 .db
                 .upsert_provider_endpoint(app_type.as_str(), provider_id, url.as_str())?;
-            new_bundle.remove(crate::secrets::FIELD_BASE_URL);
         }
     }
     // §6.2：本次抽取无新密钥（如切换时回填、live 已剥钥）→ 无需写入，
@@ -2259,25 +2259,19 @@ pub(crate) fn store_provider_bundle(
         // §5.5：登记进“本次会话已知密钥”，导出护栏按字面量兜底。
         crate::secrets::scan::note_session_secret(key.as_str());
     }
-    let mut bundle = if merge_existing {
+    let old_bundle = if merge_existing {
         state.vault.fetch(&group)?.unwrap_or_default()
     } else {
         SecretBundle::new()
     };
-    // F1-2：merge 回来的旧整包若还托管着 base_url（拆分前的历史数据），而本次
-    // 明确传入了非敏感 base_url，则从 vault 侧一并去掉——之后 vault 不再是
-    // base_url 的读取来源（端点表优先）。未传 base_url 时保留旧值（表单“保留原值”）。
-    if secrets.base_url.is_some()
-        && new_bundle.get(crate::secrets::FIELD_BASE_URL).is_none()
-        && merge_existing
-    {
-        bundle.remove(crate::secrets::FIELD_BASE_URL);
-    }
+    // merge 语义：新值覆盖旧值，本次未传的字段保留旧值（表单“保留原值”）。
+    let mut bundle = old_bundle.clone();
     for (name, value) in new_bundle.iter() {
         bundle.insert(name.clone(), value.clone());
     }
-    if bundle.is_empty() {
-        // 无密钥可写（且无旧值）：与旧的“只增不删”行为一致，什么都不写。
+    if bundle == old_bundle {
+        // 整包没有任何变化（例如端点表缓存已含同一 URL、钥匙也没改）→ 不 put。
+        // fetch 已经发生，但写侧零往返（避免每次切换白白触发解锁）。
         return Ok(());
     }
     let vref = state.vault.put(&group, &bundle)?;
@@ -3145,14 +3139,14 @@ mod onepassword_endpoint_tests {
     }
 
     #[test]
-    fn non_sensitive_base_url_goes_to_endpoint_table() {
+    fn non_sensitive_base_url_goes_to_vault_and_endpoint_cache() {
         let (state, vault, _) = state_with_counting_vault();
         let secrets = ProviderSecrets::new()
             .with_api_key("sk-1")
             .with_base_url("https://api.example.com");
         store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
 
-        // 端点表有值；vault 整包只剩 api_key；refs 不含 base_url。
+        // D3-B：端点表有值（缓存）；vault 整包含 base_url；refs 登记 base_url。
         assert_eq!(
             state
                 .db
@@ -3165,16 +3159,89 @@ mod onepassword_endpoint_tests {
             .expect("fetch")
             .expect("条目存在");
         assert!(bundle.contains(crate::secrets::FIELD_API_KEY));
-        assert!(
-            !bundle.contains(crate::secrets::FIELD_BASE_URL),
-            "非敏感 base_url 不应进 vault"
+        assert_eq!(
+            bundle
+                .get(crate::secrets::FIELD_BASE_URL)
+                .map(|v| v.to_string()),
+            Some("https://api.example.com".into()),
+            "base_url 随整包进 vault（D3-B）"
         );
         let fields = state
             .db
             .get_secret_ref_fields("codex", "p1")
             .expect("refs")
             .expect("非空");
-        assert!(!fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+        assert!(fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+    }
+
+    /// D3-B：base_url 进 vault 后，端点-only 更新会触发一次 fetch + put（vault
+    /// 整包的 base_url 变了），端点表同步更新。
+    #[test]
+    fn endpoint_only_update_rewrites_vault_bundle() {
+        let (state, vault, counting) = state_with_counting_vault();
+        // 先放一个旧整包进 vault。
+        let mut old = crate::secrets::SecretBundle::new();
+        old.insert(
+            crate::secrets::FIELD_API_KEY.to_string(),
+            Zeroizing::new("sk-old".to_string()),
+        );
+        old.insert(
+            crate::secrets::FIELD_BASE_URL.to_string(),
+            Zeroizing::new("https://old.example.com".to_string()),
+        );
+        counting
+            .put(
+                &SecretGroup::provider(AppType::Codex, "p1".to_string()),
+                &old,
+            )
+            .expect("seed");
+        counting.reset();
+
+        // 只更新端点（api_key 未回传，merge 保留旧值）。
+        let secrets = ProviderSecrets::new().with_base_url("https://new.example.com");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
+
+        assert_eq!(counting.fetch_count(), 1, "merge 需要一次 fetch");
+        assert_eq!(counting.put_count(), 1, "base_url 变化需要一次 put");
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("codex", "p1")
+                .expect("endpoint"),
+            Some("https://new.example.com".to_string())
+        );
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Codex, "p1".to_string()))
+            .expect("fetch")
+            .expect("条目存在");
+        assert_eq!(
+            bundle
+                .get(crate::secrets::FIELD_BASE_URL)
+                .map(|v| v.to_string()),
+            Some("https://new.example.com".into())
+        );
+        assert_eq!(
+            bundle
+                .get(crate::secrets::FIELD_API_KEY)
+                .map(|v| v.to_string()),
+            Some("sk-old".into()),
+            "merge 保留旧钥匙"
+        );
+    }
+
+    /// 同值整包不重复写：merge 后与 vault 现状一致 → fetch 1 次但 put 0 次。
+    #[test]
+    fn identical_bundle_skips_put() {
+        let (state, _, counting) = state_with_counting_vault();
+        let secrets = ProviderSecrets::new()
+            .with_api_key("sk-1")
+            .with_base_url("https://api.example.com");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+        counting.reset();
+
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
+        assert_eq!(counting.fetch_count(), 1, "merge 需要一次 fetch");
+        assert_eq!(counting.put_count(), 0, "整包无变化不得 put");
     }
 
     #[test]
@@ -3202,42 +3269,6 @@ mod onepassword_endpoint_tests {
                 .get(crate::secrets::FIELD_BASE_URL)
                 .map(|v| v.to_string()),
             Some("https://user:pass@api.example.com".into())
-        );
-    }
-
-    #[test]
-    fn endpoint_only_update_skips_vault() {
-        let (state, _, counting) = state_with_counting_vault();
-        // 先放一个旧整包进 vault（模拟拆分前的历史数据），端点表为空。
-        let mut old = crate::secrets::SecretBundle::new();
-        old.insert(
-            crate::secrets::FIELD_API_KEY.to_string(),
-            Zeroizing::new("sk-old".to_string()),
-        );
-        old.insert(
-            crate::secrets::FIELD_BASE_URL.to_string(),
-            Zeroizing::new("https://old.example.com".to_string()),
-        );
-        counting
-            .put(
-                &SecretGroup::provider(AppType::Codex, "p1".to_string()),
-                &old,
-            )
-            .expect("seed");
-        counting.reset();
-
-        // 只更新端点（api_key 未回传，merge 保留旧值）。
-        let secrets = ProviderSecrets::new().with_base_url("https://new.example.com");
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
-
-        assert_eq!(counting.fetch_count(), 0, "端点更新不应 fetch vault");
-        assert_eq!(counting.put_count(), 0, "端点更新不应 put vault");
-        assert_eq!(
-            state
-                .db
-                .get_provider_endpoint("codex", "p1")
-                .expect("endpoint"),
-            Some("https://new.example.com".to_string())
         );
     }
 

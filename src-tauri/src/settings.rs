@@ -722,6 +722,18 @@ impl AppSettings {
 }
 
 fn save_settings_file(settings: &AppSettings) -> Result<(), AppError> {
+    // 测试保险丝（真实事故防线，2026-09-27）：cfg(test) 下若未显式设置
+    // CC_SWITCH_TEST_HOME，拒绝落盘——任何测试隔离缺口（漏建 TempHome、
+    // 并行测试与环境变量的竞态）都不许再覆盖真实用户的 settings.json。
+    // 曾发生过测试覆盖掉用户 1Password 配置的事故，宁可让该测试拿不到落盘结果。
+    #[cfg(test)]
+    if std::env::var_os("CC_SWITCH_TEST_HOME")
+        .map(|v| v.is_empty())
+        .unwrap_or(true)
+    {
+        log::warn!("测试进程未设置 CC_SWITCH_TEST_HOME，拒绝写入 settings.json（防真实数据污染）");
+        return Ok(());
+    }
     let mut normalized = settings.clone();
     normalized.normalize_paths();
     let Some(path) = AppSettings::settings_path() else {
