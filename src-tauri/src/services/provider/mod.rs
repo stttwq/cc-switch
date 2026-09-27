@@ -3760,3 +3760,51 @@ mod f3_boundary_tests {
         assert_eq!(counting.fetch_count(), 0, "拒绝路径不得触发任何取钥匙");
     }
 }
+
+#[cfg(test)]
+mod s0_p0_3_repro_tests {
+    //! S0 复现测试（施工方案 §3.1 P0-3 / §5.4 S4-2）：1P 模式下端点缓存压过
+    //! vault 真值。S4-2 修复后 vault 的 base_url 必须胜出并顺带校正缓存。
+
+    use super::*;
+    use crate::secrets::{
+        CountingVault, InMemorySecretStore, SecretBundle, SecretGroup, SecretStore, FIELD_BASE_URL,
+    };
+    use serial_test::serial;
+    use std::sync::Arc;
+
+    #[test]
+    #[serial]
+    #[ignore = "S4-2 待修（P0-3）：端点缓存命中仍覆盖 vault 的 base_url"]
+    fn in_1p_mode_vault_base_url_wins_over_endpoint_cache() {
+        let _test_home = crate::test_support::TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        // 1P 整包里是新端点（真源）；本机缓存里是旧端点。
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://vault.example".to_string()),
+        );
+        state.vault.put(&group, &bundle).expect("seed vault bundle");
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://cache.example")
+            .expect("seed endpoint cache");
+
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
+        assert_eq!(
+            secrets.base_url.as_deref().map(|s| s.as_str()),
+            Some("https://vault.example"),
+            "1P 模式下 vault 是端点真源，本机缓存不得压过 vault 值（P0-3 / S4-2）"
+        );
+    }
+}

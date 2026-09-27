@@ -28,6 +28,8 @@ mod session_manager;
 mod settings;
 mod store;
 
+#[cfg(test)]
+pub(crate) mod test_support;
 mod tray;
 pub mod uninstall_cleanup;
 

@@ -2866,4 +2866,102 @@ mod tests {
         );
         Ok(())
     }
+
+    // ─── S0：P0 失败复现测试（施工方案 §6 S0）──────────────────────────
+    // 全部标 `#[ignore]`，对应阶段（S3 / S4）修复时去掉标记转绿。
+
+    /// P0-2 / S3-1：1P 模式下端点缓存是 1P 真值的本机缓存，不得随同步快照出本机。
+    #[test]
+    #[serial]
+    #[ignore = "S3 待修（P0-2）：端点缓存仍随同步导出明文出本机"]
+    fn sync_export_omits_provider_endpoints_in_1p_mode() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+        let db = Database::memory()?;
+        db.upsert_provider_endpoint("claude", "p1", "https://endpoint.example/v1")?;
+        let dump = db.export_sql_string_for_sync()?;
+        assert!(
+            !dump.contains("INSERT INTO \"provider_endpoints\""),
+            "D3-B 之后端点真源在 1Password，缓存出本机既多余又会造成 P0-3（S3-1 / D-S1）"
+        );
+        Ok(())
+    }
+
+    /// P0-5 / S3-1：设备本地 settings 行（如本机 HKCU 投递登记）不得随同步出本机。
+    #[test]
+    #[ignore = "S3 待修（P0-5）：设备本地 settings 键仍随同步导出"]
+    fn sync_export_omits_device_local_settings() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.set_setting("managed_env_vars", r#"{"local-only":true}"#)?;
+        let dump = db.export_sql_string_for_sync()?;
+        assert!(
+            !dump.contains("managed_env_vars"),
+            "本机 HKCU 投递登记被远端覆盖会漏删注册表变量（P0-5 / S3-1 / D-S2）"
+        );
+        Ok(())
+    }
+
+    /// P0-4 / S4-1：手动 SQL 导入不得用文件里的 secret_refs 覆盖本机引用。
+    #[test]
+    #[serial]
+    #[ignore = "S4 待修（P0-4）：手动导入仍整表覆盖本机 secret_refs"]
+    fn manual_import_preserves_local_secret_refs() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let local_db = Database::init()?;
+        local_db.upsert_secret_ref(
+            "claude",
+            "p1",
+            "vault-a",
+            "item-local",
+            &["api_key".to_string()],
+        )?;
+
+        // 另一台设备（不同保险箱）导出的全量 SQL：同一供应商指向自己的引用。
+        let remote_db = Database::memory()?;
+        remote_db.upsert_secret_ref(
+            "claude",
+            "p1",
+            "vault-b",
+            "item-remote",
+            &["api_key".to_string()],
+        )?;
+        let file_sql = remote_db.export_sql_string()?;
+        assert!(
+            file_sql.contains("item-remote"),
+            "手动导出是全量导出，应携带引用行（D-S3）"
+        );
+
+        local_db.import_sql_string(&file_sql)?;
+        let (_, item_id) = local_db
+            .get_secret_ref_identity("claude", "p1")?
+            .expect("导入后本机引用行必须仍存在");
+        assert_eq!(
+            item_id, "item-local",
+            "本机引用必须原样保留，与同步路径规则一致（P0-4 / D14）"
+        );
+        Ok(())
+    }
+
+    /// P0-5 / S4-1：同步导入不得覆盖设备本地 settings 行（本机值原样保留）。
+    #[test]
+    #[serial]
+    #[ignore = "S4 待修（P0-5）：同步导入仍会覆盖设备本地 settings 行"]
+    fn sync_import_preserves_device_local_settings() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let local_db = Database::init()?;
+        local_db.set_setting("managed_env_vars", r#"{"local":true}"#)?;
+
+        let remote_db = Database::memory()?;
+        remote_db.set_setting("managed_env_vars", r#"{"remote":true}"#)?;
+        let sql = remote_db.export_sql_string_for_sync()?;
+
+        local_db.import_sql_string_for_sync(&sql)?;
+        let value = local_db.get_setting("managed_env_vars")?;
+        assert_eq!(
+            value.as_deref(),
+            Some(r#"{"local":true}"#),
+            "本机投递登记被远端覆盖会漏删（或误认）注册表变量（P0-5 / S4-1）"
+        );
+        Ok(())
+    }
 }

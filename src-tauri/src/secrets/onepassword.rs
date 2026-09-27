@@ -2548,4 +2548,62 @@ mod tests {
         v.delete(&group).expect("delete");
         assert!(v.fetch(&group).expect("fetch3").is_none(), "删除后应不存在");
     }
+
+    // ─── S0：P0-1 失败复现测试（施工方案 §5.2 S2）──────────────────────
+
+    /// [`item_json`] 的变体：自定义标题。方案 B 之后条目标题 = 供应商显示名，
+    /// 跨 app 撞名（Claude、Pi 都叫「OpenRouter」）是标题兜底的攻击面。
+    fn item_json_with_title(id: &str, title: &str, fields: &[(&str, &str, &str)]) -> String {
+        let fields: Vec<String> = fields
+            .iter()
+            .map(|(label, ftype, value)| {
+                format!(
+                    r#"{{"id":"f-{label}","type":"{ftype}","label":"{label}","value":"{value}"}}"#
+                )
+            })
+            .collect();
+        format!(
+            r#"{{"id":"{id}","title":"{title}","category":"API_CREDENTIAL","version":3,"fields":[{}]}}"#,
+            fields.join(",")
+        )
+    }
+
+    /// P0-1 / S2：标题唯一命中时不核对 `cc-switch-group` 归属。
+    /// 场景：Pi 供应商 p1（显示名 OpenRouter）没有引用行，走标题兜底；
+    /// 1P 里唯一的同名条目属于 `claude/other`。当前实现直接返回它（读到
+    /// 别人的钥匙）；S2 修复后必须视为 NotFound 继续尝试下一个候选标题，
+    /// 最终返回 None，且不得把错误 id 写进 `secret_refs`。
+    #[test]
+    #[ignore = "S2 待修（P0-1）：标题兜底命中时不核对归属，跨 app 撞名会串条目"]
+    fn title_fallback_rejects_item_of_other_group() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let provider = crate::provider::Provider::from_parts(
+            "p1".to_string(),
+            "OpenRouter".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("pi", &provider).expect("save provider");
+        // 第 1 次调用：按显示名标题命中 claude 的条目（归属不符）；
+        // 第 2 次调用：回退旧格式标题 cc-switch/pi/p1，应 NotFound。
+        let claude_item = item_json_with_title(
+            "item-of-claude",
+            "OpenRouter",
+            &[
+                (FIELD_API_KEY, "CONCEALED", "sk-claude"),
+                ("cc-switch-group", "STRING", "claude/other"),
+            ],
+        );
+        let runner = Arc::new(FakeOpRunner::new(vec![
+            Ok(claude_item.into_bytes()),
+            Err(RunErr::NotFound),
+        ]));
+        let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);
+        let group = SecretGroup::provider(AppType::Pi, "p1");
+        let fetched = vault.fetch(&group).expect("fetch 不应报错");
+        assert!(
+            fetched.is_none(),
+            "标题命中但归属不符，必须视为 NotFound（P0-1 / S2）"
+        );
+    }
 }

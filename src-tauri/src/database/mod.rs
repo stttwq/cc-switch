@@ -27,6 +27,7 @@ pub(crate) mod backup;
 mod dao;
 mod migration;
 mod schema;
+pub(crate) mod snapshot_policy;
 
 #[cfg(test)]
 mod tests;
