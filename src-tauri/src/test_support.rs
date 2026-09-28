@@ -141,6 +141,18 @@ impl Drop for OnePasswordBackendGuard {
     }
 }
 
+/// S4-1：设置本机 1Password 保险箱 id（`local_vault` 的来源）。
+///
+/// 依赖 [`OnePasswordBackendGuard`] 已经把 `secret_backend` 切到 1P；必须在
+/// [`TestHomeGuard`] 之后调用，并配 `#[serial]`。
+pub(crate) fn set_onepassword_vault(vault: &str) -> Result<(), crate::error::AppError> {
+    let mut next = crate::settings::get_settings();
+    let mut onepassword = next.onepassword.clone().unwrap_or_default();
+    onepassword.vault = Some(vault.to_string());
+    next.onepassword = Some(onepassword);
+    crate::settings::update_settings(next)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

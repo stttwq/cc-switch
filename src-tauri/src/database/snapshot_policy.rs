@@ -47,7 +47,6 @@ pub struct ExportMeta {
 }
 
 /// 本机凭据后端（S4-1）：导入侧的采纳/保留规则由**导入方**模式决定。
-#[allow(dead_code)] // S0 骨架：S4-1 接线后启用
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum BackendKind {
     OnePassword,
@@ -57,7 +56,6 @@ pub(crate) enum BackendKind {
 /// 导入合并策略（S4-1）：`merge_for_import` 的输入。`local_vault` 取
 /// `settings.onepassword.vault`，与 `OnePasswordVault` 的 `self.vault` 同源
 /// （施工时核实，见 §5.4 S4-1）。
-#[allow(dead_code)] // S0 骨架：S4-1 接线后启用
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ImportPolicy {
     pub(crate) local_backend: BackendKind,
@@ -67,7 +65,6 @@ pub(crate) struct ImportPolicy {
 
 /// 导入报告（S4-1/S4-3）：三条导入路径（同步下载 / SQL 导入 / `.db` 恢复）
 /// 共用的统计与「未关联供应商」清单。
-#[allow(dead_code)] // S0 骨架：S4-1 生成、S4-3 消费后启用
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct ImportReport {
     /// 采纳的远端引用行数（vault 匹配才采纳，D-S3）
@@ -90,7 +87,6 @@ pub(crate) struct ImportReport {
 ///   被覆盖会让下次启动误触发迁移或整文件重写 live；
 /// - `global_proxy_url*`：绕过了 DAO 的 `@` 校验，被远端值直写；
 /// - `log_config` / `current_profile_id_*`：本机偏好与本机当前供应商配套。
-#[allow(dead_code)] // S4-1 导入侧复用同一份名单
 pub(crate) const DEVICE_LOCAL_SETTING_KEYS: &[&str] = &[
     "managed_env_vars",
     "known_secret_targets",
@@ -108,12 +104,10 @@ pub(crate) const DEVICE_LOCAL_SETTING_KEYS: &[&str] = &[
 ];
 
 /// B 级键的前缀匹配（`current_profile_id_*`：当前 Profile 与本机当前供应商配套）。
-#[allow(dead_code)] // S4-1 导入侧复用
 pub(crate) const DEVICE_LOCAL_SETTING_PREFIXES: &[&str] = &["current_profile_id_"];
 
 /// 本机凭据后端（导出侧用；与 [`BackendKind`] 语义一致，此处独立构造以免
 /// 导入侧类型进入导出路径）。
-#[allow(dead_code)] // S4-1 起由 ImportPolicy 取代
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LocalBackend {
     OnePassword,
@@ -190,6 +184,295 @@ pub(crate) fn delete_device_local_settings(conn: &Connection) -> Result<(), AppE
         .map_err(|e| AppError::Database(format!("裁剪设备本地设置前缀 {prefix} 失败: {e}")))?;
     }
     Ok(())
+}
+
+/// 一条 `secret_refs` 行（导入期间在内存里搬运，不留在暂存库里）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RefRow {
+    app: String,
+    provider_id: String,
+    vault_id: String,
+    item_id: String,
+    fields: String,
+}
+
+/// S4-1：在**暂存库**上按 §5.1 的分级合并本机数据，随后才整库替换主库。
+///
+/// 必须在持有主库锁、与整库替换同一时间点的块内调用（§9-2）——否则暂存期间
+/// 本机新写入的引用/端点会丢失。全程 **0 次 op**（§9-3）：只碰两个连接。
+///
+/// 规则（由**导入方**模式决定，不信任文件里的 meta，§2.2-4）：
+/// 1. **B 级 settings**：丢掉暂存库里的这些键，把主库当前值原样拷回（备份里的
+///    `live_reapply_pending` 等标记不应复活）；
+/// 2. **C 级端点**：1P 模式忽略文件内容、保留本机缓存；凭据管理器模式远端优先、
+///    本机独有保留。两者都删除「供应商已不存在」的行（P1-2）；
+/// 3. **D 级引用**：本机行一律保留；本机没有、且「本机是 1P 模式 + 行 vault 等于
+///    本机保险箱 + 供应商存在于导入后的 providers」的远端行才**采纳**（D-S3——
+///    同一保险箱的 item id 在各设备一致，采纳可把 N+1 次 op 降到 0）。最后删除
+///    失效行。
+pub(crate) fn merge_for_import(
+    main: &Connection,
+    staging: &Connection,
+    policy: &ImportPolicy,
+) -> Result<ImportReport, AppError> {
+    let tx = staging
+        .unchecked_transaction()
+        .map_err(|e| AppError::Database(format!("开启导入合并事务失败: {e}")))?;
+
+    merge_device_local_settings(main, &tx)?;
+    let pruned_endpoints = merge_endpoints(main, &tx, policy)?;
+    let (pruned_refs, adopted_refs, unlinked) = merge_secret_refs(main, &tx, policy)?;
+
+    tx.commit()
+        .map_err(|e| AppError::Database(format!("提交导入合并事务失败: {e}")))?;
+
+    Ok(ImportReport {
+        adopted_refs,
+        unlinked_providers: unlinked,
+        pruned_refs,
+        pruned_endpoints,
+    })
+}
+
+/// B 级：丢弃暂存库的值，拷回主机当前值。
+fn merge_device_local_settings(main: &Connection, tx: &Connection) -> Result<(), AppError> {
+    for (predicate, param) in device_local_setting_predicates() {
+        tx.execute(
+            &format!("DELETE FROM settings WHERE {predicate}"),
+            [&param as &dyn rusqlite::ToSql],
+        )
+        .map_err(|e| AppError::Database(format!("清空暂存库设备本地设置失败: {e}")))?;
+    }
+    for (predicate, param) in device_local_setting_predicates() {
+        let sql = format!("SELECT key, value FROM settings WHERE {predicate}");
+        let mut stmt = main
+            .prepare(&sql)
+            .map_err(|e| AppError::Database(format!("读取本机设备本地设置失败: {e}")))?;
+        let rows = stmt.query_map([&param as &dyn rusqlite::ToSql], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        });
+        let rows = match rows {
+            Ok(rows) => rows,
+            Err(e) => return Err(AppError::Database(format!("读取本机设备本地设置失败: {e}"))),
+        };
+        for row in rows.flatten() {
+            tx.execute(
+                "INSERT OR REPLACE INTO settings (key, value) VALUES (?1, ?2)",
+                rusqlite::params![row.0, row.1],
+            )
+            .map_err(|e| AppError::Database(format!("回拷设备本地设置失败: {e}")))?;
+        }
+    }
+    Ok(())
+}
+
+/// B 级键的 (谓词, 绑定参数) 列表：精确键用 `=`，前缀用 `LIKE`。
+fn device_local_setting_predicates() -> Vec<(&'static str, String)> {
+    DEVICE_LOCAL_SETTING_KEYS
+        .iter()
+        .map(|key| ("key = ?1", (*key).to_string()))
+        .chain(
+            DEVICE_LOCAL_SETTING_PREFIXES
+                .iter()
+                .map(|prefix| ("key LIKE ?1", format!("{prefix}%"))),
+        )
+        .collect()
+}
+
+/// C 级：端点缓存。返回清理掉的孤儿行数。
+fn merge_endpoints(
+    main: &Connection,
+    tx: &Connection,
+    policy: &ImportPolicy,
+) -> Result<usize, AppError> {
+    if policy.local_backend == BackendKind::OnePassword {
+        // 1P 模式：端点真源在 1Password，文件里的缓存一律忽略，只保留本机当前缓存。
+        tx.execute("DELETE FROM provider_endpoints", [])
+            .map_err(|e| AppError::Database(format!("清空暂存库端点缓存失败: {e}")))?;
+        for row in endpoint_rows(main)? {
+            insert_endpoint(tx, &row, true)?;
+        }
+    } else {
+        // 凭据管理器：远端优先（暂存库已有），只补本机独有的键。
+        for row in endpoint_rows(main)? {
+            insert_endpoint(tx, &row, false)?;
+        }
+    }
+    tx.execute(
+        "DELETE FROM provider_endpoints
+         WHERE NOT EXISTS (SELECT 1 FROM providers p
+                           WHERE p.app_type = provider_endpoints.app
+                             AND p.id = provider_endpoints.provider_id)",
+        [],
+    )
+    .map_err(|e| AppError::Database(format!("清理失效端点行失败: {e}")))
+}
+
+type EndpointRow = (String, String, String, i64);
+
+fn endpoint_rows(conn: &Connection) -> Result<Vec<EndpointRow>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT app, provider_id, base_url, updated_at FROM provider_endpoints")
+        .map_err(|e| AppError::Database(format!("读取端点缓存失败: {e}")))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => return Err(AppError::Database(format!("读取端点缓存失败: {e}"))),
+    };
+    Ok(rows.flatten().collect())
+}
+
+fn insert_endpoint(tx: &Connection, row: &EndpointRow, replace: bool) -> Result<(), AppError> {
+    let verb = if replace { "OR REPLACE" } else { "OR IGNORE" };
+    tx.execute(
+        &format!(
+            "INSERT {verb} INTO provider_endpoints (app, provider_id, base_url, updated_at)
+             VALUES (?1, ?2, ?3, ?4)"
+        ),
+        rusqlite::params![row.0, row.1, row.2, row.3],
+    )
+    .map_err(|e| AppError::Database(format!("写入端点缓存失败: {e}")))?;
+    Ok(())
+}
+
+/// D 级引用的合并结果：(清理掉的失效行数, 采纳的远端行数, 未关联供应商)。
+type RefMergeOutcome = (usize, usize, Vec<(String, String)>);
+
+/// D 级：引用合并（本机行保留 + 同保险箱时采纳远端 + 清理失效行）。
+fn merge_secret_refs(
+    main: &Connection,
+    tx: &Connection,
+    policy: &ImportPolicy,
+) -> Result<RefMergeOutcome, AppError> {
+    // 先把远端候选读到内存（下面要清空暂存库）。
+    let remote_rows = ref_rows(tx)?;
+    tx.execute("DELETE FROM secret_refs", [])
+        .map_err(|e| AppError::Database(format!("清空暂存库引用失败: {e}")))?;
+
+    // 本机行一律保留。
+    let mut local_keys: Vec<(String, String)> = Vec::new();
+    for row in ref_rows(main)? {
+        local_keys.push((row.app.clone(), row.provider_id.clone()));
+        insert_ref(tx, &row)?;
+    }
+
+    // 采纳远端引用：本机 1P 模式 + vault 匹配 + 本机没有同键行 + 供应商存在。
+    let mut adopted_refs = 0usize;
+    if policy.local_backend == BackendKind::OnePassword {
+        if let Some(local_vault) = policy.local_vault.as_deref().filter(|v| !v.is_empty()) {
+            for row in &remote_rows {
+                let key = (row.app.clone(), row.provider_id.clone());
+                if local_keys.contains(&key) || row.vault_id != local_vault {
+                    continue;
+                }
+                if !provider_exists(tx, &row.app, &row.provider_id)? {
+                    continue;
+                }
+                insert_ref(tx, row)?;
+                adopted_refs += 1;
+            }
+        }
+    }
+
+    // 清理「供应商已不存在」的引用行（本机与远端都清）。
+    let pruned = tx
+        .execute(
+            "DELETE FROM secret_refs
+             WHERE NOT EXISTS (SELECT 1 FROM providers p
+                               WHERE p.app_type = secret_refs.app
+                                 AND p.id = secret_refs.provider_id)",
+            [],
+        )
+        .map_err(|e| AppError::Database(format!("清理失效引用行失败: {e}")))?;
+
+    let unlinked = collect_unlinked_providers(tx, policy)?;
+    Ok((pruned, adopted_refs, unlinked))
+}
+
+fn ref_rows(conn: &Connection) -> Result<Vec<RefRow>, AppError> {
+    let mut stmt = conn
+        .prepare("SELECT app, provider_id, vault_id, item_id, fields FROM secret_refs")
+        .map_err(|e| AppError::Database(format!("读取引用行失败: {e}")))?;
+    let rows = stmt.query_map([], |row| {
+        Ok(RefRow {
+            app: row.get(0)?,
+            provider_id: row.get(1)?,
+            vault_id: row.get(2)?,
+            item_id: row.get(3)?,
+            fields: row.get(4)?,
+        })
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => return Err(AppError::Database(format!("读取引用行失败: {e}"))),
+    };
+    Ok(rows.flatten().collect())
+}
+
+fn insert_ref(tx: &Connection, row: &RefRow) -> Result<(), AppError> {
+    tx.execute(
+        "INSERT OR REPLACE INTO secret_refs (app, provider_id, vault_id, item_id, fields, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        rusqlite::params![
+            row.app,
+            row.provider_id,
+            row.vault_id,
+            row.item_id,
+            row.fields,
+            chrono::Utc::now().timestamp()
+        ],
+    )
+    .map_err(|e| AppError::Database(format!("写入引用行失败: {e}")))?;
+    Ok(())
+}
+
+fn provider_exists(conn: &Connection, app: &str, provider_id: &str) -> Result<bool, AppError> {
+    let exists: Option<i64> = conn
+        .query_row(
+            "SELECT 1 FROM providers WHERE app_type = ?1 AND id = ?2",
+            rusqlite::params![app, provider_id],
+            |row| row.get(0),
+        )
+        .ok();
+    Ok(exists.is_some())
+}
+
+/// S4-3：导入后仍无引用、且属于 1P 模式需要钥匙的供应商清单。
+///
+/// 官方供应商除外（它们本来就没有钥匙），避免横幅把官方供应商报成「未关联」。
+fn collect_unlinked_providers(
+    conn: &Connection,
+    policy: &ImportPolicy,
+) -> Result<Vec<(String, String)>, AppError> {
+    if policy.local_backend != BackendKind::OnePassword {
+        return Ok(Vec::new());
+    }
+    let mut stmt = conn
+        .prepare(
+            "SELECT app_type, id FROM providers
+             WHERE NOT EXISTS (SELECT 1 FROM secret_refs r
+                               WHERE r.app = providers.app_type AND r.provider_id = providers.id)
+             ORDER BY app_type, id",
+        )
+        .map_err(|e| AppError::Database(format!("统计未关联供应商失败: {e}")))?;
+    let rows = stmt.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    });
+    let rows = match rows {
+        Ok(rows) => rows,
+        Err(e) => return Err(AppError::Database(format!("统计未关联供应商失败: {e}"))),
+    };
+    Ok(rows
+        .flatten()
+        .filter(|(_, id)| !crate::database::is_official_seed_id(id))
+        .collect())
 }
 
 #[cfg(test)]

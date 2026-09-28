@@ -3,7 +3,8 @@
 //! 提供 SQL 导出/导入和二进制快照备份功能。
 
 use super::snapshot_policy::{
-    prune_for_export, ExportMeta, ExportPurpose, LocalBackend, DEVICE_LOCAL_SETTING_KEYS,
+    merge_for_import, prune_for_export, BackendKind, ExportMeta, ExportPurpose, ImportPolicy,
+    ImportReport, LocalBackend, DEVICE_LOCAL_SETTING_KEYS,
 };
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
@@ -150,8 +151,9 @@ fn assert_export_omits_local_only_data(dump: &str, meta: &ExportMeta) -> Result<
 #[allow(dead_code)]
 const SYNC_SKIP_TABLES: &[&str] = &["secret_refs"];
 
-/// Tables whose local data is preserved from the live database during WebDAV import.
-const SYNC_PRESERVE_TABLES: &[&str] = &["secret_refs"];
+// S4-1：`SYNC_PRESERVE_TABLES`（原先只保留 `secret_refs` 整表）已被
+// `snapshot_policy::merge_for_import` 取代——B 级设备本地键、C 级端点、D 级引用
+// 现在按数据分级逐条合并，不再是「整表保留」。故该常量删除。
 
 /// A database backup entry for the UI
 #[derive(Debug, serde::Serialize)]
@@ -160,6 +162,17 @@ pub struct BackupEntry {
     pub filename: String,
     pub size_bytes: u64,
     pub created_at: String, // ISO 8601
+}
+
+/// S4-3：一次导入的结果——回滚点文件名 + 按数据分级合并的统计。
+///
+/// 三条导入路径（同步下载 / 手动 SQL / `.db` 恢复）都产出它，命令层据此在
+/// UI 上显示「采纳了几条 1P 关联」「有 N 个供应商未关联」（§5.4 S4-3）。
+#[derive(Debug, Default, Clone)]
+pub(crate) struct ImportOutcome {
+    /// 本次生成的安全备份文件名（无备份时为空串）
+    pub(crate) backup_id: String,
+    pub(crate) report: ImportReport,
 }
 
 impl Database {
@@ -231,38 +244,99 @@ impl Database {
         self.import_sql_string(sql_content)
     }
 
+    /// 从 SQL 文件导入并带回合并报告（S4-3：命令层要显示采纳/未关联统计）。
+    pub(crate) fn import_sql_with_report(
+        &self,
+        source_path: &Path,
+    ) -> Result<ImportOutcome, AppError> {
+        if !source_path.exists() {
+            return Err(AppError::InvalidInput(format!(
+                "SQL 文件不存在: {}",
+                source_path.display()
+            )));
+        }
+
+        let sql_raw = fs::read_to_string(source_path).map_err(|e| AppError::io(source_path, e))?;
+        let sql_content = sql_raw.trim_start_matches('\u{feff}');
+        self.import_sql_string_with_report(sql_content)
+    }
+
     /// 从 SQL 字符串导入，返回生成的备份 ID（若无备份则为空字符串）
+    ///
+    /// S4-1（P0-4）：手动导入同样走 `merge_for_import`——文件里的 `secret_refs`
+    /// 不再整表覆盖本机引用，与同步路径规则一致（D14 的手动路径补齐）。
+    /// 需要 `ImportReport`（未关联供应商 / 采纳引用数）的调用方用
+    /// [`Self::import_sql_string_with_report`]（S4-3）。
     pub fn import_sql_string(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, &[], None)
+        self.import_sql_string_with_report(sql_raw)
+            .map(|outcome| outcome.backup_id)
+    }
+
+    /// S4-3：手动导入并带回合并报告（UI 要显示「未关联」「采纳了几条引用」）。
+    pub(crate) fn import_sql_string_with_report(
+        &self,
+        sql_raw: &str,
+    ) -> Result<ImportOutcome, AppError> {
+        self.import_sql_string_inner(sql_raw, None, None)
     }
 
     /// Import SQL generated for sync, then restore local-only tables from the
     /// current live database before replacing it.
     ///
-    /// T-5（2.1 方案 2.4.5）：同步快照应用前必须先有一份可回退的 DB 文件备份。
+    /// T-5（2.1 方案 2.4.2）：同步快照应用前必须先有一份可回退的 DB 文件备份。
     /// 该备份就在这里生成——替换主库之前、持主连接锁下的同一时间点，命名
     /// `pre-sync-restore_<ts>.db` 并纳入 `backup_retain_count` 轮换；apply 侧的
     /// skills 回滚另有临时目录副本兜底，故不再另打一份以免重复占用保留位。
     pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_inner(sql_raw, SYNC_PRESERVE_TABLES, Some("pre-sync-restore"))
+        self.import_sql_string_for_sync_with_report(sql_raw)
+            .map(|outcome| outcome.backup_id)
+    }
+
+    /// S4-3：同步导入并带回合并报告（WebDAV / S3 下载结果要显示未关联与采纳数）。
+    pub(crate) fn import_sql_string_for_sync_with_report(
+        &self,
+        sql_raw: &str,
+    ) -> Result<ImportOutcome, AppError> {
+        self.import_sql_string_inner(sql_raw, Some("pre-sync-restore"), None)
+    }
+
+    /// S4-1：构造导入策略——**本机**后端与保险箱决定采纳/保留规则（§2.2-4）。
+    ///
+    /// 必须在持主库锁**之前**读好（§9-3）：持锁块内只做 0 次 op 的合并。
+    /// `local_vault` 取 `settings.onepassword.vault`，与 `OnePasswordVault` 的
+    /// `self.vault` 同源（`secrets::onepassword::from_settings` 用的就是它），
+    /// 两者必须一致，否则引用采纳会全部失配。
+    fn import_policy(&self) -> ImportPolicy {
+        let local_backend = if crate::settings::is_onepassword_backend() {
+            BackendKind::OnePassword
+        } else {
+            BackendKind::CredentialManager
+        };
+        ImportPolicy {
+            local_backend,
+            local_vault: crate::settings::get_onepassword_vault(),
+        }
     }
 
     fn import_sql_string_inner(
         &self,
         sql_raw: &str,
-        preserve_tables: &[&str],
         backup_prefix: Option<&str>,
-    ) -> Result<String, AppError> {
-        self.import_sql_string_inner_with_hook(sql_raw, preserve_tables, backup_prefix, || Ok(()))
+        hook: Option<Box<dyn FnOnce() -> Result<(), AppError> + '_>>,
+    ) -> Result<ImportOutcome, AppError> {
+        match hook {
+            // `Box<dyn FnOnce(..)>` 本身就实现了 FnOnce，直接传即可。
+            Some(hook) => self.import_sql_string_inner_with_hook(sql_raw, backup_prefix, hook),
+            None => self.import_sql_string_inner_with_hook(sql_raw, backup_prefix, || Ok(())),
+        }
     }
 
     fn import_sql_string_inner_with_hook<F>(
         &self,
         sql_raw: &str,
-        preserve_tables: &[&str],
         backup_prefix: Option<&str>,
         on_staging_ready: F,
-    ) -> Result<String, AppError>
+    ) -> Result<ImportOutcome, AppError>
     where
         F: FnOnce() -> Result<(), AppError>,
     {
@@ -312,10 +386,12 @@ impl Database {
         on_staging_ready()?;
 
         let backup_file_guard = lock_backup_file_operations()?;
+        // S4-1：策略在持锁前读好（§9-3），持锁块内只做 0 次 op 的合并。
+        let policy = self.import_policy();
         // Keep one main-DB guard across the safety snapshot, local-table read,
         // and final replacement so neither the rollback point nor preserved
         // device-local rows can miss writes that arrived during staging.
-        let backup_path = {
+        let (backup_path, import_report) = {
             let mut main_conn = lock_conn!(self.conn);
             let backup_path = Self::backup_database_file_from_conn(
                 &backup_file_guard,
@@ -323,20 +399,23 @@ impl Database {
                 &[],
                 backup_prefix,
             )?;
-            if !preserve_tables.is_empty() {
-                Self::restore_tables(&main_conn, &temp_conn, preserve_tables)?;
-            }
+            // S4-1：在**暂存库**上按数据分级合并本机数据（B 级键、C 级端点、
+            // D 级引用），与整库替换在同一把锁、同一时间点内完成（§9-2）。
+            let import_report = merge_for_import(&main_conn, &temp_conn, &policy)?;
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "替换主数据库")?;
-            backup_path
+            (backup_path, import_report)
         };
 
         let backup_id = backup_path
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
 
-        Ok(backup_id)
+        Ok(ImportOutcome {
+            backup_id,
+            report: import_report,
+        })
     }
 
     /// 创建内存快照以避免长时间持有数据库锁
@@ -382,125 +461,6 @@ impl Database {
         ))
     }
 
-    fn restore_tables(
-        source_conn: &Connection,
-        target_conn: &Connection,
-        tables: &[&str],
-    ) -> Result<(), AppError> {
-        // 整批复原放进一个事务：旧实现每行一条隐式自动提交的 INSERT，
-        // 目标是磁盘上的暂存库，等于每行一次 fsync——2.6 万行实测 119 秒。
-        // 合并成单事务后只剩最后一次提交；中途失败整体回滚，
-        // 也不会留下“半张表”的中间状态。
-        let tx = target_conn
-            .unchecked_transaction()
-            .map_err(|e| AppError::Database(format!("开启恢复事务失败: {e}")))?;
-
-        for table in tables {
-            if !Self::table_exists(source_conn, table)? || !Self::table_exists(&tx, table)? {
-                continue;
-            }
-
-            let columns = Self::get_table_columns(source_conn, table)?;
-            if columns.is_empty() {
-                continue;
-            }
-
-            let quoted_table = Self::quote_identifier(table);
-            let quoted_columns = columns
-                .iter()
-                .map(|column| Self::quote_identifier(column))
-                .collect::<Vec<_>>()
-                .join(", ");
-
-            tx.execute(&format!("DELETE FROM {quoted_table}"), [])
-                .map_err(|e| AppError::Database(format!("清空表 {table} 失败: {e}")))?;
-
-            let placeholders = (1..=columns.len())
-                .map(|idx| format!("?{idx}"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            let insert_sql =
-                format!("INSERT INTO {quoted_table} ({quoted_columns}) VALUES ({placeholders})");
-
-            // INSERT 语句每表只 prepare 一次，不再逐行重复解析。
-            let mut insert_stmt = tx
-                .prepare(&insert_sql)
-                .map_err(|e| AppError::Database(format!("准备表 {table} 插入语句失败: {e}")))?;
-
-            let mut stmt = source_conn
-                .prepare(&format!("SELECT {quoted_columns} FROM {quoted_table}"))
-                .map_err(|e| AppError::Database(format!("读取表 {table} 失败: {e}")))?;
-            let mut rows = stmt
-                .query([])
-                .map_err(|e| AppError::Database(format!("查询表 {table} 数据失败: {e}")))?;
-
-            while let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
-                let mut values = Vec::with_capacity(columns.len());
-                for idx in 0..columns.len() {
-                    values.push(
-                        row.get::<_, rusqlite::types::Value>(idx)
-                            .map_err(|e| AppError::Database(e.to_string()))?,
-                    );
-                }
-
-                insert_stmt
-                    .execute(rusqlite::params_from_iter(values.iter()))
-                    .map_err(|e| AppError::Database(format!("恢复表 {table} 数据失败: {e}")))?;
-            }
-        }
-
-        Self::restore_sqlite_sequences(source_conn, &tx, tables)?;
-
-        tx.commit()
-            .map_err(|e| AppError::Database(format!("提交恢复事务失败: {e}")))?;
-        Ok(())
-    }
-
-    fn restore_sqlite_sequences(
-        source_conn: &Connection,
-        target_conn: &Connection,
-        tables: &[&str],
-    ) -> Result<(), AppError> {
-        if !Self::table_exists(source_conn, "sqlite_sequence")?
-            || !Self::table_exists(target_conn, "sqlite_sequence")?
-        {
-            return Ok(());
-        }
-
-        let mut source_stmt = source_conn
-            .prepare(
-                "SELECT seq FROM sqlite_sequence
-                 WHERE name = ?1 ORDER BY rowid DESC LIMIT 1",
-            )
-            .map_err(|e| AppError::Database(format!("读取 AUTOINCREMENT 序列失败: {e}")))?;
-        for table in tables {
-            target_conn
-                .execute("DELETE FROM sqlite_sequence WHERE name = ?1", [*table])
-                .map_err(|e| {
-                    AppError::Database(format!("清理表 {table} 的 AUTOINCREMENT 序列失败: {e}"))
-                })?;
-
-            let mut rows = source_stmt
-                .query([*table])
-                .map_err(|e| AppError::Database(format!("查询表 {table} 序列失败: {e}")))?;
-            if let Some(row) = rows.next().map_err(|e| AppError::Database(e.to_string()))? {
-                let sequence = row
-                    .get::<_, rusqlite::types::Value>(0)
-                    .map_err(|e| AppError::Database(format!("解析表 {table} 序列失败: {e}")))?;
-                target_conn
-                    .execute(
-                        "INSERT INTO sqlite_sequence (name, seq) VALUES (?1, ?2)",
-                        rusqlite::params![table, sequence],
-                    )
-                    .map_err(|e| {
-                        AppError::Database(format!("恢复表 {table} 的 AUTOINCREMENT 序列失败: {e}"))
-                    })?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Periodic backup: create a new backup if the latest one is older than the configured interval
     pub(crate) fn periodic_backup_if_needed(&self) -> Result<(), AppError> {
         let interval_hours = crate::settings::effective_backup_interval_hours();
         if interval_hours > 0 {
@@ -538,7 +498,6 @@ impl Database {
         Ok(())
     }
 
-    /// 生成一致性快照备份，返回备份文件路径（不存在主库时返回 None）
     pub(crate) fn backup_database_file(&self) -> Result<Option<PathBuf>, AppError> {
         let backup_file_guard = lock_backup_file_operations()?;
         self.backup_database_file_locked(&backup_file_guard, None)
@@ -1147,9 +1106,11 @@ impl Database {
         Self::apply_schema_migrations_on_conn(&staging_conn)?;
         Self::validate_sqlite_integrity(&staging_conn)?;
 
+        // S4-1：策略在持锁前读好（§9-3），持锁块内只做 0 次 op 的合并。
+        let policy = self.import_policy();
         // Keep one main-DB guard across the safety snapshot and final apply so
         // the safety file exactly represents the state being replaced.
-        let safety_backup = {
+        let (safety_backup, import_report) = {
             let mut main_conn = lock_conn!(self.conn);
             let safety_backup = Self::backup_database_file_from_conn(
                 &backup_file_guard,
@@ -1158,16 +1119,27 @@ impl Database {
                 None,
             )?;
             before_replace(safety_backup.as_deref())?;
+            // S4-1：`.db` 恢复是本机自己的备份，但**仍走同一套合并**——备份里
+            // 的 `live_reapply_pending` 等本机标记不应复活，本机当前的 B 级键与
+            // 引用/端点优先（§5.4 S4-1）。
+            let import_report = merge_for_import(&main_conn, &staging_conn, &policy)?;
             let backup = Backup::new(&staging_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "恢复主数据库")?;
-            safety_backup
+            (safety_backup, import_report)
         };
         let safety_id = safety_backup
             .and_then(|p| p.file_stem().map(|s| s.to_string_lossy().to_string()))
             .unwrap_or_default();
-
-        log::info!("Database restored from backup: {filename}, safety backup: {safety_id}");
+        // 恢复路径当前没有 UI 消费方（S6-4 只提示「1P 关联会保留」），报告只记
+        // 日志；不存进 Database 状态，避免并发恢复互相覆盖。
+        log::info!(
+            "Database restored from backup: {filename}, safety backup: {safety_id}, \
+             adopted_refs: {}, pruned_refs: {}, pruned_endpoints: {}",
+            import_report.adopted_refs,
+            import_report.pruned_refs,
+            import_report.pruned_endpoints
+        );
         Ok(safety_id)
     }
 
@@ -1767,14 +1739,20 @@ mod tests {
             |row| row.get(0),
         )?;
         assert_eq!(cost_multiplier, "1.0");
-        let skill_snapshot: String = conn.query_row(
-            "SELECT value FROM settings WHERE key = 'skills_ssot_migration_snapshot'",
-            [],
-            |row| row.get(0),
-        )?;
+        // S4-1（§9-11 改写并注明新规则）：`skills_ssot_migration_snapshot` 是 B 级
+        // 「设备本地」键（§5.1 / D-S2），导入时**不以文件为准**——本机没有就保持
+        // 没有，绝不让备份里的旧迁移标记复活。旧断言要求「保留文件里的快照」，
+        // 与新规则冲突，按 §9-11 改写为断言新规则。
+        let snapshot: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'skills_ssot_migration_snapshot'",
+                [],
+                |row| row.get(0),
+            )
+            .ok();
         assert!(
-            skill_snapshot.contains("legacy-skill"),
-            "重建 skills 表时必须保留旧数据迁移快照"
+            snapshot.is_none(),
+            "设备本地迁移快照不得随导入复活（P0-5 / S4-1 / D-S2）"
         );
         Ok(())
     }
@@ -1996,116 +1974,6 @@ mod tests {
             [],
         )?;
         assert_eq!(target.last_insert_rowid(), 4);
-        Ok(())
-    }
-
-    #[test]
-    fn sync_style_restore_preserves_local_autoincrement_high_water_marks() -> Result<(), AppError> {
-        let source = Connection::open_in_memory()?;
-        source.execute_batch(
-            "CREATE TABLE autoincrement_rows (
-                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                 value TEXT NOT NULL
-             );
-             INSERT INTO autoincrement_rows (value) VALUES ('one'), ('two'), ('deleted-high');
-             DELETE FROM autoincrement_rows WHERE id = 3;",
-        )?;
-
-        // A sync dump skips device-local rows and their sequence metadata.
-        let staged_sql = Database::dump_sql(&source, &["autoincrement_rows"])?;
-        let target = Connection::open_in_memory()?;
-        target.execute_batch(&staged_sql)?;
-        let staged_sequence_count: i64 = target.query_row(
-            "SELECT COUNT(*) FROM sqlite_sequence WHERE name = 'autoincrement_rows'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(staged_sequence_count, 0);
-
-        Database::restore_tables(&source, &target, &["autoincrement_rows"])?;
-        let restored_sequence: i64 = target.query_row(
-            "SELECT seq FROM sqlite_sequence WHERE name = 'autoincrement_rows'",
-            [],
-            |row| row.get(0),
-        )?;
-        assert_eq!(restored_sequence, 3);
-        target.execute(
-            "INSERT INTO autoincrement_rows (value) VALUES ('after-sync')",
-            [],
-        )?;
-        assert_eq!(target.last_insert_rowid(), 4);
-        Ok(())
-    }
-
-    #[test]
-    fn restore_tables_reads_only_insertable_columns() -> Result<(), AppError> {
-        let source = Connection::open_in_memory()?;
-        let target = Connection::open_in_memory()?;
-        for conn in [&source, &target] {
-            conn.execute_batch(
-                r#"
-                CREATE TABLE generated_values (
-                    a TEXT NOT NULL,
-                    computed TEXT GENERATED ALWAYS AS (a || '-generated') STORED,
-                    "b""tail" TEXT NOT NULL
-                );
-                "#,
-            )?;
-        }
-        source.execute(
-            "INSERT INTO generated_values (a, \"b\"\"tail\") VALUES ('new', 'new-tail')",
-            [],
-        )?;
-        target.execute(
-            "INSERT INTO generated_values (a, \"b\"\"tail\") VALUES ('old', 'old-tail')",
-            [],
-        )?;
-
-        Database::restore_tables(&source, &target, &["generated_values"])?;
-
-        let values: (String, String, String) = target.query_row(
-            "SELECT a, computed, \"b\"\"tail\" FROM generated_values",
-            [],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
-        assert_eq!(
-            values,
-            (
-                "new".to_string(),
-                "new-generated".to_string(),
-                "new-tail".to_string()
-            )
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn restore_tables_rolls_back_all_tables_on_late_failure() -> Result<(), AppError> {
-        let source = Connection::open_in_memory()?;
-        source.execute_batch(
-            "CREATE TABLE first_table (value TEXT NOT NULL);
-             CREATE TABLE second_table (value INTEGER NOT NULL);
-             INSERT INTO first_table VALUES ('replacement');
-             INSERT INTO second_table VALUES (-1);",
-        )?;
-
-        let target = Connection::open_in_memory()?;
-        target.execute_batch(
-            "CREATE TABLE first_table (value TEXT NOT NULL);
-             CREATE TABLE second_table (value INTEGER NOT NULL CHECK (value >= 0));
-             INSERT INTO first_table VALUES ('sentinel-first');
-             INSERT INTO second_table VALUES (7);",
-        )?;
-
-        let result = Database::restore_tables(&source, &target, &["first_table", "second_table"]);
-        assert!(result.is_err(), "第二张表的约束错误必须终止恢复");
-
-        let first: String =
-            target.query_row("SELECT value FROM first_table", [], |row| row.get(0))?;
-        let second: i64 =
-            target.query_row("SELECT value FROM second_table", [], |row| row.get(0))?;
-        assert_eq!(first, "sentinel-first", "第一张表必须随事务整体回滚");
-        assert_eq!(second, 7, "失败表的 DELETE 也必须回滚");
         Ok(())
     }
 
@@ -2486,9 +2354,23 @@ mod tests {
             Ok(())
         };
 
+        let insert_provider = |conn: &Connection, provider_id: &str| -> Result<(), AppError> {
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES (?1, 'claude', ?1, '{}', '{}')",
+                [provider_id],
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            Ok(())
+        };
+
         let remote_db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(remote_db.conn);
+            // S4-1：引用必须挂在真实存在的供应商上——合并会清理「供应商已不存在」
+            // 的引用行（P1-2），这是新规则的直接体现。
+            insert_provider(&conn, "p1")?;
+            insert_provider(&conn, "p2")?;
             insert_ref(&conn, "p1", "item-remote", "vault-x")?;
             insert_ref(&conn, "p2", "item-placeholder", "")?;
         }
@@ -2507,6 +2389,7 @@ mod tests {
             let conn = crate::database::lock_conn!(local_db.conn);
             conn.execute("DELETE FROM secret_refs", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
+            insert_provider(&conn, "p1")?;
             insert_ref(&conn, "p1", "item-local", "vault-x")?;
         }
         local_db.import_sql_string_for_sync(&remote_sql)?;
@@ -3074,13 +2957,23 @@ SELECT 1;"
         Ok(())
     }
 
-    /// P0-4 / S4-1：手动 SQL 导入不得用文件里的 secret_refs 覆盖本机引用。
+    /// S4-1 / §8.1-3：设备 B 导入设备 A 的配置——**保险箱不同**时不采纳远端
+    /// 引用，本机引用原样保留（P0-4：手动路径此前整表覆盖）。
     #[test]
     #[serial]
-    #[ignore = "S4 待修（P0-4）：手动导入仍整表覆盖本机 secret_refs"]
     fn manual_import_preserves_local_secret_refs() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+        crate::test_support::set_onepassword_vault("vault-a")?;
         let local_db = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'P1', '{}', '{}')",
+                [],
+            )?;
+        }
         local_db.upsert_secret_ref(
             "claude",
             "p1",
@@ -3089,8 +2982,16 @@ SELECT 1;"
             &["api_key".to_string()],
         )?;
 
-        // 另一台设备（不同保险箱）导出的全量 SQL：同一供应商指向自己的引用。
+        // 另一台设备（**不同保险箱**）导出的全量 SQL：同一供应商指向自己的引用。
         let remote_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(remote_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'P1', '{}', '{}')",
+                [],
+            )?;
+        }
         remote_db.upsert_secret_ref(
             "claude",
             "p1",
@@ -3104,7 +3005,7 @@ SELECT 1;"
             "手动导出是全量导出，应携带引用行（D-S3）"
         );
 
-        local_db.import_sql_string(&file_sql)?;
+        let outcome = local_db.import_sql_string_with_report(&file_sql)?;
         let (_, item_id) = local_db
             .get_secret_ref_identity("claude", "p1")?
             .expect("导入后本机引用行必须仍存在");
@@ -3112,13 +3013,96 @@ SELECT 1;"
             item_id, "item-local",
             "本机引用必须原样保留，与同步路径规则一致（P0-4 / D14）"
         );
+        assert_eq!(
+            outcome.report.adopted_refs, 0,
+            "保险箱不匹配的远端引用一律不采纳（D-S3 / §10 安全边界）"
+        );
+        Ok(())
+    }
+
+    /// S4-1 / §8.1-3：**同一保险箱**时采纳远端引用——item id 在各设备一致，
+    /// 采纳可把「下载后逐条重建」的 N+1 次 op 降到 0（D-S3）。
+    #[test]
+    #[serial]
+    fn import_adopts_remote_ref_when_vault_matches() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+        crate::test_support::set_onepassword_vault("vault-a")?;
+
+        // 设备 A：新增供应商 X 并带上它的引用。
+        let remote_db = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(remote_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('x', 'claude', 'X', '{}', '{}')",
+                [],
+            )?;
+        }
+        remote_db.upsert_secret_ref(
+            "claude",
+            "x",
+            "vault-a",
+            "item-x",
+            &["api_key".to_string()],
+        )?;
+        let file_sql = remote_db.export_sql_string()?;
+
+        // 设备 B：导入后获得 X 的配置与引用，且导入期间不产生任何 vault 往返。
+        let local_db = Database::init()?;
+        let outcome = local_db.import_sql_string_with_report(&file_sql)?;
+        assert_eq!(outcome.report.adopted_refs, 1, "同保险箱引用必须被采纳");
+        let (_, item_id) = local_db
+            .get_secret_ref_identity("claude", "x")?
+            .expect("采纳后本机应有引用行");
+        assert_eq!(item_id, "item-x");
+        assert!(
+            local_db.get_provider_by_id("x", "claude")?.is_some(),
+            "供应商配置应随导入到位"
+        );
+        Ok(())
+    }
+
+    /// S4-1 / §8.1-3：远端删除供应商 Y 后，本机 Y 的引用与端点行被清理（P1-2）。
+    #[test]
+    #[serial]
+    fn import_prunes_refs_and_endpoints_of_removed_provider() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+        crate::test_support::set_onepassword_vault("vault-a")?;
+
+        let local_db = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(local_db.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('y', 'claude', 'Y', '{}', '{}')",
+                [],
+            )?;
+        }
+        local_db.upsert_secret_ref("claude", "y", "vault-a", "item-y", &["api_key".to_string()])?;
+        local_db.upsert_provider_endpoint("claude", "y", "https://y.example/v1")?;
+
+        // 远端快照里已经没有 Y。
+        let remote_db = Database::memory()?;
+        let sql = remote_db.export_sql_string_for_sync()?;
+        local_db.import_sql_string_for_sync(&sql)?;
+
+        assert!(
+            local_db.get_secret_ref_identity("claude", "y")?.is_none(),
+            "供应商已不存在，引用行必须被清理（P1-2 / S4-1）"
+        );
+        assert_eq!(
+            local_db.get_provider_endpoint("claude", "y")?,
+            None,
+            "供应商已不存在，端点缓存行必须被清理（P1-2 / S4-1）"
+        );
         Ok(())
     }
 
     /// P0-5 / S4-1：同步导入不得覆盖设备本地 settings 行（本机值原样保留）。
     #[test]
     #[serial]
-    #[ignore = "S4 待修（P0-5）：同步导入仍会覆盖设备本地 settings 行"]
     fn sync_import_preserves_device_local_settings() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let local_db = Database::init()?;

@@ -193,12 +193,21 @@ async fn import_config_from_path(
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
             let path_buf = PathBuf::from(&file_path);
-            let backup_id = {
+            let outcome = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
                 let _skill_state_guard = skill_state_write_guard();
-                db.import_sql(&path_buf)?
+                db.import_sql_with_report(&path_buf)?
             };
+            let backup_id = outcome.backup_id;
+            // S4-1：合并统计只记结构信息（计数），不含任何值（§9-13）。
+            log::info!(
+                "[Import] merged: adopted_refs={}, pruned_refs={}, pruned_endpoints={}, unlinked={}",
+                outcome.report.adopted_refs,
+                outcome.report.pruned_refs,
+                outcome.report.pruned_endpoints,
+                outcome.report.unlinked_providers.len()
+            );
             app_state_for_sync.scrub_imported_plaintext()?;
             let warning =
                 post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
