@@ -1861,6 +1861,9 @@
     "rebuildRefsDone": "{{rebuilt}} 件の参照を再構築しました（全 {{total}} 件）。",
     "plaintextPending": "インポート待ちの平文キーを検出しました：Pi 設定 {{pi}} 件、live ファイル {{live}} 件、保留中のインポート {{imports}} 件。インポートするまで 1Password には保存されません。",
     "plaintextImportAction": "1Password にインポート",
+        "endpointVaultPending": "{{count}} 件の Pi エンドポイント変更が 1Password への書き込み待ちです",
+        "endpointWriteAction": "今すぐ書き込む",
+        "endpointWriteDone": "{{count}} 件のエンドポイント変更を書き込みました",
     "plaintextImportDone": "{{count}} 件のキーを 1Password にインポートしました。"
   }
 }

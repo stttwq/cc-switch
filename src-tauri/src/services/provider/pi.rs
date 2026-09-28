@@ -603,7 +603,53 @@ pub(crate) fn import_pi_plaintext_to_vault(state: &AppState) -> Result<usize, Ap
     if remaining.len() != pending.len() {
         crate::settings::set_pi_plaintext_pending(remaining)?;
     }
+    // S1-2：这里已经调过 op（解锁后），顺带消化端点写回清单——merge 复用同一
+    // 次解锁窗口，不额外增加用户感知成本。失败保留 pending 待重试，不影响导入结果。
+    if let Err(error) = flush_endpoint_vault_pending_locked(state) {
+        log::warn!("端点改动写回 1Password 失败，保留 pending 待重试: {error}");
+    }
     Ok(imported)
+}
+
+/// S1-2（D-S9）：把 `pi_endpoint_vault_pending` 里供应商的端点改动 merge 进
+/// 1Password（每个供应商一次 fetch + put，无新增字段则不 put）。供用户主动
+/// 触发的 op 动作顺带调用（编辑保存 / 导入明文 / 重建引用 / 横幅「立即写入」）。
+/// 单个失败保留该 id 待重试，其余出队（全量重建语义）。
+/// 调用方必须已持有 Pi 切换锁；对外入口见 [`flush_endpoint_vault_pending`]。
+fn flush_endpoint_vault_pending_locked(state: &AppState) -> Result<usize, AppError> {
+    let pending = crate::settings::get_pi_endpoint_vault_pending();
+    let mut flushed = 0;
+    let mut remaining = Vec::new();
+    for id in &pending {
+        let result = match state.db.get_provider_endpoint(PI_APP, id)? {
+            // 供应商已删 / 缓存已清：无需写回，直接出队。
+            None => Ok(()),
+            Some(url) => {
+                let secrets = crate::secrets::ProviderSecrets {
+                    base_url: Some(url.into()),
+                    ..Default::default()
+                };
+                super::store_provider_bundle(state, &AppType::Pi, id, &secrets, true)
+            }
+        };
+        match result {
+            Ok(()) => flushed += 1,
+            Err(error) => {
+                log::warn!("Pi 供应商 {id} 端点写回 1Password 失败，保留待重试: {error}");
+                remaining.push(id.clone());
+            }
+        }
+    }
+    if remaining.len() != pending.len() {
+        crate::settings::set_pi_endpoint_vault_pending(remaining)?;
+    }
+    Ok(flushed)
+}
+
+/// S1-2：[`flush_endpoint_vault_pending_locked`] 的对外入口（自带 Pi 切换锁）。
+pub(crate) fn flush_endpoint_vault_pending(state: &AppState) -> Result<usize, AppError> {
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
+    flush_endpoint_vault_pending_locked(state)
 }
 
 /// 导入单个供应商。返回 `false` 表示 live 与 DB 里都已不存在（pending 直接出队）。
@@ -1083,6 +1129,55 @@ mod list_perf_tests {
         assert_eq!(
             row.name, "Perf 0",
             "指纹失效后 list 必须把 DB 重新对齐到 models.json（S1-4）"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn flush_endpoint_pending_merges_into_vault_and_clears_list() {
+        use crate::secrets::{SecretGroup, SecretVault, FIELD_BASE_URL};
+
+        let _home = TempHome::new("flush-1p");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(&perf_models(None));
+        let _onep = OnePBackend::enable();
+        let (state, vault, counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("first sync");
+
+        // 人为记一笔端点改动（等价于外部改过 baseUrl 且已进缓存），外加一个
+        // 已不存在的 ghost id（应静默出队，不产生任何往返）。
+        state
+            .db
+            .upsert_provider_endpoint(PI_APP, "pi-perf-1", "https://flush.example/v1")
+            .expect("seed cache");
+        crate::settings::set_pi_endpoint_vault_pending(vec![
+            "pi-perf-1".to_string(),
+            "ghost".to_string(),
+        ])
+        .expect("seed pending");
+        counting.reset();
+
+        let flushed = flush_endpoint_vault_pending(&state).expect("flush");
+        assert_eq!(flushed, 2, "真实供应商写入 + ghost 出队都算消化成功");
+        assert_eq!(
+            counting.fetch_count(),
+            1,
+            "只有真实存在的供应商产生 vault 往返"
+        );
+        assert_eq!(counting.put_count(), 1);
+
+        let bundle = vault
+            .fetch(&SecretGroup::provider(AppType::Pi, "pi-perf-1"))
+            .expect("fetch")
+            .expect("bundle exists");
+        assert_eq!(
+            bundle.get(FIELD_BASE_URL).map(|s| s.to_string()),
+            Some("https://flush.example/v1".to_string()),
+            "端点改动必须 merge 进 1Password（D-S9 消化）"
+        );
+        assert!(
+            crate::settings::get_pi_endpoint_vault_pending().is_empty(),
+            "成功的消化必须清空清单"
         );
     }
 }

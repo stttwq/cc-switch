@@ -1861,6 +1861,9 @@
     "rebuildRefsDone": "Rebuilt {{rebuilt}} refs ({{total}} items total).",
     "plaintextPending": "Plaintext keys awaiting import: {{pi}} in Pi config, {{live}} in live files; plus {{imports}} deferred imports. The keys are not in 1Password until imported.",
     "plaintextImportAction": "Import to 1Password",
+        "endpointVaultPending": "{{count}} Pi endpoint change(s) pending write to 1Password",
+        "endpointWriteAction": "Write now",
+        "endpointWriteDone": "Wrote {{count}} endpoint change(s)",
     "plaintextImportDone": "Imported {{count}} keys into 1Password."
   }
 }

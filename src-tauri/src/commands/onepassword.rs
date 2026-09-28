@@ -324,6 +324,11 @@ pub async fn onepassword_rebuild_refs(
             "onepassword-rebuild-refs-progress",
             serde_json::json!({ "done": total, "total": total }),
         );
+        // S1-2：重建引用本就是用户主动触发的 op 动作，顺带把 Pi 端点改动
+        // merge 进 1Password；失败只记日志（本次重建结果不受影响）。
+        if let Err(error) = crate::services::provider::flush_endpoint_vault_pending(&state) {
+            log::warn!("重建引用后写回 Pi 端点改动失败: {error}");
+        }
         Ok::<_, crate::error::AppError>(serde_json::json!({
             "total": total,
             "rebuilt": rebuilt,

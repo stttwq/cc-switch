@@ -46,3 +46,18 @@ pub(crate) async fn import_pi_plaintext_to_onepassword(
     .map_err(|e| format!("导入 Pi 明文钥匙任务失败: {e}"))?
     .map_err(|e| e.to_string())
 }
+
+/// S1-2（D-S9）：把 Pi 端点缓存的改动 merge 进 1Password。用户主动触发
+/// （横幅「立即写入」），会调 op（可能弹解锁），async + spawn_blocking。
+#[tauri::command]
+pub(crate) async fn flush_pi_endpoint_vault_to_onepassword(
+    state: State<'_, AppState>,
+) -> Result<usize, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::provider::flush_endpoint_vault_pending(&state)
+    })
+    .await
+    .map_err(|e| format!("端点写回任务失败: {e}"))?
+    .map_err(|e| e.to_string())
+}

@@ -288,6 +288,8 @@ export interface Settings {
   secretsImportPending?: string[];
   // 1P 模式：Pi models.json 里的明文钥匙待导入清单（provider id）
   piPlaintextPending?: string[];
+  // S1-2：Pi 端点改动待写入 1Password 的清单（provider id，本机设置不随云同步）
+  piEndpointVaultPending?: string[];
   // 1P 模式：live 文件里的明文钥匙待导入清单（<app>/<id>）
   livePlaintextPending?: string[];
   // 1P 模式：删除供应商时 vault.delete 失败、1P 条目尚未归档的组键清单

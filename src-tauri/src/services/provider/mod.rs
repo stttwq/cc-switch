@@ -423,6 +423,7 @@ pub(crate) use live::{
     strip_common_config_from_live_settings, sync_current_provider_for_app_to_live,
     write_live_with_common_config_for_state,
 };
+pub(crate) use pi::flush_endpoint_vault_pending;
 pub(crate) use pi::import_pi_plaintext_to_vault;
 pub(crate) use pi::invalidate_native_fingerprint;
 

@@ -1861,6 +1861,9 @@
     "rebuildRefsDone": "已重建 {{rebuilt}} 個引用（共 {{total}} 個條目）。",
     "plaintextPending": "偵測到待匯入的明文金鑰：Pi 設定 {{pi}} 個、live 檔案 {{live}} 個；另有 {{imports}} 個匯入暫留。匯入後 1Password 裡才會有這些金鑰。",
     "plaintextImportAction": "匯入到 1Password",
+        "endpointVaultPending": "有 {{count}} 個 Pi 端點變更待寫入 1Password",
+        "endpointWriteAction": "立即寫入",
+        "endpointWriteDone": "已寫入 {{count}} 個端點變更",
     "plaintextImportDone": "已匯入 {{count}} 把金鑰到 1Password。"
   }
 }
