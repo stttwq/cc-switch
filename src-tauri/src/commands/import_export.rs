@@ -15,7 +15,7 @@ use crate::database::Database;
 use crate::error::AppError;
 use crate::services::provider::ProviderService;
 use crate::services::skill::skill_state_write_guard;
-use crate::services::sync_protocol::sync_mutex;
+use crate::services::sync_protocol::{self, sync_mutex};
 use crate::store::AppState;
 
 /// 导出凭据便携包（加密）。
@@ -193,6 +193,9 @@ async fn import_config_from_path(
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
+            // S5-2（P1-4）：导入会改写 providers/settings 等表并触发后处理写入，
+            // 这些都不是「用户改了配置」，包上全局抑制守卫防止回声触发自动上传。
+            let _auto_sync_suppression = sync_protocol::AutoSyncSuppressionGuard::new();
             let path_buf = PathBuf::from(&file_path);
             let outcome = {
                 // SQL restore replaces the `skills` table. Exclude local Skill
@@ -307,6 +310,8 @@ pub async fn restore_db_backup(
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
         tauri::async_runtime::spawn_blocking(move || {
+            // S5-2（P1-4）：同 SQL 导入——恢复 + 后处理的写入不触发自动上传。
+            let _auto_sync_suppression = sync_protocol::AutoSyncSuppressionGuard::new();
             let restored = {
                 let _skill_state_guard = skill_state_write_guard();
                 // S4-7：导入前拍 Pi DB 快照，供后处理判断哪些供应商变了。

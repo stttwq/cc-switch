@@ -66,11 +66,12 @@ where
     ProjectFut: std::future::Future<Output = Result<U, AppError>>,
 {
     run_with_webdav_lock(async {
-        let result = {
-            let _auto_sync_suppression =
-                crate::services::webdav_auto_sync::AutoSyncSuppressionGuard::new();
-            download.await?
-        };
+        // S5-2（P1-4）：抑制守卫覆盖「下载 + 后处理」全程。下载后的 scrub / live
+        // 刷新写入不是用户改动，不应触发自动上传；守卫是 sync_protocol 里的全局
+        // 计数，S3 的自动同步同样被抑制（跨传输回声抑制）。
+        let _auto_sync_suppression =
+            crate::services::sync_protocol::AutoSyncSuppressionGuard::new();
+        let result = download.await?;
         project(result).await
     })
     .await
@@ -301,7 +302,10 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn download_suppression_starts_after_webdav_lock_acquisition() {
+    async fn download_suppression_covers_projection_after_webdav_lock() {
+        // S5-2 有意改变的行为（原断言为「后处理期间不抑制」）：下载后的 scrub /
+        // live 刷新写入不是用户改动，必须与下载本体一起被抑制，否则刚下载的数据
+        // 会被自动上传一遍（回声）。守卫仍在拿到全局同步锁之后才开始。
         assert!(!crate::services::webdav_auto_sync::is_auto_sync_suppressed());
         let guard = webdav_sync_mutex().lock().await;
         let download_entered = AtomicBool::new(false);
@@ -314,7 +318,10 @@ mod tests {
             },
             |_| async {
                 projection_entered.store(true, Ordering::SeqCst);
-                assert!(!crate::services::webdav_auto_sync::is_auto_sync_suppressed());
+                assert!(
+                    crate::services::webdav_auto_sync::is_auto_sync_suppressed(),
+                    "post-download writes must stay suppressed (S5-2)"
+                );
                 Ok::<(), AppError>(())
             },
         );

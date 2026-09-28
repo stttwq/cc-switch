@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::future::Future;
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use chrono::Utc;
@@ -54,6 +55,44 @@ where
 {
     let _guard = sync_mutex().lock().await;
     operation.await
+}
+
+// ─── Auto-sync echo suppression（S5-2 / P1-4）────────────────
+
+/// 下载 / 导入及后处理期间的自动同步回声抑制。
+///
+/// S5-2 之前 WebDAV 与 S3 各持一个独立计数，导致两个问题：① 抑制守卫只包住
+/// `download.await`，下载后的 scrub / live 刷新写入会被当成用户改动，把刚下载
+/// 的数据再上传一遍；② 跨传输不抑制（WebDAV 下载的数据被 S3 自动上传）。
+/// 现在合并为本层唯一一个全局计数，两种传输、手动导入 / `.db` 恢复共用。
+static AUTO_SYNC_SUPPRESS_DEPTH: AtomicUsize = AtomicUsize::new(0);
+
+pub(crate) struct AutoSyncSuppressionGuard;
+
+impl AutoSyncSuppressionGuard {
+    pub fn new() -> Self {
+        AUTO_SYNC_SUPPRESS_DEPTH.fetch_add(1, Ordering::SeqCst);
+        Self
+    }
+}
+
+impl Default for AutoSyncSuppressionGuard {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for AutoSyncSuppressionGuard {
+    fn drop(&mut self) {
+        let _ =
+            AUTO_SYNC_SUPPRESS_DEPTH.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
+                Some(value.saturating_sub(1))
+            });
+    }
+}
+
+pub(crate) fn is_auto_sync_suppressed() -> bool {
+    AUTO_SYNC_SUPPRESS_DEPTH.load(Ordering::SeqCst) > 0
 }
 
 /// Tables whose changes make the remote configuration snapshot stale.
@@ -753,6 +792,22 @@ mod tests {
         assert!(s3_lock.try_lock().is_err());
         drop(guard);
         assert!(s3_lock.try_lock().is_ok());
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn suppression_guard_is_shared_across_transports() {
+        // S5-2（P1-4）：抑制计数必须全局唯一——WebDAV 下载期间 S3 的自动同步
+        // 也要被抑制，反之亦然；两个 auto_sync 模块只允许读到同一个计数。
+        assert!(!is_auto_sync_suppressed());
+        {
+            let _guard = AutoSyncSuppressionGuard::new();
+            assert!(crate::services::webdav_auto_sync::is_auto_sync_suppressed());
+            assert!(crate::services::s3_auto_sync::is_auto_sync_suppressed());
+        }
+        assert!(!is_auto_sync_suppressed());
+        assert!(!crate::services::webdav_auto_sync::is_auto_sync_suppressed());
+        assert!(!crate::services::s3_auto_sync::is_auto_sync_suppressed());
     }
 
     #[test]

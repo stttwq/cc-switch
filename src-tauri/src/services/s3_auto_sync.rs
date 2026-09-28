@@ -1,4 +1,3 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
@@ -9,6 +8,9 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::mpsc::{channel, Receiver, Sender};
 
 use crate::error::AppError;
+// S5-2（P1-4）：抑制计数上收到传输无关的 sync_protocol，与 WebDAV、手动导入 /
+// `.db` 恢复共用同一个全局计数（跨传输回声抑制）。
+pub(crate) use super::sync_protocol::is_auto_sync_suppressed;
 use crate::services::s3_sync;
 use crate::services::sync_protocol::should_trigger_auto_sync_for_table;
 use crate::settings::{self, S3SyncSettings};
@@ -17,29 +19,6 @@ const AUTO_SYNC_DEBOUNCE_MS: u64 = 1000;
 pub(crate) const MAX_AUTO_SYNC_WAIT_MS: u64 = 10_000;
 
 static DB_CHANGE_TX: OnceLock<Sender<String>> = OnceLock::new();
-static AUTO_SYNC_SUPPRESS_DEPTH: AtomicUsize = AtomicUsize::new(0);
-
-pub(crate) struct AutoSyncSuppressionGuard;
-
-impl AutoSyncSuppressionGuard {
-    pub fn new() -> Self {
-        AUTO_SYNC_SUPPRESS_DEPTH.fetch_add(1, Ordering::SeqCst);
-        Self
-    }
-}
-
-impl Drop for AutoSyncSuppressionGuard {
-    fn drop(&mut self) {
-        let _ =
-            AUTO_SYNC_SUPPRESS_DEPTH.fetch_update(Ordering::SeqCst, Ordering::SeqCst, |value| {
-                Some(value.saturating_sub(1))
-            });
-    }
-}
-
-pub(crate) fn is_auto_sync_suppressed() -> bool {
-    AUTO_SYNC_SUPPRESS_DEPTH.load(Ordering::SeqCst) > 0
-}
 
 pub fn should_trigger_for_table(table: &str) -> bool {
     should_trigger_auto_sync_for_table(table)
@@ -195,9 +174,9 @@ async fn run_worker_loop(
 mod tests {
     use super::{
         auto_sync_wait_duration, enqueue_change_signal, is_auto_sync_suppressed,
-        should_run_auto_sync, should_trigger_for_table, AutoSyncSuppressionGuard,
-        MAX_AUTO_SYNC_WAIT_MS,
+        should_run_auto_sync, should_trigger_for_table, MAX_AUTO_SYNC_WAIT_MS,
     };
+    use crate::services::sync_protocol::AutoSyncSuppressionGuard;
     use crate::settings::S3SyncSettings;
     use serial_test::serial;
     use std::time::{Duration, Instant};
