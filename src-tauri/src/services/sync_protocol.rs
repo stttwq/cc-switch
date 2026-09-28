@@ -6,12 +6,13 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::future::Future;
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tauri::{AppHandle, Emitter};
 use tempfile::tempdir;
 
 use crate::error::AppError;
@@ -103,6 +104,36 @@ pub(crate) fn ensure_remote_manifest_not_ahead(
         return Err(remote_ahead_error());
     }
     Ok(())
+}
+
+// ─── 1P 模式「未上传改动」标记（S5-4 / P2-6）─────────────────
+
+/// D4 之后 1P 模式下后台自动同步整体跳过，用户容易忘记手动上传。用进程级标记
+/// 记录「数据库有改动但尚未成功同步」，状态变化时经 `sync-dirty-changed` 事件
+/// 通知前端展示提示。标记只存内存：上传 / 下载成功即清零，应用重启后重新累积。
+static SYNC_DIRTY_SINCE_UPLOAD: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn mark_sync_dirty(app: &AppHandle) {
+    if !SYNC_DIRTY_SINCE_UPLOAD.swap(true, Ordering::SeqCst) {
+        emit_sync_dirty(app, true);
+    }
+}
+
+/// 上传成功（手动或自动）或下载成功（本机已与远端一致）后清零。
+pub(crate) fn clear_sync_dirty(app: &AppHandle) {
+    if SYNC_DIRTY_SINCE_UPLOAD.swap(false, Ordering::SeqCst) {
+        emit_sync_dirty(app, false);
+    }
+}
+
+pub(crate) fn is_sync_dirty() -> bool {
+    SYNC_DIRTY_SINCE_UPLOAD.load(Ordering::SeqCst)
+}
+
+fn emit_sync_dirty(app: &AppHandle, dirty: bool) {
+    if let Err(err) = app.emit("sync-dirty-changed", serde_json::json!({ "dirty": dirty })) {
+        log::debug!("[Sync] failed to emit sync-dirty-changed event: {err}");
+    }
 }
 
 // ─── Auto-sync echo suppression（S5-2 / P1-4）────────────────

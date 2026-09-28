@@ -225,6 +225,11 @@ export const settingsApi = {
     return await invoke("webdav_sync_fetch_remote_info");
   },
 
+  // S5-4：查询「有未上传改动」标记（进程内存），用于设置页挂载时恢复提示。
+  async syncDirtyState(): Promise<{ dirty: boolean }> {
+    return await invoke("sync_dirty_state");
+  },
+
   // ===== S3 Sync API =====
 
   async s3TestConnection(

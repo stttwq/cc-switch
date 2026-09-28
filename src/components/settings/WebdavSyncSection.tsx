@@ -36,6 +36,7 @@ import {
 } from "@/components/ui/dialog";
 import { settingsApi } from "@/lib/api";
 import { ConfirmDialog } from "@/components/ConfirmDialog";
+import { useTauriEvent } from "@/hooks/useTauriEvent";
 import type { SettingsFormState } from "@/hooks/useSettings";
 import type {
   RemoteSnapshotInfo,
@@ -327,6 +328,18 @@ export function WebdavSyncSection({
   const [remoteAheadDialog, setRemoteAheadDialog] = useState<
     "webdav" | "s3" | null
   >(null);
+  // S5-4：1P 模式下自动同步被跳过、数据库有未上传改动时的提示。
+  // 标记在后端进程内存里，挂载时读一次初值，之后经事件推送增量更新。
+  const [dirtySinceUpload, setDirtySinceUpload] = useState(false);
+  useEffect(() => {
+    settingsApi
+      .syncDirtyState()
+      .then((state) => setDirtySinceUpload(state.dirty))
+      .catch(() => {});
+  }, []);
+  useTauriEvent<{ dirty: boolean }>("sync-dirty-changed", (payload) => {
+    setDirtySinceUpload(payload.dirty);
+  });
 
   const closeDialog = useCallback(() => {
     setDialogType(null);
@@ -1252,6 +1265,12 @@ export function WebdavSyncSection({
               {t("settings.webdavSync.lastSync", { time: lastSyncDisplay })}
             </p>
           )}
+          {/* S5-4：1P 模式下自动同步被跳过，有改动未上传时提示手动上传 */}
+          {dirtySinceUpload && (
+            <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+              {t("settings.webdavSync.dirtySinceUpload")}
+            </p>
+          )}
           {showAutoSyncError && (
             <div className="rounded-lg border border-red-300/70 bg-red-50/80 px-3 py-2 text-xs text-red-900 dark:border-red-500/50 dark:bg-red-950/30 dark:text-red-200">
               <p className="font-medium">
@@ -1567,6 +1586,12 @@ export function WebdavSyncSection({
           {s3LastSyncDisplay && (
             <p className="text-xs text-muted-foreground">
               {t("settings.s3Sync.lastSync", { time: s3LastSyncDisplay })}
+            </p>
+          )}
+          {/* S5-4：1P 模式下自动同步被跳过，有改动未上传时提示手动上传 */}
+          {dirtySinceUpload && (
+            <p className="text-xs font-medium text-amber-600 dark:text-amber-400">
+              {t("settings.s3Sync.dirtySinceUpload")}
             </p>
           )}
           {s3ShowAutoSyncError && (

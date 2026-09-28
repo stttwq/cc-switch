@@ -81,6 +81,8 @@ const { settingsApiMock } = vi.hoisted(() => ({
     webdavSyncFetchRemoteInfo: vi.fn(),
     webdavSyncUpload: vi.fn(),
     webdavSyncDownload: vi.fn(),
+    // S5-4：默认无未上传改动
+    syncDirtyState: vi.fn().mockResolvedValue({ dirty: false }),
   },
 }));
 
@@ -124,6 +126,9 @@ describe("WebdavSyncSection", () => {
     settingsApiMock.webdavSyncFetchRemoteInfo.mockReset();
     settingsApiMock.webdavSyncUpload.mockReset();
     settingsApiMock.webdavSyncDownload.mockReset();
+    // S5-4：每个用例默认无未上传改动
+    settingsApiMock.syncDirtyState.mockReset();
+    settingsApiMock.syncDirtyState.mockResolvedValue({ dirty: false });
 
     settingsApiMock.webdavSyncSaveSettings.mockResolvedValue({ success: true });
     settingsApiMock.webdavTestConnection.mockResolvedValue({
@@ -157,6 +162,27 @@ describe("WebdavSyncSection", () => {
       screen.getByText("settings.webdavSync.autoSyncLastErrorTitle"),
     ).toBeInTheDocument();
     expect(screen.getByText("network timeout")).toBeInTheDocument();
+  });
+
+  // S5-4：1P 模式下自动同步被跳过且有未上传改动时，展示手动上传提示。
+  it("shows dirty-since-upload banner when the backend dirty flag is set", async () => {
+    settingsApiMock.syncDirtyState.mockResolvedValue({ dirty: true });
+    renderSection(baseConfig);
+
+    expect(
+      await screen.findByText("settings.webdavSync.dirtySinceUpload"),
+    ).toBeInTheDocument();
+  });
+
+  it("hides dirty-since-upload banner when there is nothing pending", async () => {
+    renderSection(baseConfig);
+
+    await waitFor(() => {
+      expect(settingsApiMock.syncDirtyState).toHaveBeenCalled();
+    });
+    expect(
+      screen.queryByText("settings.webdavSync.dirtySinceUpload"),
+    ).not.toBeInTheDocument();
   });
 
   it("does not show auto sync error callout for manual sync errors", () => {

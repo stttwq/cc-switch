@@ -89,6 +89,9 @@ async fn run_auto_sync_upload(
     // D4/§6.9：1Password 后端下跳过后台自动同步（避免周期性解锁弹窗）；手动同步照常。
     // F4-4：判定 fail-closed——读取失败按 1P 处理（宁可跳过同步，不可泄钥匙）。
     if crate::settings::backend_is_onepassword_or_unknown() {
+        // S5-4（P2-6）：自动同步被跳过时置「有未上传改动」标记并通知 UI，
+        // 提醒用户手动上传，避免改动一直滞留本机。
+        crate::services::sync_protocol::mark_sync_dirty(app);
         log::debug!("1Password 模式：跳过 S3 自动同步（请手动同步）");
         return Ok(());
     }
@@ -108,6 +111,8 @@ async fn run_auto_sync_upload(
     .await;
     match result {
         Ok(_) => {
+            // S5-4（P2-6）：上传成功，清零「未上传改动」标记。
+            crate::services::sync_protocol::clear_sync_dirty(app);
             emit_auto_sync_status_updated(app, "success", None);
             Ok(())
         }

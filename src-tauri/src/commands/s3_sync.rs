@@ -125,6 +125,7 @@ pub async fn s3_test_connection(
 #[tauri::command]
 pub async fn s3_sync_upload(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     // S5-1（P1-3）：远端有本机未下载的更新时拒绝上传；「强制覆盖远端」后带 force 重试。
     force: Option<bool>,
 ) -> Result<Value, String> {
@@ -141,14 +142,20 @@ pub async fn s3_sync_upload(
         force.unwrap_or(false),
     ))
     .await;
-    map_sync_result(result, |error| {
+    let mapped = map_sync_result(result, |error| {
         persist_sync_error(&mut settings, error, "manual")
-    })
+    });
+    if mapped.is_ok() {
+        // S5-4（P2-6）：上传成功，清零「未上传改动」标记。
+        crate::services::sync_protocol::clear_sync_dirty(&app);
+    }
+    mapped
 }
 
 #[tauri::command]
 pub async fn s3_sync_download(
     state: State<'_, AppState>,
+    app: tauri::AppHandle,
     allow_rollback: Option<bool>,
 ) -> Result<Value, String> {
     let db = state.db.clone();
@@ -202,6 +209,11 @@ pub async fn s3_sync_download(
     }
     // S4-3：补上「未关联 1Password 的供应商」计数，供前端横幅直接用。
     result = attach_unlinked_count(attach_warning(result, warning));
+
+    // S5-4（P2-6）：下载成功意味着本机已与远端一致，清零「未上传改动」标记。
+    if result.get("status").and_then(Value::as_str) == Some("downloaded") {
+        crate::services::sync_protocol::clear_sync_dirty(&app);
+    }
 
     Ok(result)
 }
