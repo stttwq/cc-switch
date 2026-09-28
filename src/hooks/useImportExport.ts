@@ -111,9 +111,10 @@ export function useImportExport(
 
   const exportConfig = useCallback(async () => {
     try {
+      // S6-1：默认文件名体现「配置导出」语义（完整快照请用数据库备份）。
       const now = new Date();
-      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`;
-      const defaultName = `cc-switch-export-${stamp}.sql`;
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}`;
+      const defaultName = `cc-switch-config-${stamp}.sql`;
 
       const result = await settingsApi.exportConfigViaDialog(defaultName);
       if (result === null) {

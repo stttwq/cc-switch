@@ -1,12 +1,20 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ImportExportSection } from "@/components/settings/ImportExportSection";
+import { useSettingsQuery } from "@/lib/query";
 
 const tMock = vi.fn((key: string) => key);
 
 vi.mock("react-i18next", () => ({
   useTranslation: () => ({ t: tMock }),
 }));
+
+// S6-1：导出说明文案随凭据后端模式切换，mock 掉 settings 查询。
+vi.mock("@/lib/query", () => ({
+  useSettingsQuery: vi.fn(),
+}));
+
+const mockedUseSettingsQuery = vi.mocked(useSettingsQuery);
 
 describe("ImportExportSection Component", () => {
   const baseProps = {
@@ -22,6 +30,9 @@ describe("ImportExportSection Component", () => {
     tMock.mockImplementation((key: string) => key);
     baseProps.onImport.mockReset();
     baseProps.onExport.mockReset();
+    mockedUseSettingsQuery.mockReturnValue({
+      data: { secretBackend: "onepassword" },
+    } as never);
   });
 
   it("triggers import and export from the two buttons", () => {
@@ -75,5 +86,33 @@ describe("ImportExportSection Component", () => {
 
     expect(screen.getByText("settings.importFailed")).toBeInTheDocument();
     expect(screen.getByText("Parse failed")).toBeInTheDocument();
+  });
+
+  it("shows the 1Password export hint in 1P mode", () => {
+    mockedUseSettingsQuery.mockReturnValue({
+      data: { secretBackend: "onepassword" },
+    } as never);
+    render(<ImportExportSection {...baseProps} />);
+
+    expect(
+      screen.getByText("settings.exportHintOnePassword"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.exportHintCredentialManager"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("shows the credential-manager export hint in credential-manager mode", () => {
+    mockedUseSettingsQuery.mockReturnValue({
+      data: { secretBackend: "credential_manager" },
+    } as never);
+    render(<ImportExportSection {...baseProps} />);
+
+    expect(
+      screen.getByText("settings.exportHintCredentialManager"),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText("settings.exportHintOnePassword"),
+    ).not.toBeInTheDocument();
   });
 });

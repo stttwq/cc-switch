@@ -310,6 +310,8 @@
     "importExport": "SQL Import/Export",
     "importExportHint": "Import or export database SQL backups for migration or restore (import supports only backups exported by CC Switch).",
     "exportConfig": "Export SQL Backup",
+    "exportHintOnePassword": "Exports providers, models, MCP, prompts, Skills and other settings. Keys and endpoints live in 1Password and are not included in the file. For a full local backup, use the database backup below.",
+    "exportHintCredentialManager": "Keys are not included in the file; when switching devices, use it together with the credentials portable package.",
     "selectConfigFile": "Select SQL File",
     "noFileSelected": "No configuration file selected.",
     "import": "Import",

@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
+import { useSettingsQuery } from "@/lib/query";
 import type { ImportStatus } from "@/hooks/useImportExport";
 
 interface ImportExportSectionProps {
@@ -27,6 +28,9 @@ export function ImportExportSection({
   onExport,
 }: ImportExportSectionProps) {
   const { t } = useTranslation();
+  // S6-1：导出语义随凭据后端模式不同，按钮旁的说明文案也分两套。
+  const { data: settings } = useSettingsQuery();
+  const isOnePassword = settings?.secretBackend === "onepassword";
 
   return (
     <section className="space-y-4">
@@ -62,7 +66,7 @@ export function ImportExportSection({
           </div>
 
           {/* Export Button */}
-          <div>
+          <div className="flex flex-col gap-1.5">
             <Button
               type="button"
               className="w-full h-full py-3 px-4 bg-blue-500 hover:bg-blue-600 dark:bg-blue-600 dark:hover:bg-blue-700 text-white items-center"
@@ -71,6 +75,11 @@ export function ImportExportSection({
               <Save className="mr-2 h-4 w-4" />
               {t("settings.exportConfig")}
             </Button>
+            <p className="text-xs text-muted-foreground leading-relaxed">
+              {isOnePassword
+                ? t("settings.exportHintOnePassword")
+                : t("settings.exportHintCredentialManager")}
+            </p>
           </div>
         </div>
 

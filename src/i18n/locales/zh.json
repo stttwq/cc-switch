@@ -310,6 +310,8 @@
     "importExport": "SQL 导入导出",
     "importExportHint": "导入/导出数据库 SQL 备份（仅支持导入由 CC Switch 导出的备份），便于备份或迁移。",
     "exportConfig": "导出 SQL 备份",
+    "exportHintOnePassword": "导出供应商、模型、MCP、提示词、Skills 等配置；钥匙与端点在 1Password 中，不包含在文件里。本机完整备份请使用下方数据库备份。",
+    "exportHintCredentialManager": "钥匙不包含在文件里；换设备请配合「凭据便携包」一起使用。",
     "selectConfigFile": "选择 SQL 文件",
     "noFileSelected": "尚未选择配置文件。",
     "import": "导入",

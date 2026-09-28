@@ -310,6 +310,8 @@
     "importExport": "SQL 匯入匯出",
     "importExportHint": "匯入/匯出資料庫 SQL 備份（僅支援匯入由 CC Switch 匯出的備份），便於備份或遷移。",
     "exportConfig": "匯出 SQL 備份",
+    "exportHintOnePassword": "匯出供應商、模型、MCP、提示詞、Skills 等設定；鑰匙與端點在 1Password 中，不包含在檔案裡。本機完整備份請使用下方資料庫備份。",
+    "exportHintCredentialManager": "鑰匙不包含在檔案裡；更換裝置請搭配「憑證便攜包」一起使用。",
     "selectConfigFile": "選擇 SQL 檔案",
     "noFileSelected": "尚未選擇設定檔。",
     "import": "匯入",
