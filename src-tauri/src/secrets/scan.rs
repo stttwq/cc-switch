@@ -123,9 +123,13 @@ mod tests {
     }
 
     /// S3-4（P2-1）：补齐 Google / GitHub / GitLab 常见格式。
+    ///
+    /// 样本一律运行时拼接：源码里不出现完整密钥形态，避免 GitHub 秘密扫描
+    /// 把测试样本当成真实泄露的 Google API Key 每次推送都告警。
     #[test]
     fn rejects_google_github_gitlab_keys() {
-        assert!(assert_no_secret_patterns("AIzaSyA0123456789abcdefghijklmnopqrstuv").is_err());
+        let google_sample = format!("AIza{}", "SyA0123456789abcdefghijklmnopqrstuv");
+        assert!(assert_no_secret_patterns(&google_sample).is_err());
         assert!(assert_no_secret_patterns(&format!("ghp_{}", "a".repeat(36))).is_err());
         assert!(assert_no_secret_patterns(&format!("github_pat_{}", "b".repeat(22))).is_err());
         assert!(assert_no_secret_patterns(&format!("glpat-{}", "c".repeat(20))).is_err());
