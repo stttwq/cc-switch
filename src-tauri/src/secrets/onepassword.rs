@@ -329,6 +329,24 @@ impl OnePasswordVault {
             .map_err(|e| VaultError::Other(format!("parse op item list failed: {e}")))
     }
 
+    /// S4-5 诊断增补（§8.2）：列出当前账户的全部 vault（`op vault list`，
+    /// 不含任何条目值）。用于校验 settings 里记录的 vault 值是否真实存在——
+    /// 2026-09-27 该值曾损坏（写成不可用值），此前所有取钥匙都失败而诊断测不出。
+    pub(crate) fn list_account_vaults(&self) -> Result<Vec<OpVault>, VaultError> {
+        let args = [
+            "vault",
+            "list",
+            "--account",
+            &self.account,
+            "--format",
+            "json",
+            "--no-color",
+        ];
+        let bytes = self.run_op(&args, None).map_err(RunErr::into_vault)?;
+        serde_json::from_slice(&bytes)
+            .map_err(|e| VaultError::Other(format!("parse op vault list failed: {e}")))
+    }
+
     /// F3-8：按 item id 归档条目（用户在 UI 确认过的孤儿）。已不存在视为成功（幂等）。
     pub(crate) fn archive_item_by_id(&self, item_id: &str) -> Result<(), VaultError> {
         let args = self.base_delete_args(item_id);

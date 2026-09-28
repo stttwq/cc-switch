@@ -40,6 +40,8 @@ interface OpVault {
 /** S4-5：端点对账结果。只含 app/id 与状态词，不含 URL。 */
 interface EndpointAudit {
   vaultConfigured: boolean;
+  /** true = settings 记录的 vault 值非空但不在账户 vault 清单中（值损坏）。 */
+  vaultInvalid?: boolean;
   checked: number;
   matched: number;
   mismatched: string[];

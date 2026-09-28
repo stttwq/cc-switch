@@ -512,6 +512,7 @@ pub(crate) fn audit_endpoints_with(
 
     Ok(json!({
         "vaultConfigured": true,
+        "vaultInvalid": false,
         "checked": total,
         "matched": matched.len(),
         "mismatched": mismatched,
@@ -521,6 +522,32 @@ pub(crate) fn audit_endpoints_with(
     }))
 }
 
+/// S4-5：对账无法进行时的统一空结果。`vaultConfigured=false` 时前端显示
+/// 「vault 未配置或无效」提示；`vaultInvalid=true` 表示 settings 里的值非空
+/// 但不在账户 vault 清单中（值损坏）。
+fn not_audited_json(vault_configured: bool, vault_invalid: bool) -> Value {
+    json!({
+        "vaultConfigured": vault_configured,
+        "vaultInvalid": vault_invalid,
+        "checked": 0,
+        "matched": 0,
+        "mismatched": [],
+        "vaultMissing": [],
+        "cacheMissing": [],
+        "orphanRefs": [],
+    })
+}
+
+/// §8.2 增补（2026-09-27 实际发生过 settings 的 vault 值损坏）：settings 记录的
+/// vault 值必须在账户 vault 清单中（按 id 或名称精确匹配）。纯函数便于单测。
+fn configured_vault_exists(configured: &str, vaults: &[crate::secrets::OpVault]) -> bool {
+    let configured = configured.trim();
+    !configured.is_empty()
+        && vaults
+            .iter()
+            .any(|v| v.id == configured || v.name == configured)
+}
+
 /// S4-5：端点对账（只读）。
 ///
 /// 对每个有引用的供应商取一次 1P 整包，比较 vault 与本机缓存的 base_url。
@@ -528,8 +555,9 @@ pub(crate) fn audit_endpoints_with(
 ///
 /// 三重校验：
 /// 1. **vault 配置可用性**——2026-09-27 出现过 `settings.onepassword.vault` 被写成
-///    坏值（不是可用 vault）的情况，那时所有取钥匙都失败而界面毫无提示；
-///    这里直接把它报成 `vaultConfigured: false`（§8.2 建议增补项）。
+///    坏值（不是可用 vault）的情况，那时所有取钥匙都失败而界面毫无提示。现在先
+///    `op vault list` 拿账户 vault 清单做预检：值为空或不在清单中，都报成
+///    `vaultConfigured: false`（后者附 `vaultInvalid: true`，§8.2 建议增补项）。
 /// 2. **item 是否还在 1P**——用 `list_tagged_items` 一次拿全量 id 集合比对，
 ///    比逐条 fetch 快一个数量级。
 /// 3. **端点一致性**——只在 item 确实存在时才 fetch，避免为死引用白付解锁。
@@ -546,19 +574,24 @@ pub(crate) fn audit_endpoints(
         .unwrap_or("")
         .is_empty()
     {
-        return Ok(json!({
-            "vaultConfigured": false,
-            "checked": 0,
-            "matched": 0,
-            "mismatched": [],
-            "vaultMissing": [],
-            "cacheMissing": [],
-            "orphanRefs": [],
-        }));
+        return Ok(not_audited_json(false, false));
     }
     // 1P 模式下构造 vault 失败 = 配置坏了（未装 op / 签名不信任 / vault 值损坏）。
     let vault = crate::secrets::onepassword_from_settings(state.db.clone())
         .map_err(crate::error::AppError::from)?;
+
+    // §8.2 增补（2026-09-27）：settings 的 vault 值可能损坏成「非空但不可用」，
+    // 此前诊断测不出——所有取钥匙都失败而界面毫无提示。`op vault list` 不依赖
+    // 该值，能显式区分「值是坏的」和「锁定 / 断网」。
+    let vaults = vault
+        .list_account_vaults()
+        .map_err(crate::error::AppError::from)?;
+    if !configured_vault_exists(configured_vault.as_deref().unwrap_or(""), &vaults) {
+        log::error!(
+            "1Password 诊断：settings 记录的 vault 不在账户 vault 清单中（仅结构定位，不含值）"
+        );
+        return Ok(not_audited_json(false, true));
+    }
 
     audit_endpoints_with(
         state,
@@ -772,7 +805,9 @@ pub async fn onepassword_endpoint_reconcile(
 pub async fn secrets_endpoint_backfill_status(state: State<'_, AppState>) -> Result<Value, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let pending = state.db.list_endpoint_backfill_pending()?;
+        let pending = state
+            .db
+            .list_endpoint_backfill_pending(&crate::settings::get_endpoint_backfill_sensitive())?;
         Ok::<_, crate::error::AppError>(json!({ "pending": pending.len() }))
     })
     .await
@@ -793,10 +828,13 @@ pub async fn secrets_backfill_endpoints(
 
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let pending = state.db.list_endpoint_backfill_pending()?;
+        let pending = state
+            .db
+            .list_endpoint_backfill_pending(&crate::settings::get_endpoint_backfill_sensitive())?;
         let total = pending.len();
         let mut backfilled = 0usize;
         let mut failed: Vec<String> = Vec::new();
+        let mut sensitive: Vec<String> = Vec::new();
         for (app_str, id) in pending.iter() {
             let done = backfilled + failed.len();
             let _ = app_handle.emit(
@@ -808,7 +846,15 @@ pub async fn secrets_backfill_endpoints(
                 continue;
             };
             match crate::services::provider::resolve_base_url(&state, &app, id) {
-                Ok(Some(_)) => backfilled += 1,
+                Ok(Some(url)) => {
+                    // S7-2（P2-5）：带凭据的 URL 按设计不落端点表（§9-7），永远
+                    // 回填不了；记入本机清单并从待办排除，而不是让横幅永远挂着。
+                    if crate::secrets::is_credential_bearing_url(url.as_str()) {
+                        sensitive.push(format!("{app_str}/{id}"));
+                    } else {
+                        backfilled += 1;
+                    }
+                }
                 Ok(None) => {
                     // vault 里没有该条目的 base_url（可能条目已删）：无从回填，记为失败
                     // 让用户感知；refs 行保持原样。
@@ -820,6 +866,7 @@ pub async fn secrets_backfill_endpoints(
                 }
             }
         }
+        crate::settings::add_endpoint_backfill_sensitive(&sensitive)?;
         let _ = app_handle.emit(
             "secrets-backfill-progress",
             serde_json::json!({ "done": total, "total": total }),
@@ -827,6 +874,7 @@ pub async fn secrets_backfill_endpoints(
         Ok::<_, crate::error::AppError>(serde_json::json!({
             "total": total,
             "backfilled": backfilled,
+            "sensitive": sensitive.len(),
             "failed": failed,
         }))
     })
@@ -840,6 +888,7 @@ mod endpoint_audit_tests {
     //! S4-5（§5.4 S4-5）：端点对账的判定逻辑。vault 交互注入内存实现，
     //! 覆盖「一致 / 不一致 / 1P 缺失 / 缓存缺失 / 孤儿引用」五种结论。
     use super::audit_endpoints_with;
+    use super::configured_vault_exists;
     use crate::app_config::AppType;
     use crate::database::Database;
     use crate::secrets::{InMemorySecretStore, SecretStore};
@@ -1017,6 +1066,39 @@ mod endpoint_audit_tests {
 
         assert_eq!(ticks.first().copied(), Some((0, 3)));
         assert_eq!(ticks.last().copied(), Some((3, 3)), "末尾必须补齐收尾进度");
+    }
+
+    /// §8.2 增补：settings 记录的 vault 值必须能在账户 vault 清单中找到
+    /// （按 id 或名称精确匹配；空值一律无效）。
+    #[test]
+    fn configured_vault_matches_by_id_or_name() {
+        let vaults = vec![
+            crate::secrets::OpVault {
+                id: "pc77xj3pjxnmlupvohgsceyoly".into(),
+                name: "Personal".into(),
+            },
+            crate::secrets::OpVault {
+                id: "aaaaaaaaaaaaaaaaaaaaaaaa".into(),
+                name: "CCS".into(),
+            },
+        ];
+        assert!(configured_vault_exists(
+            "pc77xj3pjxnmlupvohgsceyoly",
+            &vaults
+        ));
+        assert!(configured_vault_exists("Personal", &vaults));
+        assert!(
+            configured_vault_exists(" Personal ", &vaults),
+            "首尾空白应忽略"
+        );
+        assert!(
+            !configured_vault_exists("personal", &vaults),
+            "精确匹配，不忽略大小写"
+        );
+        assert!(!configured_vault_exists("corrupted-vault-value", &vaults));
+        assert!(!configured_vault_exists("", &vaults));
+        assert!(!configured_vault_exists("   ", &vaults));
+        assert!(!configured_vault_exists("Personal", &[]), "空清单一律无效");
     }
 }
 

@@ -539,6 +539,13 @@ pub struct AppSettings {
     /// 每次导入后全量重建；「从 1Password 关联」成功后随重建出队。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onepassword_unlinked: Option<Vec<String>>,
+    /// S7-2（P2-5）：端点回填时发现 vault 里的 base_url 是带凭据的敏感 URL、
+    /// 按设计不落端点表（§9-7）的 `<app>/<id>` 清单。存本机设置（不随云同步）。
+    /// 这类条目的端点永远留在 1P（每次取用现场 fetch），从「回填待办」里排除，
+    /// 否则横幅会永远挂着。清单只增不减：后续保存普通 URL 时端点表本就会写入，
+    /// 陈旧条目只影响排除，不影响任何行为。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint_backfill_sensitive: Option<Vec<String>>,
 
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
@@ -616,6 +623,7 @@ impl Default for AppSettings {
             live_plaintext_pending: None,
             onepassword_orphans: None,
             onepassword_unlinked: None,
+            endpoint_backfill_sensitive: None,
         }
     }
 }
@@ -1317,6 +1325,37 @@ pub fn set_onepassword_unlinked(items: Vec<String>) -> Result<(), AppError> {
     })
 }
 
+// ===== 端点回填敏感 URL 待办（S7-2，本机设置） =====
+
+/// S7-2（P2-5）：读取「vault 端点是带凭据的敏感 URL、不落端点表」的清单
+/// （`<app>/<id>`，只记 id 不记值）。`list_endpoint_backfill_pending` 用它排除
+/// 永远回填不了的条目。
+pub fn get_endpoint_backfill_sensitive() -> Vec<String> {
+    get_settings()
+        .endpoint_backfill_sensitive
+        .unwrap_or_default()
+}
+
+/// S7-2（P2-5）：合并写入（去重、保序）。清单只增不减——后续保存普通 URL 时
+/// 端点表本就会写入，陈旧条目只影响排除，不影响任何行为。
+pub fn add_endpoint_backfill_sensitive(items: &[String]) -> Result<(), AppError> {
+    if items.is_empty() {
+        return Ok(());
+    }
+    mutate_settings(|settings| {
+        let mut merged = settings
+            .endpoint_backfill_sensitive
+            .clone()
+            .unwrap_or_default();
+        for item in items {
+            if !merged.contains(item) {
+                merged.push(item.clone());
+            }
+        }
+        settings.endpoint_backfill_sensitive = Some(merged);
+    })
+}
+
 // ===== Pi 明文钥匙待导入（F1-4，本机设置） =====
 
 /// F1-4：读取「Pi 明文钥匙待导入 1Password」的 provider id 清单。
@@ -1476,6 +1515,22 @@ mod tests {
         assert!(!secret_backend_is_onepassword(None));
         assert!(!secret_backend_is_onepassword(Some("windows")));
         assert!(!secret_backend_is_onepassword(Some("onepassword ")));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn endpoint_backfill_sensitive_merges_and_dedupes() {
+        // S7-2（P2-5）：清单只增不减、去重、保序；空写入是无操作。
+        let _home = crate::test_support::TestHomeGuard::new();
+        assert!(get_endpoint_backfill_sensitive().is_empty());
+        add_endpoint_backfill_sensitive(&["claude/a".to_string()]).expect("add");
+        add_endpoint_backfill_sensitive(&["claude/a".to_string(), "codex/b".to_string()])
+            .expect("add");
+        add_endpoint_backfill_sensitive(&[]).expect("no-op");
+        assert_eq!(
+            get_endpoint_backfill_sensitive(),
+            vec!["claude/a".to_string(), "codex/b".to_string()]
+        );
     }
 
     #[test]

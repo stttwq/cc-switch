@@ -176,11 +176,62 @@ fn existing_skill_repo_selection_is_not_supplemented() {
     db.save_skill_repo(&default_store.repos[0])
         .expect("save existing repo");
 
-    assert_eq!(db.init_default_skill_repos().expect("initialize repos"), 0);
+    assert_eq!(
+        db.init_default_skill_repos().expect("reinitialize repos"),
+        0
+    );
     assert_eq!(db.get_skill_repos().expect("get repos").len(), 1);
     assert!(db
         .get_bool_flag("default_skill_repos_initialized")
         .expect("get initialized flag"));
+}
+
+#[test]
+fn endpoint_backfill_pending_excludes_sensitive_and_existing_entries() {
+    let db = Database::memory().expect("create memory db");
+
+    // 两行真实迁移行、端点表缺失 → 待办。
+    for id in ["a", "b"] {
+        db.upsert_secret_ref(
+            "claude",
+            id,
+            "vault1",
+            &format!("item-{id}"),
+            &["base_url".to_string()],
+        )
+        .expect("upsert ref");
+    }
+    // 端点表已有 → 不在待办。
+    db.upsert_secret_ref("claude", "c", "vault1", "item-c", &["base_url".to_string()])
+        .expect("upsert ref");
+    db.upsert_provider_endpoint("claude", "c", "https://x.example")
+        .expect("upsert endpoint");
+    // v20 占位行（vault_id 空）→ 不在待办。
+    db.upsert_secret_ref(
+        "claude",
+        "d",
+        "",
+        "provider/claude/d",
+        &["base_url".to_string()],
+    )
+    .expect("upsert ref");
+
+    let pending = db
+        .list_endpoint_backfill_pending(&[])
+        .expect("list pending");
+    assert_eq!(
+        pending,
+        vec![
+            ("claude".to_string(), "a".to_string()),
+            ("claude".to_string(), "b".to_string()),
+        ]
+    );
+
+    // S7-2（P2-5）：敏感 URL 清单里的条目被排除。
+    let pending = db
+        .list_endpoint_backfill_pending(&["claude/a".to_string()])
+        .expect("list pending");
+    assert_eq!(pending, vec![("claude".to_string(), "b".to_string())]);
 }
 
 #[test]

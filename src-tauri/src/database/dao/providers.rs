@@ -393,8 +393,13 @@ impl Database {
 
     /// F1-2：端点回填待办清单——`secret_refs` 已登记 `base_url` 的**真实迁移行**
     /// （vault_id 非空，排除 v20 从名册回填的占位行）但端点表还没有的 `(app, provider_id)`。
+    /// S7-2（P2-5）：`exclude` 传本机设置 `endpoint_backfill_sensitive`（`<app>/<id>`），
+    /// 排除「vault 端点是带凭据的敏感 URL、按设计永远不落端点表」的条目。
     /// 只查本地表，0 次 vault 往返。
-    pub fn list_endpoint_backfill_pending(&self) -> Result<Vec<(String, String)>, AppError> {
+    pub fn list_endpoint_backfill_pending(
+        &self,
+        exclude: &[String],
+    ) -> Result<Vec<(String, String)>, AppError> {
         let conn = lock_conn!(self.conn);
         let mut stmt = conn
             .prepare(
@@ -415,7 +420,10 @@ impl Database {
             .map_err(|e| AppError::Database(format!("查询端点回填待办失败: {e}")))?
             .collect::<Result<Vec<_>, _>>()
             .map_err(|e| AppError::Database(format!("读取端点回填待办失败: {e}")))?;
-        Ok(rows)
+        Ok(rows
+            .into_iter()
+            .filter(|(app, id)| !exclude.contains(&format!("{app}/{id}")))
+            .collect())
     }
 
     pub fn set_current_provider(&self, app_type: &str, id: &str) -> Result<(), AppError> {
