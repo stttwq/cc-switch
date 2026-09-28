@@ -187,11 +187,56 @@ pub async fn export_config_via_dialog<R: tauri::Runtime>(
     })))
 }
 
-/// 选择 SQL 备份并导入（计划 4.2.1 S-2）。
+/// S6-2：预览后一次性路径令牌库——`path_token → 用户选中的路径`。
+///
+/// 路径不经前端往返（沿用 S-2 约定）：前端只拿到 token，实际路径留在后端内存。
+/// 令牌一次性（确认导入即消费），10 分钟未使用自动过期；进程重启自然清空。
+static IMPORT_PATH_TOKENS: std::sync::Mutex<
+    Option<std::collections::HashMap<u64, (PathBuf, std::time::Instant)>>,
+> = std::sync::Mutex::new(None);
+const IMPORT_PATH_TOKEN_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+
+fn next_import_path_token() -> u64 {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    // 计数器以启动时刻作基址，避免同一进程内可预测的连续小整数。
+    let base = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    base ^ COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+fn store_import_path(path: PathBuf) -> u64 {
+    let token = next_import_path_token();
+    let mut guard = IMPORT_PATH_TOKENS.lock().expect("导入路径令牌锁");
+    let map = guard.get_or_insert_with(std::collections::HashMap::new);
+    // 顺手清理过期令牌。
+    map.retain(|_, (_, created)| created.elapsed() < IMPORT_PATH_TOKEN_TTL);
+    map.insert(token, (path, std::time::Instant::now()));
+    token
+}
+
+/// 取走令牌对应的路径（一次性：取出即删除）。过期或不存在返回 `None`。
+fn take_import_path(token: u64) -> Option<PathBuf> {
+    let mut guard = IMPORT_PATH_TOKENS.lock().expect("导入路径令牌库锁");
+    let map = guard.as_mut()?;
+    let (path, created) = map.remove(&token)?;
+    if created.elapsed() >= IMPORT_PATH_TOKEN_TTL {
+        return None;
+    }
+    Some(path)
+}
+
+/// S6-2：选择 SQL 文件并预览（P0-4 前端侧 / P2 路径不回传）。
+///
+/// 只读文件头：校验 CC Switch 导出前缀、解析 meta（S3-2，旧文件为 `null`），
+/// 返回 `{ pathToken, meta, sizeBytes }`。实际导入由确认后的
+/// [`import_config_confirmed`] 执行——弹确认框让用户看清楚来源与影响范围。
+/// 取消返回 `Ok(None)`。
 #[tauri::command]
-pub async fn import_config_via_dialog<R: tauri::Runtime>(
+pub async fn preview_sql_import_via_dialog<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
-    state: State<'_, AppState>,
 ) -> Result<Option<Value>, String> {
     // S6-3（P1-8）：明文暂留未处理时 fail-fast，连文件选择对话框都不弹。
     ensure_no_secrets_import_pending().map_err(|e| e.to_string())?;
@@ -204,8 +249,54 @@ pub async fn import_config_via_dialog<R: tauri::Runtime>(
     else {
         return Ok(None);
     };
+    let source_path = PathBuf::from(source.to_string());
 
-    import_config_from_path(state.inner().clone(), source.to_string())
+    tauri::async_runtime::spawn_blocking(move || {
+        let size_bytes = std::fs::metadata(&source_path)
+            .map_err(|e| format!("读取文件信息失败: {e}"))?
+            .len();
+        let mut file =
+            std::fs::File::open(&source_path).map_err(|e| format!("打开文件失败: {e}"))?;
+        // 只读头部 8 KiB：meta 在第 2 行，足够；避免为预览读整个文件。
+        let mut buffer = [0u8; 8192];
+        let n = std::io::Read::read(&mut file, &mut buffer).unwrap_or(0);
+        let head = String::from_utf8_lossy(&buffer[..n]);
+        let head = head.trim_start_matches('\u{feff}');
+        let meta =
+            crate::database::backup::preview_sql_export_head(head).map_err(|e| e.to_string())?;
+
+        let token = store_import_path(source_path);
+        let meta_json = meta.map(|m| {
+            json!({
+                "purpose": m.purpose,
+                "backend": m.backend,
+                "endpoints": m.endpoints,
+                "refs": m.refs,
+                "device": m.device,
+                "exportedAt": m.exported_at,
+            })
+        });
+        Ok::<_, String>(Some(json!({
+            "pathToken": token.to_string(),
+            "meta": meta_json,
+            "sizeBytes": size_bytes,
+        })))
+    })
+    .await
+    .map_err(|e| format!("导入预览任务失败: {e}"))?
+}
+
+/// S6-2：确认导入——消费预览返回的一次性 `pathToken`，执行真正的导入。
+#[tauri::command]
+pub async fn import_config_confirmed(
+    state: State<'_, AppState>,
+    #[allow(non_snake_case)] pathToken: String,
+) -> Result<Option<Value>, String> {
+    let token: u64 = pathToken.parse().map_err(|_| "导入确认令牌无效")?;
+    let path = take_import_path(token)
+        .ok_or_else(|| "导入确认已过期或已使用，请重新选择文件".to_string())?;
+
+    import_config_from_path(state.inner().clone(), path.to_string_lossy().into_owned())
         .await
         .map(Some)
 }
@@ -399,6 +490,7 @@ mod tests {
     use super::run_with_database_restore_lock;
     use crate::services::sync_protocol::sync_mutex;
     use serial_test::serial;
+    use std::path::PathBuf;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
@@ -439,6 +531,61 @@ mod tests {
         super::ensure_no_secrets_import_pending().expect("凭据管理器模式必须放行");
 
         crate::settings::set_secrets_import_pending(vec![]).expect("cleanup pending");
+    }
+
+    // S6-2：预览头部校验——CC Switch 导出前缀 + meta 解析（旧文件 meta 为 None）。
+    #[test]
+    fn preview_head_validates_prefix_and_parses_meta() {
+        let head = "-- CC Switch SQLite 导出\n-- cc-switch-meta: {\"purpose\":\"config\",\"backend\":\"onepassword\",\"endpoints\":false,\"refs\":3,\"device\":\"PC-1\",\"exported_at\":\"2026-09-28T00:00:00Z\"}\nPRAGMA foreign_keys=ON;\n";
+        let meta = crate::database::backup::preview_sql_export_head(head)
+            .expect("合法头部必须放行")
+            .expect("有 meta 行");
+        assert_eq!(meta.purpose, "config");
+        assert_eq!(meta.backend, "onepassword");
+        assert!(!meta.endpoints);
+        assert_eq!(meta.refs, 3);
+
+        let legacy = "-- CC Switch SQLite 导出\nPRAGMA foreign_keys=ON;\n";
+        assert!(
+            crate::database::backup::preview_sql_export_head(legacy)
+                .expect("合法头部必须放行")
+                .is_none(),
+            "旧格式文件 meta 为 None"
+        );
+
+        let foreign = "PRAGMA foreign_keys=ON;\nDROP TABLE x;";
+        assert!(
+            crate::database::backup::preview_sql_export_head(foreign).is_err(),
+            "非 CC Switch 导出必须拒绝"
+        );
+    }
+
+    // S6-2：路径令牌一次性、可过期，且路径永不回传前端（token → 路径只在后端）。
+    #[test]
+    #[serial]
+    fn import_path_token_is_one_time_and_expires() {
+        let path = PathBuf::from("C:\\tmp\\never-returned.sql");
+        let token = super::store_import_path(path.clone());
+
+        let taken = super::take_import_path(token).expect("未过期应取到");
+        assert_eq!(taken, path);
+        assert!(
+            super::take_import_path(token).is_none(),
+            "令牌必须一次性：第二次取用为空"
+        );
+
+        // 过期：把创建时间拨回 TTL 之前。
+        let token = super::store_import_path(path.clone());
+        {
+            let mut guard = super::IMPORT_PATH_TOKENS.lock().expect("令牌锁");
+            let map = guard.as_mut().expect("令牌表");
+            let entry = map.get_mut(&token).expect("条目");
+            entry.1 = std::time::Instant::now() - super::IMPORT_PATH_TOKEN_TTL;
+        }
+        assert!(
+            super::take_import_path(token).is_none(),
+            "过期令牌必须被拒绝"
+        );
     }
 
     #[tokio::test]

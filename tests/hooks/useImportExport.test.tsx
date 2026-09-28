@@ -28,26 +28,33 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const importViaDialogMock = vi.fn();
+const previewSqlImportMock = vi.fn();
+const importConfigConfirmedMock = vi.fn();
 const exportViaDialogMock = vi.fn();
-const syncCurrentProvidersLiveMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
-    importConfigViaDialog: (...args: unknown[]) => importViaDialogMock(...args),
+    previewSqlImportViaDialog: (...args: unknown[]) =>
+      previewSqlImportMock(...args),
+    importConfigConfirmed: (...args: unknown[]) =>
+      importConfigConfirmedMock(...args),
     exportConfigViaDialog: (...args: unknown[]) => exportViaDialogMock(...args),
-    syncCurrentProvidersLive: (...args: unknown[]) =>
-      syncCurrentProvidersLiveMock(...args),
   },
 }));
 
+const previewPayload = {
+  pathToken: "token-123",
+  meta: null,
+  sizeBytes: 1024,
+};
+
 beforeEach(() => {
-  importViaDialogMock.mockReset();
+  previewSqlImportMock.mockReset();
+  importConfigConfirmedMock.mockReset();
   exportViaDialogMock.mockReset();
   toastSuccessMock.mockReset();
   toastErrorMock.mockReset();
   toastWarningMock.mockReset();
-  syncCurrentProvidersLiveMock.mockReset();
   vi.useFakeTimers();
 });
 
@@ -56,8 +63,9 @@ afterEach(() => {
 });
 
 describe("useImportExport Hook", () => {
-  it("should set success status, record backup ID, and call callback on successful import", async () => {
-    importViaDialogMock.mockResolvedValue({
+  it("previews first, then imports with the one-time token on confirmation", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
       success: true,
       backupId: "backup-123",
     });
@@ -67,20 +75,61 @@ describe("useImportExport Hook", () => {
       useImportExport({ onImportSuccess }),
     );
 
+    // S6-2：第一步只做预览，不执行导入。
     await act(async () => {
       await result.current.importConfig();
     });
+    expect(previewSqlImportMock).toHaveBeenCalledWith();
+    expect(importConfigConfirmedMock).not.toHaveBeenCalled();
+    expect(result.current.pendingPreview).toEqual(previewPayload);
+    expect(result.current.status).toBe("idle");
 
-    // 计划 4.2.1 S-2：命令自己弹对话框，前端不再传路径
-    expect(importViaDialogMock).toHaveBeenCalledWith();
+    // 确认后执行导入，消费 pathToken。
+    await act(async () => {
+      await result.current.confirmImport();
+    });
+
+    expect(importConfigConfirmedMock).toHaveBeenCalledWith("token-123");
     expect(result.current.status).toBe("success");
     expect(result.current.backupId).toBe("backup-123");
+    expect(result.current.pendingPreview).toBeNull();
     expect(toastSuccessMock).toHaveBeenCalledTimes(1);
     expect(onImportSuccess).toHaveBeenCalledTimes(1);
   });
 
-  it("should stay idle and silent when the user cancels the import dialog", async () => {
-    importViaDialogMock.mockResolvedValue(null);
+  it("records post-import result fields (warning / adoptedRefs / unlinkedProviders)", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
+      success: true,
+      backupId: "backup-123",
+      warning: "部分导入后同步失败: boom",
+      adoptedRefs: 2,
+      unlinkedProviders: 1,
+    });
+
+    const { result } = renderHookWithClient(() => useImportExport());
+
+    await act(async () => {
+      await result.current.importConfig();
+    });
+    await act(async () => {
+      await result.current.confirmImport();
+    });
+
+    expect(result.current.status).toBe("success");
+    expect(result.current.importResult).toEqual({
+      warning: "部分导入后同步失败: boom",
+      adoptedRefs: 2,
+      unlinkedProviders: 1,
+    });
+    expect(toastWarningMock).toHaveBeenCalledWith(
+      "部分导入后同步失败: boom",
+      expect.anything(),
+    );
+  });
+
+  it("should stay idle and silent when the user cancels the preview dialog", async () => {
+    previewSqlImportMock.mockResolvedValue(null);
 
     const { result } = renderHookWithClient(() => useImportExport());
 
@@ -89,12 +138,31 @@ describe("useImportExport Hook", () => {
     });
 
     expect(result.current.status).toBe("idle");
+    expect(result.current.pendingPreview).toBeNull();
     expect(result.current.errorMessage).toBeNull();
     expect(toastErrorMock).not.toHaveBeenCalled();
   });
 
-  it("should show error message when import result fails", async () => {
-    importViaDialogMock.mockResolvedValue({
+  it("cancelling the confirm dialog clears the pending preview without importing", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+
+    const { result } = renderHookWithClient(() => useImportExport());
+
+    await act(async () => {
+      await result.current.importConfig();
+    });
+    act(() => {
+      result.current.cancelImport();
+    });
+
+    expect(result.current.pendingPreview).toBeNull();
+    expect(result.current.status).toBe("idle");
+    expect(importConfigConfirmedMock).not.toHaveBeenCalled();
+  });
+
+  it("should show error message when the confirmed import fails", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
       success: false,
       message: "Config corrupted",
     });
@@ -104,14 +172,41 @@ describe("useImportExport Hook", () => {
     await act(async () => {
       await result.current.importConfig();
     });
+    await act(async () => {
+      await result.current.confirmImport();
+    });
 
     expect(result.current.status).toBe("error");
     expect(result.current.errorMessage).toBe("Config corrupted");
     expect(toastErrorMock).toHaveBeenCalledWith("Config corrupted");
   });
 
-  it("should catch and display error when import process throws exception", async () => {
-    importViaDialogMock.mockRejectedValue(new Error("Import failed"));
+  it("should catch and display error when the confirmed import throws", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockRejectedValue(
+      "import.plaintext_pending: boom",
+    );
+
+    const { result } = renderHookWithClient(() => useImportExport());
+
+    await act(async () => {
+      await result.current.importConfig();
+    });
+    await act(async () => {
+      await result.current.confirmImport();
+    });
+
+    expect(result.current.status).toBe("error");
+    expect(result.current.errorMessage).toBe("import.plaintext_pending: boom");
+    expect(toastErrorMock).toHaveBeenCalledWith(
+      expect.stringContaining("导入配置失败:"),
+    );
+    // 导入失败后确认框关闭，避免用户在旧令牌上重复确认。
+    expect(result.current.pendingPreview).toBeNull();
+  });
+
+  it("surfaces preview errors (unreadable or foreign file)", async () => {
+    previewSqlImportMock.mockRejectedValue("打开文件失败: EPERM");
 
     const { result } = renderHookWithClient(() => useImportExport());
 
@@ -120,10 +215,8 @@ describe("useImportExport Hook", () => {
     });
 
     expect(result.current.status).toBe("error");
-    expect(result.current.errorMessage).toBe("Import failed");
-    expect(toastErrorMock).toHaveBeenCalledWith(
-      expect.stringContaining("导入配置失败:"),
-    );
+    expect(result.current.errorMessage).toBe("打开文件失败: EPERM");
+    expect(importConfigConfirmedMock).not.toHaveBeenCalled();
   });
 
   it("should export successfully with a generated default filename and show path in toast", async () => {
@@ -194,7 +287,8 @@ describe("useImportExport Hook", () => {
   });
 
   it("should restore initial values when resetting status", async () => {
-    importViaDialogMock.mockResolvedValue({
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
       success: false,
       message: "Config corrupted",
     });
@@ -203,6 +297,9 @@ describe("useImportExport Hook", () => {
 
     await act(async () => {
       await result.current.importConfig();
+    });
+    await act(async () => {
+      await result.current.confirmImport();
     });
 
     expect(result.current.status).toBe("error");
@@ -214,5 +311,7 @@ describe("useImportExport Hook", () => {
     expect(result.current.status).toBe("idle");
     expect(result.current.errorMessage).toBeNull();
     expect(result.current.backupId).toBeNull();
+    expect(result.current.pendingPreview).toBeNull();
+    expect(result.current.importResult).toBeNull();
   });
 });

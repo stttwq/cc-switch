@@ -1180,7 +1180,8 @@ pub fn run() {
             commands::update_providers_sort_order,
             // theirs: config import/export and dialogs
             commands::export_config_via_dialog,
-            commands::import_config_via_dialog,
+            commands::preview_sql_import_via_dialog,
+            commands::import_config_confirmed,
             commands::secrets_export_via_dialog,
             commands::secrets_import_via_dialog,
             commands::onepassword_status,

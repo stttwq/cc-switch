@@ -28,27 +28,34 @@ vi.mock("sonner", () => ({
   },
 }));
 
-const importViaDialogMock = vi.fn();
+const previewSqlImportMock = vi.fn();
+const importConfigConfirmedMock = vi.fn();
 const exportViaDialogMock = vi.fn();
-const syncCurrentProvidersLiveMock = vi.fn();
 
 vi.mock("@/lib/api", () => ({
   settingsApi: {
-    importConfigViaDialog: (...args: unknown[]) => importViaDialogMock(...args),
+    previewSqlImportViaDialog: (...args: unknown[]) =>
+      previewSqlImportMock(...args),
+    importConfigConfirmed: (...args: unknown[]) =>
+      importConfigConfirmedMock(...args),
     exportConfigViaDialog: (...args: unknown[]) => exportViaDialogMock(...args),
-    syncCurrentProvidersLive: (...args: unknown[]) =>
-      syncCurrentProvidersLiveMock(...args),
   },
 }));
 
+const previewPayload = {
+  pathToken: "token-456",
+  meta: null,
+  sizeBytes: 2048,
+};
+
 describe("useImportExport Hook (edge cases)", () => {
   beforeEach(() => {
-    importViaDialogMock.mockReset();
+    previewSqlImportMock.mockReset();
+    importConfigConfirmedMock.mockReset();
     exportViaDialogMock.mockReset();
     toastSuccessMock.mockReset();
     toastErrorMock.mockReset();
     toastWarningMock.mockReset();
-    syncCurrentProvidersLiveMock.mockReset();
     vi.useFakeTimers();
   });
 
@@ -57,7 +64,8 @@ describe("useImportExport Hook (edge cases)", () => {
   });
 
   it("resetStatus clears errors", async () => {
-    importViaDialogMock.mockResolvedValue({
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
       success: false,
       message: "broken",
     });
@@ -65,6 +73,9 @@ describe("useImportExport Hook (edge cases)", () => {
 
     await act(async () => {
       await result.current.importConfig();
+    });
+    await act(async () => {
+      await result.current.confirmImport();
     });
 
     act(() => {
@@ -77,7 +88,8 @@ describe("useImportExport Hook (edge cases)", () => {
   });
 
   it("does not call onImportSuccess when import fails", async () => {
-    importViaDialogMock.mockResolvedValue({
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
       success: false,
       message: "invalid",
     });
@@ -88,6 +100,9 @@ describe("useImportExport Hook (edge cases)", () => {
 
     await act(async () => {
       await result.current.importConfig();
+    });
+    await act(async () => {
+      await result.current.confirmImport();
     });
 
     expect(onImportSuccess).not.toHaveBeenCalled();
@@ -111,16 +126,26 @@ describe("useImportExport Hook (edge cases)", () => {
     );
   });
 
-  it("marks partial success when live sync fails after a successful import", async () => {
-    importViaDialogMock.mockResolvedValue({ success: true, backupId: "b-1" });
-    syncCurrentProvidersLiveMock.mockRejectedValue(new Error("sync down"));
+  it("does not re-import with a consumed token when confirm runs twice", async () => {
+    previewSqlImportMock.mockResolvedValue(previewPayload);
+    importConfigConfirmedMock.mockResolvedValue({
+      success: true,
+      backupId: "b-1",
+    });
     const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();
     });
+    await act(async () => {
+      await result.current.confirmImport();
+    });
+    // S6-2：确认一次后 pendingPreview 已清空，重复确认不应再发命令。
+    await act(async () => {
+      await result.current.confirmImport();
+    });
 
-    expect(result.current.status).toBe("partial-success");
-    expect(toastWarningMock).toHaveBeenCalledTimes(1);
+    expect(importConfigConfirmedMock).toHaveBeenCalledTimes(1);
+    expect(result.current.status).toBe("success");
   });
 });

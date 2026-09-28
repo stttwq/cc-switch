@@ -8,14 +8,29 @@ import {
 import { Button } from "@/components/ui/button";
 import { useTranslation } from "react-i18next";
 import { useSettingsQuery } from "@/lib/query";
-import type { ImportStatus } from "@/hooks/useImportExport";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import type { SqlImportPreview } from "@/lib/api/settings";
+import type { ImportResultInfo, ImportStatus } from "@/hooks/useImportExport";
 
 interface ImportExportSectionProps {
   status: ImportStatus;
   errorMessage: string | null;
   backupId: string | null;
   isImporting: boolean;
+  /** S6-2：预览通过后待确认的导入信息，非空时渲染确认框。 */
+  pendingPreview: SqlImportPreview | null;
+  /** S6-2：导入结果的后处理信息（warning / 采纳引用 / 未关联数）。 */
+  importResult: ImportResultInfo | null;
   onImport: () => Promise<void>;
+  onConfirmImport: () => Promise<void>;
+  onCancelImport: () => void;
   onExport: () => Promise<void>;
 }
 
@@ -24,7 +39,11 @@ export function ImportExportSection({
   errorMessage,
   backupId,
   isImporting,
+  pendingPreview,
+  importResult,
   onImport,
+  onConfirmImport,
+  onCancelImport,
   onExport,
 }: ImportExportSectionProps) {
   const { t } = useTranslation();
@@ -87,22 +106,110 @@ export function ImportExportSection({
           status={status}
           errorMessage={errorMessage}
           backupId={backupId}
+          importResult={importResult}
         />
       </div>
+
+      {/* S6-2：导入确认框——显示来源信息与影响范围，确认后才执行导入。 */}
+      <Dialog
+        open={!!pendingPreview}
+        onOpenChange={(open) => !open && onCancelImport()}
+      >
+        <DialogContent className="max-w-md" zIndex="alert">
+          <DialogHeader>
+            <DialogTitle>{t("settings.importPreview.title")}</DialogTitle>
+            <DialogDescription>
+              {t("settings.importPreview.body")}
+            </DialogDescription>
+          </DialogHeader>
+          {pendingPreview?.meta ? (
+            <dl className="space-y-1.5 rounded-lg bg-muted/40 p-3 text-sm">
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">
+                  {t("settings.importPreview.device")}
+                </dt>
+                <dd className="truncate">{pendingPreview.meta.device}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">
+                  {t("settings.importPreview.exportedAt")}
+                </dt>
+                <dd>{formatExportedAt(pendingPreview.meta.exportedAt)}</dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">
+                  {t("settings.importPreview.backend")}
+                </dt>
+                <dd>
+                  {pendingPreview.meta.backend === "onepassword"
+                    ? t("settings.importPreview.backendOnePassword")
+                    : t("settings.importPreview.backendCredentialManager")}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">
+                  {t("settings.importPreview.endpoints")}
+                </dt>
+                <dd>
+                  {pendingPreview.meta.endpoints
+                    ? t("settings.importPreview.endpointsYes")
+                    : t("settings.importPreview.endpointsNo")}
+                </dd>
+              </div>
+              <div className="flex justify-between gap-3">
+                <dt className="text-muted-foreground">
+                  {t("settings.importPreview.refs")}
+                </dt>
+                <dd>{pendingPreview.meta.refs}</dd>
+              </div>
+            </dl>
+          ) : (
+            <p className="rounded-lg bg-muted/40 p-3 text-sm text-muted-foreground">
+              {t("settings.importPreview.metaNone")}
+            </p>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={onCancelImport}
+              disabled={isImporting}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button onClick={onConfirmImport} disabled={isImporting}>
+              {isImporting
+                ? t("settings.importing")
+                : t("settings.importPreview.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </section>
   );
+}
+
+/** S6-2：导出时间（RFC 3339）按本机格式显示，解析失败原样回显。 */
+function formatExportedAt(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString();
+  } catch {
+    return iso;
+  }
 }
 
 interface ImportStatusMessageProps {
   status: ImportStatus;
   errorMessage: string | null;
   backupId: string | null;
+  /** S6-2：导入结果的后处理信息。 */
+  importResult: ImportResultInfo | null;
 }
 
 function ImportStatusMessage({
   status,
   errorMessage,
   backupId,
+  importResult,
 }: ImportStatusMessageProps) {
   const { t } = useTranslation();
 
@@ -140,6 +247,26 @@ function ImportStatusMessage({
           {backupId ? (
             <p className="text-xs text-green-600/80 dark:text-green-400/80">
               {t("settings.backupId")}: {backupId}
+            </p>
+          ) : null}
+          {/* S6-2：后处理统计——采纳了几条 1P 关联、几个供应商未关联。 */}
+          {(importResult?.adoptedRefs ?? 0) > 0 ? (
+            <p className="text-xs text-green-600/80 dark:text-green-400/80">
+              {t("settings.importAdoptedRefs", {
+                count: importResult?.adoptedRefs,
+              })}
+            </p>
+          ) : null}
+          {(importResult?.unlinkedProviders ?? 0) > 0 ? (
+            <p className="text-xs text-yellow-600/80 dark:text-yellow-400/80">
+              {t("settings.importUnlinkedProviders", {
+                count: importResult?.unlinkedProviders,
+              })}
+            </p>
+          ) : null}
+          {importResult?.warning ? (
+            <p className="text-xs text-yellow-600/80 dark:text-yellow-400/80">
+              {importResult.warning}
             </p>
           ) : null}
           <p className="text-green-600/80 dark:text-green-400/80">

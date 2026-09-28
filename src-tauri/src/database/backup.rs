@@ -110,8 +110,6 @@ fn with_export_meta_header(dump: String, meta: &ExportMeta) -> String {
 ///
 /// **只用于 UI 提示**：调用方不得据此决定保留/采纳什么（§2.2-4、§9-4）。
 /// 只扫描前 10 行，避免为了一个注释去扫整个文件。
-// S6-2（手动导入确认框）消费本函数；此前由导出侧自身的测试覆盖。
-#[allow(dead_code)]
 pub(crate) fn parse_export_meta(sql: &str) -> Option<ExportMeta> {
     const PREFIX: &str = "-- cc-switch-meta:";
     for line in sql.lines().take(10) {
@@ -120,6 +118,21 @@ pub(crate) fn parse_export_meta(sql: &str) -> Option<ExportMeta> {
         }
     }
     None
+}
+
+/// S6-2：导入预览——校验文件头并解析 meta。
+///
+/// 只读文件头（不执行导入）。meta 仅用于确认框提示，**不参与任何安全决策**；
+/// 头部前缀与 `validate_cc_switch_sql_export` 同一规则。
+pub(crate) fn preview_sql_export_head(head: &str) -> Result<Option<ExportMeta>, AppError> {
+    if !head.trim_start().starts_with(CC_SWITCH_SQL_EXPORT_HEADER) {
+        return Err(AppError::localized(
+            "backup.sql.invalid_format",
+            "仅支持导入由 CC Switch 导出的 SQL 备份文件。",
+            "Only SQL backups exported by CC Switch are supported.",
+        ));
+    }
+    Ok(parse_export_meta(head))
 }
 
 /// S3-4：结构护栏——1P 模式下 dump 文本里不得出现端点缓存的 INSERT，

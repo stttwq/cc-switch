@@ -96,13 +96,20 @@ vi.mock("@/components/settings/ImportExportSection", () => ({
     status,
     errorMessage,
     isImporting,
+    pendingPreview,
     onImport,
+    onConfirmImport,
     onExport,
   }: any) => (
     <div>
       <div data-testid="import-status">{status}</div>
       <button onClick={onImport} disabled={isImporting}>
         {isImporting ? "settings.importing" : "settings.import"}
+      </button>
+      {/* S6-2：确认步骤单独暴露；预览就绪后才可点 */}
+      {pendingPreview ? <span data-testid="preview-ready" /> : null}
+      <button onClick={onConfirmImport} disabled={isImporting}>
+        confirm-import
       </button>
       <button onClick={onExport}>settings.exportConfig</button>
       {errorMessage ? <span>{errorMessage}</span> : null}
@@ -163,8 +170,10 @@ describe("SettingsPage integration", () => {
     fireEvent.click(screen.getByText("settings.tabAdvanced"));
     fireEvent.click(screen.getByText("settings.advanced.data.title"));
 
-    // 计划 4.2.1 S-2：导入一步完成（对话框在 Rust 侧弹）
+    // 计划 4.2.1 S-2：导入按钮先弹预览（S6-2），预览就绪后再确认执行
     fireEvent.click(screen.getByText("settings.import"));
+    await screen.findByTestId("preview-ready");
+    fireEvent.click(screen.getByText("confirm-import"));
     await waitFor(() => expect(toastSuccessMock).toHaveBeenCalled());
     await waitFor(() => expect(onImportSuccess).toHaveBeenCalled(), {
       timeout: 4000,

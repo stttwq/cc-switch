@@ -105,7 +105,11 @@ export function SettingsPage({
     errorMessage,
     backupId,
     isImporting,
+    pendingPreview,
+    importResult,
     importConfig,
+    confirmImport,
+    cancelImport,
     exportConfig,
     resetStatus,
   } = useImportExport({ onImportSuccess });
@@ -364,7 +368,11 @@ export function SettingsPage({
                             errorMessage={errorMessage}
                             backupId={backupId}
                             isImporting={isImporting}
+                            pendingPreview={pendingPreview}
+                            importResult={importResult}
                             onImport={importConfig}
+                            onConfirmImport={confirmImport}
+                            onCancelImport={cancelImport}
                             onExport={exportConfig}
                           />
                         </AccordionContent>

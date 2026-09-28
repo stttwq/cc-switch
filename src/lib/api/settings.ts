@@ -13,6 +13,29 @@ export interface ConfigTransferResult {
   message: string;
   filePath?: string;
   backupId?: string;
+  /** S4-3/S6-2：后处理 warning（scrub/live 刷新失败已降级），存在时不应静默 */
+  warning?: string;
+  /** S4-3/S6-2：采纳了几条 1Password 关联 */
+  adoptedRefs?: number;
+  /** S4-3/S6-2：仍未关联 1Password 的供应商数 */
+  unlinkedProviders?: number;
+}
+
+/** S6-2：SQL 导入预览 meta（解析自文件头 `-- cc-switch-meta:`，仅用于提示）。 */
+export interface SqlImportPreviewMeta {
+  purpose: string;
+  backend: string;
+  endpoints: boolean;
+  refs: number;
+  device: string;
+  exportedAt: string;
+}
+
+/** S6-2：SQL 导入预览结果。pathToken 是一次性令牌，路径不回传前端。 */
+export interface SqlImportPreview {
+  pathToken: string;
+  meta: SqlImportPreviewMeta | null;
+  sizeBytes: number;
 }
 
 export interface WebDavTestResult {
@@ -175,11 +198,20 @@ export const settingsApi = {
   },
 
   /**
-   * 弹出选择对话框并导入（计划 4.2.1 S-2）。
-   * 用户取消返回 null。
+   * S6-2：弹出选择对话框并预览 SQL 导入文件（只读文件头）。
+   * 用户取消返回 null。确认后用 pathToken 调 importConfigConfirmed。
    */
-  async importConfigViaDialog(): Promise<ConfigTransferResult | null> {
-    return await invoke("import_config_via_dialog");
+  async previewSqlImportViaDialog(): Promise<SqlImportPreview | null> {
+    return await invoke("preview_sql_import_via_dialog");
+  },
+
+  /**
+   * S6-2：消费预览返回的一次性 pathToken 执行导入（令牌 10 分钟过期）。
+   */
+  async importConfigConfirmed(
+    pathToken: string,
+  ): Promise<ConfigTransferResult | null> {
+    return await invoke("import_config_confirmed", { pathToken });
   },
 
   // ─── WebDAV sync ──────────────────────────────────────────

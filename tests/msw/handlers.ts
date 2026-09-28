@@ -268,11 +268,26 @@ export const handlers = [
     return success(initial ? `${initial}/picked` : "/mock/selected-dir");
   }),
 
-  // 计划 4.2.1 S-2：选文件与导入/导出合成一条命令，对话框在 Rust 侧弹。
-  http.post(`${TAURI_ENDPOINT}/import_config_via_dialog`, () => {
+  // S6-2：导入拆为「预览 + 确认」两步，路径令牌不经前端持有。
+  http.post(`${TAURI_ENDPOINT}/preview_sql_import_via_dialog`, () => {
     setSettings({ language: "en" });
-    return success({ success: true, backupId: "backup-123" });
+    return success({
+      pathToken: "token-123",
+      meta: {
+        purpose: "config",
+        backend: "onepassword",
+        endpoints: false,
+        refs: 0,
+        device: "mock-device",
+        exportedAt: "2026-09-28T00:00:00Z",
+      },
+      sizeBytes: 1024,
+    });
   }),
+
+  http.post(`${TAURI_ENDPOINT}/import_config_confirmed`, () =>
+    success({ success: true, backupId: "backup-123" }),
+  ),
 
   http.post(`${TAURI_ENDPOINT}/export_config_via_dialog`, () =>
     success({ success: true, filePath: "/mock/export-settings.sql" }),

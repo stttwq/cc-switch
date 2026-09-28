@@ -22,13 +22,19 @@ describe("ImportExportSection Component", () => {
     errorMessage: null,
     backupId: null,
     isImporting: false,
+    pendingPreview: null,
+    importResult: null,
     onImport: vi.fn(),
+    onConfirmImport: vi.fn(),
+    onCancelImport: vi.fn(),
     onExport: vi.fn(),
   };
 
   beforeEach(() => {
     tMock.mockImplementation((key: string) => key);
     baseProps.onImport.mockReset();
+    baseProps.onConfirmImport.mockReset();
+    baseProps.onCancelImport.mockReset();
     baseProps.onExport.mockReset();
     mockedUseSettingsQuery.mockReturnValue({
       data: { secretBackend: "onepassword" },
@@ -38,7 +44,7 @@ describe("ImportExportSection Component", () => {
   it("triggers import and export from the two buttons", () => {
     render(<ImportExportSection {...baseProps} />);
 
-    // 计划 4.2.1 S-2：选文件与导入合成一步，按钮直接触发导入
+    // 计划 4.2.1 S-2：按钮直接触发导入（S6-2 起为「预览」，确认在弹框里）
     fireEvent.click(screen.getByRole("button", { name: /settings\.import/ }));
     expect(baseProps.onImport).toHaveBeenCalledTimes(1);
 
@@ -46,6 +52,103 @@ describe("ImportExportSection Component", () => {
       screen.getByRole("button", { name: "settings.exportConfig" }),
     );
     expect(baseProps.onExport).toHaveBeenCalledTimes(1);
+  });
+
+  // S6-2：确认框展示 meta 来源信息；确认/取消分别回调。
+  it("shows the import confirm dialog with meta and confirms on click", () => {
+    render(
+      <ImportExportSection
+        {...baseProps}
+        pendingPreview={{
+          pathToken: "token-1",
+          meta: {
+            purpose: "config",
+            backend: "onepassword",
+            endpoints: false,
+            refs: 3,
+            device: "PC-1",
+            exportedAt: "2026-09-28T00:00:00Z",
+          },
+          sizeBytes: 4096,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("settings.importPreview.title"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("PC-1")).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.importPreview.backendOnePassword"),
+    ).toBeInTheDocument();
+    // 不含端点（1P 模式导出）时显示否定文案并给出原因。
+    expect(
+      screen.getByText("settings.importPreview.endpointsNo"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("3")).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.importPreview.confirm" }),
+    );
+    expect(baseProps.onConfirmImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the legacy-file note when the export has no meta", () => {
+    render(
+      <ImportExportSection
+        {...baseProps}
+        pendingPreview={{
+          pathToken: "token-2",
+          meta: null,
+          sizeBytes: 4096,
+        }}
+      />,
+    );
+
+    expect(
+      screen.getByText("settings.importPreview.metaNone"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      screen.getByRole("button", { name: "settings.importPreview.confirm" }),
+    );
+    expect(baseProps.onConfirmImport).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onCancelImport when the confirm dialog is cancelled", () => {
+    render(
+      <ImportExportSection
+        {...baseProps}
+        pendingPreview={{
+          pathToken: "token-3",
+          meta: null,
+          sizeBytes: 4096,
+        }}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "common.cancel" }));
+    expect(baseProps.onCancelImport).toHaveBeenCalledTimes(1);
+    expect(baseProps.onConfirmImport).not.toHaveBeenCalled();
+  });
+
+  it("shows adopted refs and unlinked providers in the success message", () => {
+    render(
+      <ImportExportSection
+        {...baseProps}
+        status="success"
+        backupId="backup-001"
+        importResult={{ adoptedRefs: 2, unlinkedProviders: 1 }}
+      />,
+    );
+
+    expect(screen.getByText("settings.importSuccess")).toBeInTheDocument();
+    expect(screen.getByText(/backup-001/)).toBeInTheDocument();
+    // tMock 只回显键名；此处断言统计行确实渲染。
+    expect(screen.getByText("settings.importAdoptedRefs")).toBeInTheDocument();
+    expect(
+      screen.getByText("settings.importUnlinkedProviders"),
+    ).toBeInTheDocument();
   });
 
   it("should show loading text and disable import button during import", () => {

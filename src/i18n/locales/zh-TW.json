@@ -325,6 +325,23 @@
     "exportFailed": "匯出失敗",
     "selectFileFailed": "請選擇有效的 SQL 備份檔案",
     "configCorrupted": "SQL 檔案可能已損壞或格式不正確",
+    "importAdoptedRefs": "已採納 {{count}} 條 1Password 關聯。",
+    "importUnlinkedProviders": "有 {{count}} 個供應商尚未關聯 1Password，可在頂部橫幅中處理。",
+    "importPreview": {
+      "title": "確認匯入設定",
+      "body": "將覆蓋本機的供應商 / MCP / 提示詞 / Skills 等設定；本機鑰匙、1Password 關聯、本機狀態不受影響；匯入前會自動備份目前資料庫。",
+      "device": "來源裝置",
+      "exportedAt": "匯出時間",
+      "backend": "匯出方後端",
+      "backendOnePassword": "1Password",
+      "backendCredentialManager": "憑證管理器",
+      "endpoints": "包含端點快取",
+      "endpointsYes": "包含",
+      "endpointsNo": "不包含（端點在 1Password 中）",
+      "refs": "攜帶 1Password 引用筆數",
+      "metaNone": "舊版匯出檔案（可能來自其他裝置），將依本機規則合併。",
+      "confirm": "確認匯入"
+    },
     "backupId": "備份 ID",
     "backupManager": {
       "title": "資料庫備份",

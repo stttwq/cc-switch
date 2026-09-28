@@ -325,6 +325,23 @@
     "exportFailed": "エクスポートに失敗しました",
     "selectFileFailed": "有効な SQL バックアップファイルを選択してください",
     "configCorrupted": "SQL ファイルが壊れているか形式が無効な可能性があります",
+    "importAdoptedRefs": "{{count}} 件の 1Password リンクを採用しました。",
+    "importUnlinkedProviders": "{{count}} 個のプロバイダーがまだ 1Password にリンクされていません。上部のバナーから処理してください。",
+    "importPreview": {
+      "title": "インポートの確認",
+      "body": "ローカルのプロバイダー / MCP / プロンプト / Skills などの設定を上書きします。ローカルのキー、1Password リンク、ローカル状態には影響しません。インポート前に現在のデータベースを自動バックアップします。",
+      "device": "ソースデバイス",
+      "exportedAt": "エクスポート日時",
+      "backend": "エクスポート元バックエンド",
+      "backendOnePassword": "1Password",
+      "backendCredentialManager": "認証情報マネージャー",
+      "endpoints": "エンドポイントキャッシュを含む",
+      "endpointsYes": "含む",
+      "endpointsNo": "含まない（エンドポイントは 1Password 側）",
+      "refs": "1Password 参照の件数",
+      "metaNone": "旧バージョンのエクスポートファイル（別デバイスの可能性）。ローカルのルールに従ってマージされます。",
+      "confirm": "インポート"
+    },
     "backupId": "バックアップ ID",
     "backupManager": {
       "title": "データベースバックアップ",

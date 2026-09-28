@@ -325,6 +325,23 @@
     "exportFailed": "Export failed",
     "selectFileFailed": "Please choose a valid SQL backup file",
     "configCorrupted": "SQL file may be corrupted or invalid",
+    "importAdoptedRefs": "Adopted {{count}} 1Password link(s).",
+    "importUnlinkedProviders": "{{count}} provider(s) are not yet linked to 1Password. Handle them from the banner above.",
+    "importPreview": {
+      "title": "Confirm Import",
+      "body": "This will overwrite local providers / MCP / prompts / Skills and other settings. Local keys, 1Password links and local state are not affected. The current database is backed up automatically before importing.",
+      "device": "Source device",
+      "exportedAt": "Exported at",
+      "backend": "Exported from backend",
+      "backendOnePassword": "1Password",
+      "backendCredentialManager": "Credential Manager",
+      "endpoints": "Includes endpoint cache",
+      "endpointsYes": "Yes",
+      "endpointsNo": "No (endpoints live in 1Password)",
+      "refs": "1Password references carried",
+      "metaNone": "Legacy export file (possibly from another device); it will be merged according to local rules.",
+      "confirm": "Import"
+    },
     "backupId": "Backup ID",
     "backupManager": {
       "title": "Database Backups",
