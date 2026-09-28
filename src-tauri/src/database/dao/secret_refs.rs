@@ -117,4 +117,35 @@ impl Database {
             .map_err(|e| AppError::Database(format!("统计 secret_refs 失败: {e}")))?;
         Ok(count)
     }
+
+    /// S4-5（端点对账）：列出全部引用行 `(app, provider_id, vault_id, item_id)`。
+    ///
+    /// 纯本地查询，0 次 vault 往返。诊断命令据此遍历「本机认为已关联的供应商」，
+    /// 逐个与 1Password 真值比对。返回值只含结构定位信息，不含任何秘密。
+    pub fn list_secret_ref_identities(
+        &self,
+    ) -> Result<Vec<(String, String, String, String)>, AppError> {
+        let conn = lock_conn!(self.conn);
+        let mut stmt = conn
+            .prepare(
+                "SELECT app, provider_id, vault_id, item_id FROM secret_refs
+                 ORDER BY app, provider_id",
+            )
+            .map_err(|e| AppError::Database(format!("准备读取 secret_refs 失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|e| AppError::Database(format!("读取 secret_refs 失败: {e}")))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row.map_err(|e| AppError::Database(format!("读取 secret_refs 行失败: {e}")))?);
+        }
+        Ok(out)
+    }
 }

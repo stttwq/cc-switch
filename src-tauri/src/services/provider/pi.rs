@@ -652,6 +652,74 @@ pub(crate) fn flush_endpoint_vault_pending(state: &AppState) -> Result<usize, Ap
     flush_endpoint_vault_pending_locked(state)
 }
 
+/// S4-7（P1-6 / D-S6 决策 A）：把导入后变化的 Pi 供应商写回 `models.json`。
+///
+/// Pi 的原生契约是「`models.json` 为真源」，后处理（`run_post_import_sync`）
+/// 历来跳过 Pi。于是设备 A 改了 Pi 供应商的模型列表并上传，设备 B 下载后 DB 里
+/// 是新值，但 B 下次打开 Pi 页面时 `sync_native_locked` 又用 B 本机 `models.json`
+/// 里的旧值改回去——**Pi 的模型设置事实上无法同步**。
+///
+/// 下载属于「用户明确要求远端覆盖本机」，契约没覆盖这个场景，所以在这里补写回：
+/// - 只处理「`models.json` 里已存在（已启用）**且** DB 行在导入前后变化」的供应商；
+///   未启用的供应商保持只存在于 DB（原生契约「启停即增删节点」）。
+/// - 1P 模式下端点缓存缺失且 vault 里登记了 `base_url` 时**跳过并告警**，不调
+///   op——这里处在导入后处理的热路径上，原则 1 是硬约束。
+///
+/// `before` 是导入前的 Pi DB 行快照（`snapshot_pi_providers` 拍摄，0 次 op）。
+/// 返回实际写回的节点数。
+pub(crate) fn apply_imported_configs_to_native(
+    state: &AppState,
+    before: &IndexMap<String, Provider>,
+) -> Result<usize, AppError> {
+    let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
+    let after = state.db.get_all_providers(PI_APP)?;
+    let is_1p = crate::settings::is_onepassword_backend();
+
+    let mut applied = 0usize;
+    for (id, provider) in after.iter() {
+        // ① 导入前后没变的供应商不动手。
+        if before
+            .get(id)
+            .is_some_and(|old| old.settings_config == provider.settings_config)
+        {
+            continue;
+        }
+        // ② models.json 里没有这个节点 = 未启用，保持只存在于 DB。
+        let Ok(Some(current)) = crate::pi_config::read_pi_native_provider(id) else {
+            continue;
+        };
+        // ③ 端点只能从本机缓存取；1P 模式下缓存缺失就别为它付一次解锁。
+        let needs_vault_endpoint = is_1p
+            && state.db.get_provider_endpoint(PI_APP, id)?.is_none()
+            && state
+                .db
+                .get_secret_ref_fields(PI_APP, id)?
+                .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+        if needs_vault_endpoint {
+            log::warn!(
+                "S4-7：Pi 供应商 {id} 的端点缓存缺失，导入后的模型设置未写回 models.json（不触发 1Password 调用）"
+            );
+            continue;
+        }
+        // replace_pi_provider 自带 sanitizer（apiKey 改写成 $VAR 引用）与
+        // revision 冲突检测（冲突就报错，这里记日志跳过）。
+        let Ok(live) = hydrate_pi_base_url_for_live(state, provider) else {
+            log::warn!("S4-7：Pi 供应商 {id} 合入端点失败，模型设置未写回");
+            continue;
+        };
+        match crate::pi_config::replace_pi_provider(id, &current, &live) {
+            Ok(()) => applied += 1,
+            Err(error) => log::warn!("S4-7：写回 Pi 供应商 {id} 的模型设置失败: {error}"),
+        }
+    }
+    if applied > 0 {
+        // 写回后 models.json 变了，必须让指纹失效，否则下次 list 会用旧指纹
+        // 短路掉原生同步，把刚写进去的节点又「同步」成 DB 里的值（§9-9）。
+        invalidate_native_fingerprint();
+    }
+    Ok(applied)
+}
+
 /// 导入单个供应商。返回 `false` 表示 live 与 DB 里都已不存在（pending 直接出队）。
 /// 次序与 enable / update 一致：①写 vault → ②投变量 → ③改写 models.json → ④存 DB。
 fn import_one_provider(state: &AppState, id: &str) -> Result<bool, AppError> {
@@ -1178,6 +1246,167 @@ mod list_perf_tests {
         assert!(
             crate::settings::get_pi_endpoint_vault_pending().is_empty(),
             "成功的消化必须清空清单"
+        );
+    }
+}
+
+#[cfg(test)]
+mod s4_7_import_apply_tests {
+    //! S4-7（P1-6 / D-S6 决策 A）验收：下载后 Pi 的模型设置要真的写进
+    //! `models.json`，否则「同步了但没生效」。
+    //!
+    //! 三条判据：
+    //! 1. 已启用 + 导入前后有变化 → `models.json` 被更新；
+    //! 2. 未启用（`models.json` 里没有该节点）→ 不写（原生契约「启停即增删」）；
+    //! 3. 1P 模式端点缓存缺失且 vault 登记了 base_url → 跳过，vault 零往返。
+    use super::plaintext_pending_tests::{
+        onepassword_pi_state, read_native, write_models, OnePBackend, TempHome,
+    };
+    use super::*;
+    use serial_test::serial;
+
+    const TWO_MODELS: &str = r#"{"providers":{
+        "pi-a":{"name":"A","baseUrl":"https://a.example/v1","apiKey":"$CC_SWITCH_PI_A_API_KEY","models":["m1"]},
+        "pi-b":{"name":"B","baseUrl":"https://b.example/v1","apiKey":"$CC_SWITCH_PI_B_API_KEY","models":["m1"]}
+    }}"#;
+
+    /// 远端带来的新模型列表（模拟设备 A 改了 Pi 供应商的模型设置）。
+    fn imported_config(models: &[&str]) -> Value {
+        serde_json::json!({
+            "name": "A",
+            "baseUrl": "https://a.example/v1",
+            "apiKey": "$CC_SWITCH_PI_A_API_KEY",
+            "models": models,
+        })
+    }
+
+    fn state_with_two() -> AppState {
+        let (state, _vault, _counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("seed from native");
+        state
+    }
+
+    #[test]
+    #[serial]
+    fn applies_changed_enabled_provider_to_native() {
+        let _home = TempHome::new("s47-apply");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(TWO_MODELS);
+        let _onep = OnePBackend::enable();
+        let state = state_with_two();
+
+        // 导入前的快照：与当前 DB 一致。
+        let before = state.db.get_all_providers(PI_APP).expect("before");
+        // 模拟导入覆盖 DB 行（模型列表变了）。
+        let mut after = before.get("pi-a").expect("pi-a").clone();
+        after.settings_config = imported_config(&["m1", "m2", "m3"]);
+        state
+            .db
+            .save_provider(PI_APP, &after)
+            .expect("simulate import");
+
+        let applied = apply_imported_configs_to_native(&state, &before).expect("apply");
+        assert_eq!(applied, 1, "只有 pi-a 的配置变了");
+
+        let native = read_native();
+        let live_models = native["pi-a"]["models"].as_array().expect("models");
+        assert_eq!(
+            live_models.len(),
+            3,
+            "导入带来的模型列表必须写进 models.json，否则下次进入 Pi 页就被本机旧值改回去"
+        );
+        // 未变化的供应商不应被动。
+        assert_eq!(
+            native["pi-b"]["models"].as_array().expect("b models").len(),
+            1
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn skips_providers_absent_from_native() {
+        let _home = TempHome::new("s47-unenabled");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(TWO_MODELS);
+        let _onep = OnePBackend::enable();
+        let state = state_with_two();
+
+        let before = state.db.get_all_providers(PI_APP).expect("before");
+        // 远端新增了一个本机未启用的供应商（不在 models.json 里）。
+        let mut fresh = Provider::with_id("pi-new".to_string());
+        fresh.name = "New".to_string();
+        fresh.settings_config = imported_config(&["m1", "m2"]);
+        state.db.save_provider(PI_APP, &fresh).expect("save new");
+
+        let applied = apply_imported_configs_to_native(&state, &before).expect("apply");
+        assert_eq!(applied, 0, "未启用的供应商保持只存在于 DB（原生契约）");
+        assert!(
+            !read_native().contains_key("pi-new"),
+            "不得凭导入凭空往 models.json 塞节点"
+        );
+    }
+
+    /// 1P 模式下端点缓存缺失且 vault 登记了 base_url 时必须跳过——
+    /// 导入后处理不能为它触发一次 6~9 秒的解锁（原则 1）。
+    #[test]
+    #[serial]
+    fn skips_when_1p_endpoint_cache_missing_without_touching_vault() {
+        let _home = TempHome::new("s47-nocache");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(TWO_MODELS);
+        let _onep = OnePBackend::enable();
+        let (state, _vault, counting) = onepassword_pi_state();
+        sync_native_locked(&state, &read_native()).expect("seed");
+
+        // 端点缓存被清掉，但引用行仍登记着 base_url —— hydrate 会去 fetch。
+        state
+            .db
+            .delete_provider_endpoint(PI_APP, "pi-a")
+            .expect("clear cache");
+        state
+            .db
+            .upsert_secret_ref("pi", "pi-a", "vault-1", "item-a", &["base_url".to_string()])
+            .expect("mark base_url ref");
+
+        let before = state.db.get_all_providers(PI_APP).expect("before");
+        let mut after = before.get("pi-a").expect("pi-a").clone();
+        after.settings_config = imported_config(&["m1", "m2"]);
+        state
+            .db
+            .save_provider(PI_APP, &after)
+            .expect("simulate import");
+
+        counting.reset();
+        let applied = apply_imported_configs_to_native(&state, &before).expect("apply");
+
+        assert_eq!(applied, 0, "端点只能来自本机缓存，缓存缺失就跳过");
+        assert_eq!(
+            counting.fetch_count(),
+            0,
+            "绝不能为导入后处理触发 1Password 调用"
+        );
+        assert_eq!(counting.put_count(), 0);
+    }
+
+    /// 导入没改动任何 Pi 供应商时不该碰 models.json。
+    #[test]
+    #[serial]
+    fn no_change_means_no_native_write() {
+        let _home = TempHome::new("s47-nochange");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        let path = write_models(TWO_MODELS);
+        let _onep = OnePBackend::enable();
+        let state = state_with_two();
+        let before = state.db.get_all_providers(PI_APP).expect("before");
+        let content_before = std::fs::read_to_string(&path).expect("read");
+
+        let applied = apply_imported_configs_to_native(&state, &before).expect("apply");
+
+        assert_eq!(applied, 0);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("read"),
+            content_before,
+            "没有变化的导入不得重写 models.json"
         );
     }
 }

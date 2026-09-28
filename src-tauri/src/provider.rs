@@ -82,6 +82,11 @@ pub struct SecretStatus {
     pub api_key: SecretHint,
     pub base_url: Option<String>,
     pub extra_env: Vec<String>,
+    /// S4-3：导入后未关联 1P 条目的供应商为 `false`——前端显示「未关联」而不是
+    /// 「缺钥匙」。两者修复路径完全不同：未关联要跑「从 1Password 关联」，
+    /// 缺钥匙才需要用户重新输入（后者会在 1P 里造出重复条目）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub linked: Option<bool>,
 }
 
 impl Provider {

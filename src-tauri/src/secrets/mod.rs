@@ -18,6 +18,7 @@ pub use extractor::{
 };
 pub use migration::{CredentialMigrator, MigratedProviderInfo, MigrationReport};
 pub use migration_1p::{migrate_to_onepassword, MigrationReport as OnePasswordMigrationReport};
+pub(crate) use onepassword::OpItemListEntry;
 pub use onepassword::{
     build_runtime_vault, from_settings as onepassword_from_settings, list_accounts, list_vaults,
     locate_op, op_version, parse_group_from_group_value, parse_group_from_title,

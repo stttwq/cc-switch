@@ -32,17 +32,29 @@ fn collect_providers_for_frontend(
     app_type: AppType,
 ) -> Result<IndexMap<String, ProviderForFrontend>, AppError> {
     let providers = ProviderService::list(state, app_type.clone())?;
+    // S4-3：「未关联」清单在列表入口读一次（0 次 op，但每次读都要 clone 整份
+    // AppSettings），逐供应商读会把列表热路径放大 N 倍。
+    let unlinked: Vec<String> = if crate::settings::is_onepassword_backend() {
+        crate::settings::get_onepassword_unlinked()
+    } else {
+        Vec::new()
+    };
     // §6.3/4.3：列表徒标 / extra_env 名单全查 secret_refs，零 vault 往返。
     let mut sanitized = IndexMap::new();
     for (id, provider) in providers {
         let mut front = provider.to_frontend();
-        front.secret_status = Some(load_secret_status(state, &app_type, &id));
+        front.secret_status = Some(load_secret_status(state, &app_type, &id, &unlinked));
         sanitized.insert(id, front);
     }
     Ok(sanitized)
 }
 
-fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -> SecretStatus {
+fn load_secret_status(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    unlinked: &[String],
+) -> SecretStatus {
     // secret_refs 只存字段名（不含值）；列表徽标与 extra_env 名单据此判定。
     let fields = state
         .db
@@ -69,12 +81,22 @@ fn load_secret_status(state: &AppState, app_type: &AppType, provider_id: &str) -
         .filter(|k| !k.is_empty())
         .collect();
 
+    // S4-3：导入后未关联的供应商显式标 `linked: false`。凭据管理器模式没有
+    // 「引用」概念，不发这个字段，前端按缺钥匙的旧逻辑显示。
+    let linked = if crate::settings::is_onepassword_backend() {
+        let key = format!("{}/{}", app_type.as_str(), provider_id);
+        Some(!unlinked.iter().any(|k| k == &key))
+    } else {
+        None
+    };
+
     SecretStatus {
         api_key: SecretHint {
             present: api_present,
         },
         base_url,
         extra_env,
+        linked,
     }
 }
 
@@ -370,7 +392,7 @@ mod tests {
                 &["api_key".to_string(), "env.FOO".to_string()],
             )
             .expect("upsert ref");
-        let status = load_secret_status(&state, &AppType::Claude, "p1");
+        let status = load_secret_status(&state, &AppType::Claude, "p1", &[]);
         assert!(
             status.api_key.present,
             "secret_refs 含 api_key 就判为已配置"
@@ -381,7 +403,7 @@ mod tests {
     #[test]
     fn row_without_secret_ref_stays_unconfigured() {
         let state = state_with_store();
-        let status = load_secret_status(&state, &AppType::Claude, "missing");
+        let status = load_secret_status(&state, &AppType::Claude, "missing", &[]);
         assert!(!status.api_key.present);
         assert!(status.extra_env.is_empty());
     }
@@ -413,7 +435,7 @@ mod tests {
             .expect("seed endpoint");
         counting.reset();
 
-        let status = load_secret_status(&state, &AppType::Claude, "p1");
+        let status = load_secret_status(&state, &AppType::Claude, "p1", &[]);
         assert!(status.api_key.present);
         assert_eq!(status.base_url.as_deref(), Some("https://x"));
         assert_eq!(counting.fetch_count(), 0, "列表不该调 vault.fetch");
@@ -423,7 +445,7 @@ mod tests {
             .db
             .delete_provider_endpoint("claude", "p1")
             .expect("delete endpoint");
-        let status = load_secret_status(&state, &AppType::Claude, "p1");
+        let status = load_secret_status(&state, &AppType::Claude, "p1", &[]);
         assert_eq!(status.base_url, None, "待回填的 base_url 列表返回空");
         assert_eq!(counting.fetch_count(), 0);
     }

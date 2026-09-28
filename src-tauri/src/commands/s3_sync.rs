@@ -4,7 +4,8 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::commands::sync_support::{
-    attach_warning, post_sync_warning_from_result, run_post_import_sync,
+    attach_unlinked_count, attach_warning, post_sync_warning_from_result, run_post_import_sync,
+    snapshot_pi_providers,
 };
 use crate::error::AppError;
 use crate::services::s3_sync as s3_sync_service;
@@ -154,6 +155,8 @@ pub async fn s3_sync_download(
     // Keep the derived live configuration refresh in the same global sync
     // operation. Otherwise another WebDAV/S3 restore can start after the DB
     // apply but before this snapshot has finished projecting its live files.
+    // S4-7（P1-6）：下载前拍一份本机 Pi DB 行，供后处理判断哪些 Pi 供应商变了。
+    let pi_before = snapshot_pi_providers(&app_state_for_sync)?;
     let sync_result = run_download_with_s3_lock(
         s3_sync_service::download(
             &db,
@@ -167,7 +170,7 @@ pub async fn s3_sync_download(
                 // 远端遗留快照可能含明文密钥：先 scrub，再刷新派生 live 配置。
                 app_state_for_sync
                     .scrub_imported_plaintext()
-                    .and_then(|_| run_post_import_sync(&app_state_for_sync))
+                    .and_then(|_| run_post_import_sync(&app_state_for_sync, Some(&pi_before)))
             })
             .await
             .map_err(|e| e.to_string());
@@ -184,7 +187,8 @@ pub async fn s3_sync_download(
     if let Some(msg) = warning.as_ref() {
         log::warn!("[S3] post-download sync warning: {msg}");
     }
-    result = attach_warning(result, warning);
+    // S4-3：补上「未关联 1Password 的供应商」计数，供前端横幅直接用。
+    result = attach_unlinked_count(attach_warning(result, warning));
 
     Ok(result)
 }

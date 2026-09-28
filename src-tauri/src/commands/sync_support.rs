@@ -5,12 +5,54 @@ use crate::services::{PromptService, ProviderService};
 use crate::settings;
 use crate::store::AppState;
 
-pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError> {
+/// S4-7（P1-6）：导入前拍一份本机 Pi DB 行，供 [`run_post_import_sync`] 判断
+/// 「哪些 Pi 供应商在导入中变了」。只读本地库，0 次 op。
+pub(crate) fn snapshot_pi_providers(
+    app_state: &AppState,
+) -> Result<indexmap::IndexMap<String, crate::provider::Provider>, AppError> {
+    app_state
+        .db
+        .get_all_providers(crate::app_config::AppType::Pi.as_str())
+}
+
+/// S4-7（P1-6 / D-S6 决策 A）：后处理把导入带来的 Pi 变化写回 `models.json`。
+///
+/// Pi 的原生契约是「`models.json` 为真源」，历来后处理跳过 Pi，代价是 Pi 的
+/// 模型设置**同步了也不生效**（B 下载后，下次开 Pi 页就被本机旧值改回去）。
+/// 传 `pi_before`（导入前快照）即启用这一步；为 `None` 时行为不变。
+pub(crate) fn run_post_import_sync(
+    app_state: &AppState,
+    pi_before: Option<&indexmap::IndexMap<String, crate::provider::Provider>>,
+) -> Result<(), AppError> {
     let mut failures = Vec::new();
 
     // S1-4（§9-9）：导入会改写 Pi 的 DB 行，让 models.json 指纹失效，
     // 下次进入 Pi 列表必须与原生重新对齐（S4 起所有导入入口统一走这里）。
     crate::services::provider::invalidate_native_fingerprint();
+
+    // S4-7：把「已启用且本次导入有变化」的 Pi 供应商写回原生配置。
+    if let Some(before) = pi_before {
+        match crate::services::provider::apply_imported_configs_to_native(app_state, before) {
+            Ok(0) => {}
+            Ok(applied) => log::info!("[Import] Pi 模型设置已写回 models.json：{applied} 个"),
+            Err(error) => failures.push(format!("pi native apply: {error}")),
+        }
+    }
+
+    // S4-3：全量重建「未关联 1Password」清单。三条导入路径（同步下载 / SQL 导入 /
+    // `.db` 恢复）都走这个入口，所以清单只需在这里算一次。必须是全量重建而非
+    // 增量：供应商可能在别处已关联，保留陈旧条目会让横幅一直挂着。
+    let backend = if crate::settings::is_onepassword_backend() {
+        crate::database::snapshot_policy::BackendKind::OnePassword
+    } else {
+        crate::database::snapshot_policy::BackendKind::CredentialManager
+    };
+    match crate::database::snapshot_policy::list_unlinked_providers(app_state.db.as_ref(), backend)
+        .and_then(crate::settings::set_onepassword_unlinked)
+    {
+        Ok(()) => {}
+        Err(error) => failures.push(format!("unlinked providers: {error}")),
+    }
 
     if let Err(error) = ProviderService::sync_current_to_live(app_state) {
         failures.push(format!("live configuration: {error}"));
@@ -68,15 +110,45 @@ pub(crate) fn attach_warning(mut value: Value, warning: Option<String>) -> Value
     value
 }
 
-pub(crate) fn success_payload_with_warning(backup_id: String, warning: Option<String>) -> Value {
-    attach_warning(
-        json!({
-            "success": true,
-            "message": "SQL imported successfully",
-            "backupId": backup_id
-        }),
-        warning,
-    )
+/// S4-3：给同步下载结果补上「未关联供应商」计数。
+///
+/// 后处理（`run_post_import_sync`）刚全量重建过清单，这里直接读回（0 次 op，
+/// 只读本机 settings）。为 0 时不写字段，前端按缺省处理。
+pub(crate) fn attach_unlinked_count(mut value: Value) -> Value {
+    let count = crate::settings::get_onepassword_unlinked().len();
+    if count > 0 {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert("unlinkedProviders".to_string(), json!(count));
+        }
+    }
+    value
+}
+
+/// S4-3：导入成功的结果载荷。
+///
+/// `adopted_refs` / `unlinkedProviders` 让前端能直接告诉用户「采纳了几条 1P
+/// 关联、还有几个没关联上」，不必再发一次查询。计数均为 0 时省略，前端按
+/// `?? 0` 兜底。
+pub(crate) fn success_payload_with_warning(
+    backup_id: String,
+    warning: Option<String>,
+    adopted_refs: usize,
+    unlinked_providers: usize,
+) -> Value {
+    let mut payload = json!({
+        "success": true,
+        "message": "SQL imported successfully",
+        "backupId": backup_id
+    });
+    if let Some(obj) = payload.as_object_mut() {
+        if adopted_refs > 0 {
+            obj.insert("adoptedRefs".to_string(), json!(adopted_refs));
+        }
+        if unlinked_providers > 0 {
+            obj.insert("unlinkedProviders".to_string(), json!(unlinked_providers));
+        }
+    }
+    attach_warning(payload, warning)
 }
 
 #[cfg(test)]

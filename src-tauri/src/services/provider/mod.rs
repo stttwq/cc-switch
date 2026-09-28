@@ -423,6 +423,7 @@ pub(crate) use live::{
     strip_common_config_from_live_settings, sync_current_provider_for_app_to_live,
     write_live_with_common_config_for_state,
 };
+pub(crate) use pi::apply_imported_configs_to_native;
 pub(crate) use pi::flush_endpoint_vault_pending;
 pub(crate) use pi::import_pi_plaintext_to_vault;
 pub(crate) use pi::invalidate_native_fingerprint;
@@ -1463,6 +1464,20 @@ impl ProviderService {
             crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
         let bundle = state.vault.fetch(&group);
         let mut secrets = bundle.map(|b| b.map(|b| b.to_provider_secrets()).unwrap_or_default())?;
+        // S4-2（P0-3 / §5.4 S4-2）：D3-B 之后 1Password 是端点的真源，本机缓存
+        // 只是加速。D3-A 时期规则相反（缓存覆盖 vault 侧可能过期的旧副本），
+        // D3-B 反转了真源却没有跟着改读取优先级——于是设备 B 上别的设备改过的
+        // 端点永远压不过本机缓存，钥匙被发往旧主机。
+        //
+        // 1P 模式：vault 整包里有 base_url 就用它，并顺手把缓存校正到一致；vault
+        // 没有才回落到缓存。凭据管理器模式维持「缓存优先」——该模式的凭据管理器里
+        // 可能留着 D3-A 时期的旧副本，缓存才是本机权威（§9-6）。
+        if crate::settings::is_onepassword_backend() {
+            if let Some(url) = secrets.base_url.as_deref() {
+                Self::reconcile_endpoint_cache(state, app_type, provider_id, url)?;
+                return Ok(secrets);
+            }
+        }
         // F1-2（D3-A）：端点表命中时覆盖 vault 侧的 base_url（vault 里的可能是
         // 拆分前的旧副本）。端点表未命中且 vault 也没有时保持 None。
         // Claude 终端注入 ANTHROPIC_BASE_URL 的行为不变。
@@ -1473,6 +1488,47 @@ impl ProviderService {
             secrets.base_url = Some(Zeroizing::new(url));
         }
         Ok(secrets)
+    }
+
+    /// S4-2（P0-3 / §9-7）：把本机端点缓存校正到 1Password 真值。
+    ///
+    /// 非敏感 URL → 写缓存（之后读取 0 次 op）；带凭据的 URL → 删缓存（敏感 URL
+    /// 绝不进端点表，§9-7）。值相同时不写库：S1-3 的 `DO UPDATE … WHERE` 让
+    /// upsert 幂等，这里先比较再写是为了连读的意图都省掉。
+    /// 日志只记 app/id 这个结构定位，不记 URL（§9-13）。
+    fn reconcile_endpoint_cache(
+        state: &AppState,
+        app_type: &AppType,
+        provider_id: &str,
+        vault_url: &str,
+    ) -> Result<(), AppError> {
+        let cached = state
+            .db
+            .get_provider_endpoint(app_type.as_str(), provider_id)?;
+        if crate::secrets::is_credential_bearing_url(vault_url) {
+            if cached.is_some() {
+                state
+                    .db
+                    .delete_provider_endpoint(app_type.as_str(), provider_id)?;
+                log::info!(
+                    "S4-2：vault 端点带凭据，已删除本机端点缓存 {}/{}",
+                    app_type.as_str(),
+                    provider_id
+                );
+            }
+            return Ok(());
+        }
+        if cached.as_deref() != Some(vault_url) {
+            state
+                .db
+                .upsert_provider_endpoint(app_type.as_str(), provider_id, vault_url)?;
+            log::info!(
+                "S4-2：端点缓存已按 1Password 真值更新 {}/{}",
+                app_type.as_str(),
+                provider_id
+            );
+        }
+        Ok(())
     }
 
     pub fn adopt_env_vars(
@@ -1942,6 +1998,22 @@ impl ProviderService {
                     .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_API_KEY))
             });
             if !stored {
+                // S4-3：导入后未关联 1P 条目的供应商（不同保险箱、或远端没带引用
+                // 行）本来是有钥匙的，只是本机没关联上。要求用户重新输入会诱使他们
+                // 在 1P 里建重复条目——给专门错误码，提示先关联。
+                if crate::settings::is_onepassword_backend() {
+                    let key = format!("{}/{}", app_type.as_str(), provider.id);
+                    if crate::settings::get_onepassword_unlinked()
+                        .iter()
+                        .any(|k| k == &key)
+                    {
+                        return Err(AppError::localized(
+                            "provider.vault_unlinked",
+                            "该供应商来自其他设备，尚未关联 1Password 条目：请先在提示中点「从 1Password 关联」，无需重新输入密钥",
+                            "This provider comes from another device and is not linked to 1Password yet. Link it first instead of re-entering the key.",
+                        ));
+                    }
+                }
                 return Err(AppError::localized(
                     "provider.api_key.required",
                     "请填写 API 密钥后再保存",
@@ -2294,6 +2366,12 @@ pub(crate) fn store_provider_bundle(
 /// 2. `secret_refs` 登记了 `base_url` → fetch 一次；若是非敏感 URL，顺手写入
 ///    端点表（懒迁移，之后都是 0 次 op）；vault 里的旧副本留给回填 / 后续 put 清理；
 /// 3. 都没有 → `None`。
+///
+/// S4-2（P0-3）：这里**刻意仍然「缓存命中即返回」**。列表、Codex/Pi 切换的性能
+/// 都依赖这条路径 0 次 op。缓存现在只可能由本机写入——S4-1 保证导入不会带进外来的
+/// 缓存（1P 模式整表忽略文件值），`fetch_provider_secrets` 又在每次真正取整包时按
+/// 1P 真值校正缓存，所以「别的设备改了 URL」的分歧窗口被收窄到「本机下一次 fetch
+/// 之前」，而 fetch 一定发生在真正要用钥匙的时候。
 pub(crate) fn resolve_base_url(
     state: &AppState,
     app_type: &AppType,
@@ -2378,7 +2456,12 @@ pub(crate) fn scrub_imported_plaintext_via_vault(
                     continue;
                 }
             }
-            stripped_rows.push((app_type.as_str().to_string(), id, extracted.stripped));
+            // S4-6（P1-7 / §5.4 S4-6）：只有真的被剥离过的行才写回。1P 模式下
+            // 已处理过的行（只剩模型等非敏感字段）提取后与原样一致，逐行 UPDATE
+            // 只会白白触发 update_hook，并让下面的 VACUUM 空跑一次。
+            if extracted.stripped != provider.settings_config {
+                stripped_rows.push((app_type.as_str().to_string(), id, extracted.stripped));
+            }
         }
     }
 
@@ -3038,6 +3121,79 @@ mod onepassword_scrub_tests {
         let config = row.expect("存在").settings_config.to_string();
         assert!(config.contains("sk-keep-1"), "失败行必须保留明文: {config}");
         assert!(counting.count() == 0);
+    }
+
+    /// S4-6（P1-7）：干净的快照导入后 scrub 必须零写入——逐行 UPDATE 会把
+    /// 整库写放大成 N 次 update_hook 事件，VACUUM 还会在下载后处理里空跑一次。
+    #[test]
+    #[serial]
+    fn scrub_writes_nothing_for_already_clean_snapshot() {
+        let _home = TempHome::new("clean");
+        let (state, vault, counting) = onepassword_state();
+        // 只剩模型等非敏感字段：提取后与原样一致，secrets 为空。
+        seed_provider(
+            &state,
+            "clean",
+            serde_json::json!({"env": {"ANTHROPIC_MODEL": "claude-opus-4"}}),
+        );
+
+        let hooks = crate::test_support::HookCounts::install(&state.db);
+        hooks.reset();
+
+        let pending = super::scrub_imported_plaintext_via_vault(&state).expect("scrub");
+
+        assert!(pending.is_empty(), "干净行无 pending");
+        assert_eq!(
+            hooks.count_for_table("providers"),
+            0,
+            "干净快照不得产生任何 providers 写入（否则也不会走 VACUUM 分支）"
+        );
+        assert_eq!(hooks.total(), 0, "整库零写入");
+        assert_eq!(counting.count(), 0, "凭据管理器必须零调用");
+        assert!(
+            vault
+                .fetch(&SecretGroup::provider(AppType::Claude, "clean"))
+                .expect("fetch")
+                .is_none(),
+            "无秘密的行不该建 vault 条目"
+        );
+    }
+
+    /// S4-6（P1-7）：混合快照只重写真正被剥离的那一行。
+    #[test]
+    #[serial]
+    fn scrub_only_rewrites_rows_it_actually_stripped() {
+        let _home = TempHome::new("mixed");
+        let (state, _vault, _counting) = onepassword_state();
+        seed_provider(
+            &state,
+            "clean",
+            serde_json::json!({"env": {"ANTHROPIC_MODEL": "claude-opus-4"}}),
+        );
+        seed_provider(
+            &state,
+            "dirty",
+            serde_json::json!({"env": {"ANTHROPIC_AUTH_TOKEN": "sk-mixed-1"}}),
+        );
+
+        let hooks = crate::test_support::HookCounts::install(&state.db);
+        hooks.reset();
+
+        let pending = super::scrub_imported_plaintext_via_vault(&state).expect("scrub");
+
+        assert!(pending.is_empty());
+        assert_eq!(
+            hooks.count_for_table("providers"),
+            1,
+            "只有脏行该被 UPDATE，干净行不得跟着重写"
+        );
+        let clean = state
+            .db
+            .get_provider_by_id("clean", "claude")
+            .expect("row")
+            .expect("存在")
+            .settings_config;
+        assert_eq!(clean["env"]["ANTHROPIC_MODEL"], "claude-opus-4");
     }
 }
 
@@ -3777,7 +3933,6 @@ mod s0_p0_3_repro_tests {
 
     #[test]
     #[serial]
-    #[ignore = "S4-2 待修（P0-3）：端点缓存命中仍覆盖 vault 的 base_url"]
     fn in_1p_mode_vault_base_url_wins_over_endpoint_cache() {
         let _test_home = crate::test_support::TestHomeGuard::new();
         let _backend = crate::test_support::OnePasswordBackendGuard::new();
@@ -3807,6 +3962,175 @@ mod s0_p0_3_repro_tests {
             secrets.base_url.as_deref().map(|s| s.as_str()),
             Some("https://vault.example"),
             "1P 模式下 vault 是端点真源，本机缓存不得压过 vault 值（P0-3 / S4-2）"
+        );
+        // 顺带把缓存校正到真值：下次走 resolve_base_url 就是 0 次 op 的新值。
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("claude", "p1")
+                .expect("read cache")
+                .as_deref(),
+            Some("https://vault.example"),
+            "fetch 必须顺带校正本机端点缓存"
+        );
+        assert_eq!(counting.fetch_count(), 1, "取整包仍然只有一次往返");
+    }
+
+    /// S4-2：凭据管理器模式不回归——该模式 vault 侧可能留着 D3-A 时期的旧副本，
+    /// 缓存才是本机权威（§9-6）。
+    #[test]
+    #[serial]
+    fn credential_manager_mode_keeps_cache_priority() {
+        let _test_home = crate::test_support::TestHomeGuard::new();
+
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://vault-old.example".to_string()),
+        );
+        state.vault.put(&group, &bundle).expect("seed vault bundle");
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://cache.example")
+            .expect("seed endpoint cache");
+
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
+        assert_eq!(
+            secrets.base_url.as_deref().map(|s| s.as_str()),
+            Some("https://cache.example"),
+            "凭据管理器模式维持缓存优先"
+        );
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("claude", "p1")
+                .expect("read cache")
+                .as_deref(),
+            Some("https://cache.example"),
+            "凭据管理器模式不得被 vault 值改写缓存"
+        );
+    }
+
+    /// S4-2：vault 整包里没有 base_url 时回落到本机缓存。
+    #[test]
+    #[serial]
+    fn in_1p_mode_falls_back_to_cache_when_vault_has_no_base_url() {
+        let _test_home = crate::test_support::TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        // 整包只有 api_key，没有 base_url。
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(
+            crate::secrets::FIELD_API_KEY,
+            Zeroizing::new("sk-only-key".to_string()),
+        );
+        state.vault.put(&group, &bundle).expect("seed vault bundle");
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://cache.example")
+            .expect("seed endpoint cache");
+
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
+        assert_eq!(
+            secrets.base_url.as_deref().map(|s| s.as_str()),
+            Some("https://cache.example"),
+            "vault 没有 base_url 时应回落到本机缓存"
+        );
+    }
+
+    /// S4-2 / §9-7：vault 里的端点带凭据时删除本机缓存——敏感 URL 绝不落端点表。
+    #[test]
+    #[serial]
+    fn in_1p_mode_drops_cache_when_vault_url_is_credential_bearing() {
+        let _test_home = crate::test_support::TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://user:pw@vault.example/v1".to_string()),
+        );
+        state.vault.put(&group, &bundle).expect("seed vault bundle");
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://cache.example")
+            .expect("seed endpoint cache");
+
+        let secrets =
+            ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
+        assert_eq!(
+            secrets.base_url.as_deref().map(|s| s.as_str()),
+            Some("https://user:pw@vault.example/v1"),
+            "带凭据的 URL 照常返回给调用方（凭据是用户的）"
+        );
+        assert_eq!(
+            state
+                .db
+                .get_provider_endpoint("claude", "p1")
+                .expect("read cache"),
+            None,
+            "带凭据的 URL 不得留在本机端点缓存（§9-7）"
+        );
+    }
+
+    /// S4-2：缓存已与 vault 一致时不写库（否则每次 fetch 都产生 update_hook 事件，
+    /// 凭据管理器模式下会推高自动同步的触发频率）。
+    #[test]
+    #[serial]
+    fn in_1p_mode_does_not_rewrite_matching_cache() {
+        let _test_home = crate::test_support::TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+
+        let store: Arc<dyn SecretStore> = Arc::new(InMemorySecretStore::new());
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let mut state = AppState::new(db, store);
+        let counting = Arc::new(CountingVault::new(state.vault.clone()));
+        state.vault = counting.clone();
+
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(
+            FIELD_BASE_URL,
+            Zeroizing::new("https://same.example".to_string()),
+        );
+        state.vault.put(&group, &bundle).expect("seed vault bundle");
+        state
+            .db
+            .upsert_provider_endpoint("claude", "p1", "https://same.example")
+            .expect("seed endpoint cache");
+
+        let hooks = crate::test_support::HookCounts::install(&state.db);
+        hooks.reset();
+
+        ProviderService::fetch_provider_secrets(&state, &AppType::Claude, "p1").expect("fetch");
+
+        assert_eq!(
+            hooks.count_for_table("provider_endpoints"),
+            0,
+            "缓存与真值一致时不得写库"
         );
     }
 }

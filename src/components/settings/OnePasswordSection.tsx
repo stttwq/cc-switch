@@ -2,7 +2,13 @@ import { useCallback, useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { Eraser, KeyRound, Loader2, RefreshCw } from "lucide-react";
+import {
+  Eraser,
+  KeyRound,
+  Loader2,
+  RefreshCw,
+  Stethoscope,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { settingsApi } from "@/lib/api/settings";
 import { extractErrorMessage, toastVaultError } from "@/utils/errorUtils";
@@ -31,6 +37,17 @@ interface OpVault {
   name: string;
 }
 
+/** S4-5：端点对账结果。只含 app/id 与状态词，不含 URL。 */
+interface EndpointAudit {
+  vaultConfigured: boolean;
+  checked: number;
+  matched: number;
+  mismatched: string[];
+  vaultMissing: string[];
+  cacheMissing: string[];
+  orphanRefs: string[];
+}
+
 /**
  * F5-3：vault_* 错误（锁定/断网/超时等）统一 toast + 「重试」；其余显示原始信息。
  * 模块级纯展示辅助，不依赖组件状态。
@@ -38,6 +55,19 @@ interface OpVault {
 const showVaultAwareError = (error: unknown, retry: () => void) => {
   if (toastVaultError(error, retry)) return;
   toast.error(extractErrorMessage(error) || String(error));
+};
+
+/**
+ * S4-5：对账结果里的一类分歧（只列 app/id，不列 URL）。空清单不渲染。
+ */
+const AuditList = ({ label, items }: { label: string; items: string[] }) => {
+  if (items.length === 0) return null;
+  return (
+    <p>
+      <span className="text-foreground">{label}</span>
+      <span className="ml-2 font-mono">{items.join("、")}</span>
+    </p>
+  );
 };
 
 /**
@@ -55,8 +85,20 @@ export function OnePasswordSection() {
   const [restartFailed, setRestartFailed] = useState(false);
   const [migrateProgress, setMigrateProgress] = useState({ done: 0, total: 0 });
   const [rebuildProgress, setRebuildProgress] = useState({ done: 0, total: 0 });
+  const [auditProgress, setAuditProgress] = useState({ done: 0, total: 0 });
+  const [audit, setAudit] = useState<EndpointAudit | null>(null);
   const [busy, setBusy] = useState<
-    "status" | "accounts" | "vaults" | "save" | "test" | "migrate" | "cleanup" | "rebuild" | null
+    | "status"
+    | "accounts"
+    | "vaults"
+    | "save"
+    | "test"
+    | "migrate"
+    | "cleanup"
+    | "rebuild"
+    | "audit"
+    | "reconcile"
+    | null
   >(null);
 
   // F2-3：已处于 1Password 后端时锁定 account / vault（运行中的 vault 不跟随设置变化，
@@ -84,12 +126,55 @@ export function OnePasswordSection() {
   const rebuildRefs = async () => {
     setBusy("rebuild");
     try {
-      const r = await invoke<{ total: number; rebuilt: number; skipped: string[] }>(
-        "onepassword_rebuild_refs",
-      );
+      const r = await invoke<{
+        total: number;
+        rebuilt: number;
+        skipped: string[];
+      }>("onepassword_rebuild_refs");
       toast.success(t("onepassword.rebuildRefsDone", r));
     } catch (error) {
       showVaultAwareError(error, () => void rebuildRefs());
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // S4-5：端点对账进度（逐个 fetch，约 7 秒/个）。
+  useTauriEvent<{ done: number; total: number }>(
+    "onepassword-endpoint-audit-progress",
+    (payload) => {
+      setAuditProgress(payload);
+    },
+  );
+
+  // S4-5：端点对账（只读）。逐个供应商取一次 1P 整包比对本机缓存，
+  // 不返回 URL 本身。设置里的 vault 值一旦损坏（2026-09-27 的真实故障），
+  // 这里会直接报 vaultConfigured: false。
+  const runAudit = async () => {
+    setBusy("audit");
+    setAuditProgress({ done: 0, total: 0 });
+    try {
+      setAudit(await invoke<EndpointAudit>("onepassword_endpoint_audit"));
+    } catch (error) {
+      showVaultAwareError(error, () => void runAudit());
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // S4-5：按对账结果收敛端点。prefer=vault 以 1Password 为准（校正本机缓存），
+  // prefer=cache 以本机缓存为准写回 1Password。
+  const reconcile = async (prefer: "vault" | "cache") => {
+    setBusy("reconcile");
+    try {
+      const r = await invoke<{ applied: number; failed: string[] }>(
+        "onepassword_endpoint_reconcile",
+        { prefer },
+      );
+      toast.success(t("onepassword.endpointReconciled", r));
+      setAudit(await invoke<EndpointAudit>("onepassword_endpoint_audit"));
+    } catch (error) {
+      showVaultAwareError(error, () => void reconcile(prefer));
     } finally {
       setBusy(null);
     }
@@ -298,13 +383,17 @@ export function OnePasswordSection() {
         >
           <option value="">{t("onepassword.selectAccount")}</option>
           {accounts.map((a) => (
-            <option key={a.account_uuid || a.email} value={a.account_uuid || a.email}>
+            <option
+              key={a.account_uuid || a.email}
+              value={a.account_uuid || a.email}
+            >
               {a.email} ({a.url})
             </option>
           ))}
-          {account && !accounts.some((a) => (a.account_uuid || a.email) === account) && (
-            <option value={account}>{account}</option>
-          )}
+          {account &&
+            !accounts.some((a) => (a.account_uuid || a.email) === account) && (
+              <option value={account}>{account}</option>
+            )}
         </select>
         {is1pActive && (
           <p className="text-xs text-muted-foreground">
@@ -429,6 +518,87 @@ export function OnePasswordSection() {
           </>
         )}
       </div>
+      {/* S4-5：端点对账诊断。多设备下 1P 是端点真源，这里给出本机缓存与
+          1Password 的分歧清单（只列 app/id，不列 URL），并提供两个收敛方向。 */}
+      {is1pActive && (
+        <div className="rounded-md border border-border p-3">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium">
+              {t("onepassword.endpointAudit")}
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={busy !== null}
+              onClick={runAudit}
+            >
+              {busy === "audit" ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <Stethoscope className="mr-2 h-4 w-4" />
+              )}
+              {t("onepassword.endpointAuditAction")}
+            </Button>
+          </div>
+          {busy === "audit" && auditProgress.total > 0 && (
+            <p className="mt-2 text-xs text-muted-foreground">
+              {t("onepassword.endpointAuditProgress", auditProgress)}
+            </p>
+          )}
+          {audit && !audit.vaultConfigured && (
+            <p className="mt-2 text-xs text-destructive">
+              {t("onepassword.endpointAuditNoVault")}
+            </p>
+          )}
+          {audit?.vaultConfigured && (
+            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              <p>
+                {t("onepassword.endpointAuditSummary", {
+                  matched: audit.matched,
+                  checked: audit.checked,
+                })}
+              </p>
+              <AuditList
+                label={t("onepassword.endpointAuditMismatch")}
+                items={audit.mismatched}
+              />
+              <AuditList
+                label={t("onepassword.endpointAuditCacheMissing")}
+                items={audit.cacheMissing}
+              />
+              <AuditList
+                label={t("onepassword.endpointAuditVaultMissing")}
+                items={audit.vaultMissing}
+              />
+              <AuditList
+                label={t("onepassword.endpointAuditOrphan")}
+                items={audit.orphanRefs}
+              />
+            </div>
+          )}
+          {audit?.vaultConfigured &&
+            (audit.mismatched.length > 0 || audit.cacheMissing.length > 0) && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => void reconcile("vault")}
+                >
+                  {t("onepassword.endpointPreferVault")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy !== null}
+                  onClick={() => void reconcile("cache")}
+                >
+                  {t("onepassword.endpointPreferCache")}
+                </Button>
+              </div>
+            )}
+        </div>
+      )}
       {busy === "migrate" && migrateProgress.total > 0 && (
         <p className="text-xs text-muted-foreground">
           {t("onepassword.migrateProgress", migrateProgress)}
@@ -444,7 +614,9 @@ export function OnePasswordSection() {
         busy === "vaults" ||
         busy === "test" ||
         busy === "migrate" ||
-        busy === "rebuild") && (
+        busy === "rebuild" ||
+        busy === "audit" ||
+        busy === "reconcile") && (
         <p className="text-xs text-muted-foreground">
           {t("onepassword.requesting")}
         </p>

@@ -223,18 +223,31 @@ export function ProviderCard({
               >
                 {displayName}
               </h3>
-              {/* §5.5：密钥不随同步/导出走，跨机还原后要重新输入才能切换 */}
+              {/* §5.5：密钥不随同步/导出走，跨机还原后要重新输入才能切换。
+                  S4-3：未关联 1P 条目的供应商钥匙其实在 1P 里，只是本机没建立引用——
+                  显示「未关联」而不是「缺钥匙」，两者的修复路径完全不同。 */}
               {provider.secretStatus &&
+              !provider.secretStatus.apiKey.present &&
+              provider.category !== "official" &&
+              !codexOfficialIdentity &&
+              provider.secretStatus.linked === false ? (
+                <span
+                  className="rounded-md bg-sky-500/15 px-1.5 py-0.5 text-xs text-sky-600 dark:text-sky-400"
+                  title={t("provider.keyUnlinkedHint")}
+                >
+                  {t("provider.keyUnlinked")}
+                </span>
+              ) : provider.secretStatus &&
                 !provider.secretStatus.apiKey.present &&
                 provider.category !== "official" &&
-                !codexOfficialIdentity && (
-                  <span
-                    className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400"
-                    title={t("provider.keyMissingHint")}
-                  >
-                    {t("provider.keyMissing")}
-                  </span>
-                )}
+                !codexOfficialIdentity ? (
+                <span
+                  className="rounded-md bg-amber-500/15 px-1.5 py-0.5 text-xs text-amber-600 dark:text-amber-400"
+                  title={t("provider.keyMissingHint")}
+                >
+                  {t("provider.keyMissing")}
+                </span>
+              ) : null}
               {/* B5 严格投递模式：密钥不落 HKCU\Environment，只经 cc-switch「打开终端」注入 */}
               {envStrictMode && (
                 <span

@@ -339,13 +339,17 @@ impl OnePasswordVault {
         }
     }
 
-    /// F4-5：「从 1Password 重建引用」原语——按 id 读单个条目的托管字段 label 清单
-    /// 与 `cc-switch-group` 归属值（不带 `--reveal`，CONCEALED 字段无值，绝不含
-    /// 钥匙明文；归属字段是非秘密 STRING）。
-    pub(crate) fn read_item_meta(
+    /// F4-5：「从 1Password 重建引用」原语——按 id 读单个条目的托管字段 label 清单、
+    /// `cc-switch-group` 归属值，以及**非 CONCEALED 的 `base_url` 值**。
+    ///
+    /// S4-4：一次 `op item get` 顺带取回端点，重建引用时可直接回填本机端点缓存，
+    /// 不额外增加 op 次数。D3-B 之后非敏感 URL 在 1P 里是可见的 STRING 字段，
+    /// 不带 `--reveal` 也能读到；带凭据的 URL 是 CONCEALED，读不到值，
+    /// 此时返回 `None`（调用方也不该把它写进端点表，§9-7）。
+    pub(crate) fn read_item_meta_and_endpoint(
         &self,
         item_id: &str,
-    ) -> Result<(Vec<String>, Option<String>), VaultError> {
+    ) -> Result<ItemMeta, VaultError> {
         let args = [
             "item",
             "get",
@@ -669,6 +673,11 @@ pub struct OpVault {
     pub name: String,
 }
 
+/// S4-4：`op item get`（不带 `--reveal`）解析出的条目元信息
+/// `(托管字段 label 清单, cc-switch-group 归属值, 非敏感 base_url)`。
+/// 三元组直接写进签名会被 clippy 判为过复杂，这里给它一个名字。
+pub(crate) type ItemMeta = (Vec<String>, Option<String>, Option<String>);
+
 /// F2-2：`op item list --format json` 行（解析同标题冲突 / F3-8 孤儿清理用；
 /// 只要 id / 标题 / 更新时间，不含任何值）。
 #[derive(Debug, Clone, Deserialize)]
@@ -889,14 +898,16 @@ fn parse_item_bundle(bytes: &[u8]) -> Result<SecretBundle, VaultError> {
     Ok(bundle)
 }
 
-/// F4-5：从条目 JSON 提取托管字段 label 清单（不含值）与 `cc-switch-group` 归属值。
+/// F4-5：从条目 JSON 提取托管字段 label 清单（不含值）、`cc-switch-group` 归属值，
+/// 以及 S4-4 追加的 `base_url` 值。
 /// 「从 1Password 重建引用」用——`op item get` 不带 `--reveal` 时 CONCEALED 字段
-/// 没有值，只有 label 可靠；归属字段是非秘密 STRING，值可直接读出。
-fn parse_item_meta(bytes: &[u8]) -> Result<(Vec<String>, Option<String>), VaultError> {
+/// 没有值，只有 label 可靠；归属字段与 D3-B 起的非敏感 base_url 都是 STRING，值可直接读出。
+fn parse_item_meta(bytes: &[u8]) -> Result<ItemMeta, VaultError> {
     let item: OpItemRead = serde_json::from_slice(bytes)
         .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
     let mut labels = Vec::new();
     let mut group = None;
+    let mut base_url = None;
     for field in item.fields {
         let Some(label) = field.label else {
             continue;
@@ -905,11 +916,19 @@ fn parse_item_meta(bytes: &[u8]) -> Result<(Vec<String>, Option<String>), VaultE
             group = field.value.filter(|v| !v.is_empty());
             continue;
         }
+        if label == FIELD_BASE_URL {
+            // 只接受非敏感 URL：CONCEALED 字段本来就读不到值，这里再挡一道，
+            // 免得将来条目模板把敏感 URL 写成 STRING 之后漏进端点表（§9-7）。
+            base_url = field.value.filter(|v| {
+                !v.is_empty() && !crate::secrets::is_credential_bearing_url(v.as_str())
+            });
+            continue;
+        }
         if is_managed_field(&label) || label == SCHEMA_FIELD_LABEL {
             labels.push(label);
         }
     }
-    Ok((labels, group))
+    Ok((labels, group, base_url))
 }
 
 /// 从 `op item get` 输出提取 `cc-switch-group` 归属值（同名冲突核对用）。
@@ -1979,7 +1998,7 @@ mod tests {
                 {"id": "s", "type": "STRING", "label": "cc-switch-schema", "value": "1"}
             ]
         }"#;
-        let (labels, group) = parse_item_meta(json).expect("parse");
+        let (labels, group, _base_url) = parse_item_meta(json).expect("parse");
         assert!(labels.contains(&FIELD_API_KEY.to_string()));
         assert!(labels.contains(&"env.FOO".to_string()));
         assert!(labels.contains(&SCHEMA_FIELD_LABEL.to_string()));
@@ -1989,13 +2008,37 @@ mod tests {
         assert_eq!(group.as_deref(), Some("claude/p1"));
     }
 
+    /// S4-4：非 CONCEALED 的 `base_url` 在不带 `--reveal` 时也能读到值，
+    /// 重建引用顺带回填端点缓存即靠它；带凭据的 URL 必须被挡掉（§9-7）。
+    #[test]
+    fn parse_item_meta_extracts_plain_base_url_and_rejects_credential_bearing() {
+        let plain = br#"{
+            "id": "abc",
+            "fields": [
+                {"id": "b", "type": "STRING", "label": "base_url", "value": "https://api.example.com/v1"}
+            ]
+        }"#;
+        let (_, _, url) = parse_item_meta(plain).expect("parse");
+        assert_eq!(url.as_deref(), Some("https://api.example.com/v1"));
+
+        let sensitive = br#"{
+            "id": "abc",
+            "fields": [
+                {"id": "b", "type": "STRING", "label": "base_url", "value": "https://u:p@api.example.com/v1"}
+            ]
+        }"#;
+        let (_, _, url) = parse_item_meta(sensitive).expect("parse");
+        assert!(url.is_none(), "带凭据的 URL 不得回填端点缓存（§9-7）");
+    }
+
     /// F4-5：`read_item_meta` 走 `op item get`（不带 `--reveal`，不含值）。
     #[test]
     fn read_item_labels_calls_get_without_reveal() {
         let (vault, runner) = vault_with(vec![Ok(br#"{"id":"item-9","fields":[]}"#.to_vec())]);
-        let (labels, group) = vault.read_item_meta("item-9").expect("meta");
+        let (labels, group, base_url) = vault.read_item_meta_and_endpoint("item-9").expect("meta");
         assert!(labels.is_empty());
         assert!(group.is_none());
+        assert!(base_url.is_none(), "条目里没有 base_url 字段");
         assert_eq!(runner.call_count(), 1);
         let (args, stdin) = runner.call(0);
         assert_eq!((args[0].as_str(), args[1].as_str()), ("item", "get"));
@@ -2037,7 +2080,8 @@ mod tests {
         let mut rebuilt = 0;
         let mut skipped = 0;
         for item in &items {
-            let (labels, group_field) = vault.read_item_meta(&item.id).expect("meta");
+            let (labels, group_field, _base_url) =
+                vault.read_item_meta_and_endpoint(&item.id).expect("meta");
             let group = group_field
                 .as_deref()
                 .and_then(parse_group_from_group_value)
@@ -2078,7 +2122,8 @@ mod tests {
         let (vault, _runner) = vault_with(vec![Ok(list_json.to_vec()), Ok(meta.to_vec())]);
         let items = vault.list_tagged_items().expect("list");
         let item = &items[0];
-        let (labels, group_field) = vault.read_item_meta(&item.id).expect("meta");
+        let (labels, group_field, _base_url) =
+            vault.read_item_meta_and_endpoint(&item.id).expect("meta");
         let group = group_field
             .as_deref()
             .and_then(parse_group_from_group_value)

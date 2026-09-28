@@ -162,7 +162,9 @@
     "keyMissingHint": "密钥不参与同步与导出，请编辑该供应商重新输入 API 密钥。",
     "strictDelivery": "严格投递",
     "strictDeliveryHint": "严格投递模式已开启：该供应商的密钥不写入用户环境变量，只有从 cc-switch「打开终端」启动的 CLI 才能拿到。",
-    "endpoint": "接口地址"
+    "endpoint": "接口地址",
+    "keyUnlinked": "未关联",
+    "keyUnlinkedHint": "该供应商来自其他设备，钥匙在 1Password 中，但本机尚未建立关联。请在顶部提示中点「从 1Password 关联」，不需要重新输入密钥。"
   },
   "claudeCode": {},
   "codex": {
@@ -1861,9 +1863,24 @@
     "rebuildRefsDone": "已重建 {{rebuilt}} 个引用（共 {{total}} 个条目）。",
     "plaintextPending": "检测到待导入的明文钥匙：Pi 配置 {{pi}} 个、live 文件 {{live}} 个；另有 {{imports}} 个导入暂留。导入后 1Password 里才有这些钥匙。",
     "plaintextImportAction": "导入到 1Password",
-        "endpointVaultPending": "有 {{count}} 个 Pi 端点改动待写入 1Password",
-        "endpointWriteAction": "立即写入",
-        "endpointWriteDone": "已写入 {{count}} 个端点改动",
-    "plaintextImportDone": "已导入 {{count}} 把钥匙到 1Password。"
+    "endpointVaultPending": "有 {{count}} 个 Pi 端点改动待写入 1Password",
+    "endpointWriteAction": "立即写入",
+    "endpointWriteDone": "已写入 {{count}} 个端点改动",
+    "plaintextImportDone": "已导入 {{count}} 把钥匙到 1Password。",
+    "endpointAudit": "端点对账",
+    "endpointAuditAction": "开始对账",
+    "endpointAuditProgress": "对账中…（{{done}}/{{total}}，会请求解锁）",
+    "endpointAuditNoVault": "设置中的保险箱不可用：请先检查 1Password 账户 / 保险箱配置。",
+    "endpointAuditSummary": "{{matched}}/{{checked}} 个供应商的本机端点与 1Password 一致。",
+    "endpointAuditMismatch": "不一致：",
+    "endpointAuditCacheMissing": "本机缺端点缓存：",
+    "endpointAuditVaultMissing": "1Password 中条目已不存在：",
+    "endpointAuditOrphan": "供应商已删除的残留引用：",
+    "endpointPreferVault": "以 1Password 为准",
+    "endpointPreferCache": "以本机缓存为准写回 1Password",
+    "endpointReconciled": "端点收敛完成：已处理 {{applied}} 个。",
+    "unlinkedPending": "有 {{count}} 个供应商来自其他设备，尚未关联 1Password 条目。",
+    "linkProvidersAction": "从 1Password 关联",
+    "linkProvidersDone": "已关联 {{rebuilt}} 个供应商（共 {{total}} 个条目）。"
   }
 }

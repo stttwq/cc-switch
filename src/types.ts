@@ -28,6 +28,9 @@ export interface Provider {
     apiKey: { present: boolean };
     baseUrl: string | null;
     extraEnv: string[];
+    // S4-3：1P 模式下 false = 未关联 1Password 条目（导入后由其他设备新增）。
+    // 凭据管理器模式不返回这个字段。
+    linked?: boolean;
   };
 }
 
@@ -294,6 +297,9 @@ export interface Settings {
   livePlaintextPending?: string[];
   // 1P 模式：删除供应商时 vault.delete 失败、1P 条目尚未归档的组键清单
   onepasswordOrphans?: string[];
+  // S4-3：导入后未关联 1P 条目的供应商清单（<app>/<id>）。与「缺钥匙」不同——
+  // 这些供应商在 1P 里本来就有钥匙，只是本机没关联上，不应要求用户重新输入。
+  onepasswordUnlinked?: string[];
 }
 
 export interface SessionMeta {

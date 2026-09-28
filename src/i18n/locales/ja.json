@@ -162,7 +162,9 @@
     "keyMissingHint": "キーは同期・エクスポートされません。このプロバイダーを編集して API キーを再入力してください。",
     "strictDelivery": "厳格配信",
     "strictDeliveryHint": "厳格配信モードがオンです：このプロバイダーのキーはユーザー環境変数に書き込まれません。cc-switch の「ターミナルを開く」から起動した CLI のみが取得できます。",
-    "endpoint": "エンドポイント"
+    "endpoint": "エンドポイント",
+    "keyUnlinked": "未リンク",
+    "keyUnlinkedHint": "このプロバイダは他デバイス由来です。キーは 1Password にありますが、この端末ではまだリンクされていません。バナーの「1Password からリンク」を使ってください。キーを再入力する必要はありません。"
   },
   "claudeCode": {},
   "codex": {
@@ -1861,9 +1863,24 @@
     "rebuildRefsDone": "{{rebuilt}} 件の参照を再構築しました（全 {{total}} 件）。",
     "plaintextPending": "インポート待ちの平文キーを検出しました：Pi 設定 {{pi}} 件、live ファイル {{live}} 件、保留中のインポート {{imports}} 件。インポートするまで 1Password には保存されません。",
     "plaintextImportAction": "1Password にインポート",
-        "endpointVaultPending": "{{count}} 件の Pi エンドポイント変更が 1Password への書き込み待ちです",
-        "endpointWriteAction": "今すぐ書き込む",
-        "endpointWriteDone": "{{count}} 件のエンドポイント変更を書き込みました",
-    "plaintextImportDone": "{{count}} 件のキーを 1Password にインポートしました。"
+    "endpointVaultPending": "{{count}} 件の Pi エンドポイント変更が 1Password への書き込み待ちです",
+    "endpointWriteAction": "今すぐ書き込む",
+    "endpointWriteDone": "{{count}} 件のエンドポイント変更を書き込みました",
+    "plaintextImportDone": "{{count}} 件のキーを 1Password にインポートしました。",
+    "endpointAudit": "エンドポイント照合",
+    "endpointAuditAction": "照合を実行",
+    "endpointAuditProgress": "照合中…（{{done}}/{{total}}、ロック解除を要求する場合があります）",
+    "endpointAuditNoVault": "設定の保管庫が使用できません：先に 1Password のアカウント / 保管箱の設定を確認してください。",
+    "endpointAuditSummary": "{{checked}} 件中 {{matched}} 件のローカルエンドポイントが 1Password と一致しています。",
+    "endpointAuditMismatch": "不一致：",
+    "endpointAuditCacheMissing": "ローカルにエンドポイントキャッシュがありません：",
+    "endpointAuditVaultMissing": "1Password に項目が存在しません：",
+    "endpointAuditOrphan": "削除済みプロバイダの古い参照：",
+    "endpointPreferVault": "1Password を優先",
+    "endpointPreferCache": "ローカルキャッシュを 1Password に書き戻す",
+    "endpointReconciled": "エンドポイント照合の適用が完了しました：{{applied}} 件。",
+    "unlinkedPending": "{{count}} 件のプロバイダが他デバイス由来で、まだ 1Password にリンクされていません。",
+    "linkProvidersAction": "1Password からリンク",
+    "linkProvidersDone": "{{rebuilt}} 件のプロバイダをリンクしました（{{total}} 項目を照合）。"
   }
 }

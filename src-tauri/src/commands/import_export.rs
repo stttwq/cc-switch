@@ -7,7 +7,8 @@ use tauri_plugin_dialog::DialogExt;
 use zeroize::Zeroizing;
 
 use crate::commands::sync_support::{
-    post_sync_warning_from_result, run_post_import_sync, success_payload_with_warning,
+    post_sync_warning_from_result, run_post_import_sync, snapshot_pi_providers,
+    success_payload_with_warning,
 };
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
@@ -197,8 +198,12 @@ async fn import_config_from_path(
                 // SQL restore replaces the `skills` table. Exclude local Skill
                 // mutations while the database image is being swapped.
                 let _skill_state_guard = skill_state_write_guard();
-                db.import_sql_with_report(&path_buf)?
+                // S4-7：导入前拍 Pi DB 快照，供后处理判断哪些供应商变了。
+                let pi_before = snapshot_pi_providers(&app_state_for_sync)?;
+                let outcome = db.import_sql_with_report(&path_buf)?;
+                (outcome, pi_before)
             };
+            let (outcome, pi_before) = outcome;
             let backup_id = outcome.backup_id;
             // S4-1：合并统计只记结构信息（计数），不含任何值（§9-13）。
             log::info!(
@@ -208,13 +213,23 @@ async fn import_config_from_path(
                 outcome.report.pruned_endpoints,
                 outcome.report.unlinked_providers.len()
             );
+            let adopted_refs = outcome.report.adopted_refs;
             app_state_for_sync.scrub_imported_plaintext()?;
-            let warning =
-                post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
+            let warning = post_sync_warning_from_result(Ok(run_post_import_sync(
+                &app_state_for_sync,
+                Some(&pi_before),
+            )));
             if let Some(msg) = warning.as_ref() {
                 log::warn!("[Import] post-import sync warning: {msg}");
             }
-            Ok::<_, AppError>(success_payload_with_warning(backup_id, warning))
+            // S4-3：后处理刚全量重建过「未关联」清单，直接读回给前端。
+            let unlinked_providers = crate::settings::get_onepassword_unlinked().len();
+            Ok::<_, AppError>(success_payload_with_warning(
+                backup_id,
+                warning,
+                adopted_refs,
+                unlinked_providers,
+            ))
         })
     })
     .await
@@ -294,11 +309,17 @@ pub async fn restore_db_backup(
         tauri::async_runtime::spawn_blocking(move || {
             let restored = {
                 let _skill_state_guard = skill_state_write_guard();
-                db.restore_from_backup(&filename)?
+                // S4-7：导入前拍 Pi DB 快照，供后处理判断哪些供应商变了。
+                let pi_before = snapshot_pi_providers(&app_state_for_sync)?;
+                let restored = db.restore_from_backup(&filename)?;
+                (restored, pi_before)
             };
+            let (restored, pi_before) = restored;
             app_state_for_sync.scrub_imported_plaintext()?;
-            let warning =
-                post_sync_warning_from_result(Ok(run_post_import_sync(&app_state_for_sync)));
+            let warning = post_sync_warning_from_result(Ok(run_post_import_sync(
+                &app_state_for_sync,
+                Some(&pi_before),
+            )));
             if let Some(message) = warning {
                 // This legacy command returns only the restored filename, so keep
                 // restore success and surface incomplete projection in the log.

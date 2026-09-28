@@ -162,7 +162,9 @@
     "keyMissingHint": "Keys are never synced or exported. Edit this provider to re-enter its API key.",
     "strictDelivery": "Strict delivery",
     "strictDeliveryHint": "Strict delivery mode is on: this provider's key is not written to user environment variables. Only CLIs launched from cc-switch's \"Open Terminal\" can read it.",
-    "endpoint": "Endpoint"
+    "endpoint": "Endpoint",
+    "keyUnlinked": "Not linked",
+    "keyUnlinkedHint": "This provider comes from another device. Its key is in 1Password but this machine has not linked it yet — use “Link from 1Password” in the banner; no need to re-enter the key."
   },
   "claudeCode": {},
   "codex": {
@@ -1861,9 +1863,24 @@
     "rebuildRefsDone": "Rebuilt {{rebuilt}} refs ({{total}} items total).",
     "plaintextPending": "Plaintext keys awaiting import: {{pi}} in Pi config, {{live}} in live files; plus {{imports}} deferred imports. The keys are not in 1Password until imported.",
     "plaintextImportAction": "Import to 1Password",
-        "endpointVaultPending": "{{count}} Pi endpoint change(s) pending write to 1Password",
-        "endpointWriteAction": "Write now",
-        "endpointWriteDone": "Wrote {{count}} endpoint change(s)",
-    "plaintextImportDone": "Imported {{count}} keys into 1Password."
+    "endpointVaultPending": "{{count}} Pi endpoint change(s) pending write to 1Password",
+    "endpointWriteAction": "Write now",
+    "endpointWriteDone": "Wrote {{count}} endpoint change(s)",
+    "plaintextImportDone": "Imported {{count}} keys into 1Password.",
+    "endpointAudit": "Endpoint audit",
+    "endpointAuditAction": "Run audit",
+    "endpointAuditProgress": "Auditing… ({{done}}/{{total}}, may request unlock)",
+    "endpointAuditNoVault": "The configured vault is unusable: check the 1Password account / vault settings first.",
+    "endpointAuditSummary": "{{matched}}/{{checked}} providers match 1Password.",
+    "endpointAuditMismatch": "Mismatched: ",
+    "endpointAuditCacheMissing": "Missing local endpoint cache: ",
+    "endpointAuditVaultMissing": "No longer in 1Password: ",
+    "endpointAuditOrphan": "Stale refs for deleted providers: ",
+    "endpointPreferVault": "Trust 1Password",
+    "endpointPreferCache": "Write local cache back to 1Password",
+    "endpointReconciled": "Endpoint reconcile done: {{applied}} applied.",
+    "unlinkedPending": "{{count}} providers come from another device and are not linked to 1Password yet.",
+    "linkProvidersAction": "Link from 1Password",
+    "linkProvidersDone": "Linked {{rebuilt}} providers ({{total}} items scanned)."
   }
 }

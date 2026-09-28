@@ -13,6 +13,7 @@
 //! - C 凭据缓存：provider_endpoints——1P 模式不导出（D-S1），凭据管理器照旧随同步；
 //! - D 引用：secret_refs——只带 `vault_id != ''` 的行（D-S3）。
 
+use crate::database::{lock_conn, Database};
 use crate::error::AppError;
 use rusqlite::Connection;
 
@@ -442,6 +443,26 @@ fn provider_exists(conn: &Connection, app: &str, provider_id: &str) -> Result<bo
         )
         .ok();
     Ok(exists.is_some())
+}
+
+/// S4-3：列出本机「未关联 1Password」的供应商，`<app>/<id>` 形式。
+///
+/// 供 `run_post_import_sync` 统一重建 `settings.onepassword_unlinked`——三条导入
+/// 路径（同步下载 / SQL 导入 / `.db` 恢复）都走那一个入口，所以这里也只需一处。
+/// 凭据管理器模式下恒为空：该模式没有「引用」概念，供应商缺钥匙就是真缺。
+pub(crate) fn list_unlinked_providers(
+    db: &Database,
+    local_backend: BackendKind,
+) -> Result<Vec<String>, AppError> {
+    let conn = lock_conn!(db.conn);
+    let policy = ImportPolicy {
+        local_backend,
+        local_vault: None,
+    };
+    Ok(collect_unlinked_providers(&conn, &policy)?
+        .into_iter()
+        .map(|(app, id)| format!("{app}/{id}"))
+        .collect())
 }
 
 /// S4-3：导入后仍无引用、且属于 1P 模式需要钥匙的供应商清单。

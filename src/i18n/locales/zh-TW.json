@@ -162,7 +162,9 @@
     "keyMissingHint": "金鑰不會同步或匯出，請編輯此供應商重新輸入 API 金鑰。",
     "strictDelivery": "嚴格投遞",
     "strictDeliveryHint": "嚴格投遞模式已開啟：此供應商的金鑰不會寫入使用者環境變數，只有自 cc-switch「開啟終端機」啟動的 CLI 才能取得。",
-    "endpoint": "介面位址"
+    "endpoint": "介面位址",
+    "keyUnlinked": "未關聯",
+    "keyUnlinkedHint": "該供應商來自其他裝置，鑰匙在 1Password 中，但本機尚未建立關聯。請在頂部提示中點「從 1Password 關聯」，不需要重新輸入密鑰。"
   },
   "claudeCode": {},
   "codex": {
@@ -1861,9 +1863,24 @@
     "rebuildRefsDone": "已重建 {{rebuilt}} 個引用（共 {{total}} 個條目）。",
     "plaintextPending": "偵測到待匯入的明文金鑰：Pi 設定 {{pi}} 個、live 檔案 {{live}} 個；另有 {{imports}} 個匯入暫留。匯入後 1Password 裡才會有這些金鑰。",
     "plaintextImportAction": "匯入到 1Password",
-        "endpointVaultPending": "有 {{count}} 個 Pi 端點變更待寫入 1Password",
-        "endpointWriteAction": "立即寫入",
-        "endpointWriteDone": "已寫入 {{count}} 個端點變更",
-    "plaintextImportDone": "已匯入 {{count}} 把金鑰到 1Password。"
+    "endpointVaultPending": "有 {{count}} 個 Pi 端點變更待寫入 1Password",
+    "endpointWriteAction": "立即寫入",
+    "endpointWriteDone": "已寫入 {{count}} 個端點變更",
+    "plaintextImportDone": "已匯入 {{count}} 把金鑰到 1Password。",
+    "endpointAudit": "端點對帳",
+    "endpointAuditAction": "開始對帳",
+    "endpointAuditProgress": "對帳中…（{{done}}/{{total}}，會請求解鎖）",
+    "endpointAuditNoVault": "設定中的保管庫無法使用：請先檢查 1Password 帳戶 / 保管庫設定。",
+    "endpointAuditSummary": "{{matched}}/{{checked}} 個供應商的本機端點與 1Password 一致。",
+    "endpointAuditMismatch": "不一致：",
+    "endpointAuditCacheMissing": "本機缺少端點快取：",
+    "endpointAuditVaultMissing": "1Password 中項目已不存在：",
+    "endpointAuditOrphan": "供應商已刪除的殘留參照：",
+    "endpointPreferVault": "以 1Password 為準",
+    "endpointPreferCache": "以本機快取為準寫回 1Password",
+    "endpointReconciled": "端點收斂完成：已處理 {{applied}} 個。",
+    "unlinkedPending": "有 {{count}} 個供應商來自其他裝置，尚未關聯 1Password 項目。",
+    "linkProvidersAction": "從 1Password 關聯",
+    "linkProvidersDone": "已關聯 {{rebuilt}} 個供應商（共 {{total}} 個項目）。"
   }
 }

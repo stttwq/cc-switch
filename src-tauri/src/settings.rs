@@ -531,6 +531,14 @@ pub struct AppSettings {
     /// 条目由「清理孤儿凭据」动作稍后归档；清理成功后出队。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub onepassword_orphans: Option<Vec<String>>,
+    /// S4-3（D-S3）：导入后仍无 `secret_refs` 引用、且属于 1P 模式需要钥匙的
+    /// `<app>/<id>` 清单（不同保险箱、或远端就没带引用行）。存本机设置（不随云同步）。
+    ///
+    /// 为什么单独一个状态：「缺钥匙」会误导用户去重新输入钥匙，导致 1P 里出现重复
+    /// 条目；「未关联」准确说明了状态，并给出不需要重新输入的修复路径。
+    /// 每次导入后全量重建；「从 1Password 关联」成功后随重建出队。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub onepassword_unlinked: Option<Vec<String>>,
 
     // ===== Codex session history unification (Phase 2A preserves existing fields) =====
     /// Run official Codex providers under the shared "custom" model_provider id
@@ -607,6 +615,7 @@ impl Default for AppSettings {
             pi_endpoint_vault_pending: None,
             live_plaintext_pending: None,
             onepassword_orphans: None,
+            onepassword_unlinked: None,
         }
     }
 }
@@ -1290,6 +1299,22 @@ pub fn set_secrets_import_pending(items: Vec<String>) -> Result<(), AppError> {
     let items = if items.is_empty() { None } else { Some(items) };
     mutate_settings(|settings| {
         settings.secrets_import_pending = items;
+    })
+}
+
+/// S4-3：读「导入后未关联 1Password 的供应商」清单（`<app>/<id>`）。
+pub fn get_onepassword_unlinked() -> Vec<String> {
+    get_settings().onepassword_unlinked.unwrap_or_default()
+}
+
+/// S4-3：全量重建「未关联」清单。空清单 = 清除标记。
+///
+/// **全量重建语义**：调用方必须在每次导入后重新计算整个清单，而不是增量增删——
+/// 供应商可能在别处被删掉或已关联，保留陈旧条目会让横幅一直挂着。
+pub fn set_onepassword_unlinked(items: Vec<String>) -> Result<(), AppError> {
+    let items = if items.is_empty() { None } else { Some(items) };
+    mutate_settings(|settings| {
+        settings.onepassword_unlinked = items;
     })
 }
 
