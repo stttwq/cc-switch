@@ -123,7 +123,11 @@ pub async fn s3_test_connection(
 }
 
 #[tauri::command]
-pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String> {
+pub async fn s3_sync_upload(
+    state: State<'_, AppState>,
+    // S5-1（P1-3）：远端有本机未下载的更新时拒绝上传；「强制覆盖远端」后带 force 重试。
+    force: Option<bool>,
+) -> Result<Value, String> {
     let db = state.db.clone();
     let creds = fetch_creds_blocking(&state.vault).await?;
     let kek_cache = state.sync_kek.clone();
@@ -134,6 +138,7 @@ pub async fn s3_sync_upload(state: State<'_, AppState>) -> Result<Value, String>
         &creds,
         &mut settings,
         &kek_cache,
+        force.unwrap_or(false),
     ))
     .await;
     map_sync_result(result, |error| {

@@ -437,7 +437,13 @@
         "legacyNotice": "Legacy remote data was detected. This upload will write to the new v2/db-v6 path and will not overwrite the legacy path.",
         "confirm": "Confirm Upload"
       },
-      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?"
+      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?",
+      "remoteAhead": {
+        "title": "Remote has undownloaded updates",
+        "message": "The remote snapshot was updated by another device and these changes have not been downloaded yet. Overwriting would lose the other device's configuration; download the latest snapshot first.",
+        "downloadFirst": "Download first (recommended)",
+        "forceUpload": "Force overwrite remote"
+      }
     },
     "syncType": {
       "label": "Sync Type",
@@ -540,7 +546,13 @@
         "warning": "This will overwrite existing sync data at the S3 path",
         "confirm": "Confirm Upload"
       },
-      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?"
+      "rollbackConfirm": "The remote snapshot (#{{remoteSeq}}) is older than the one already applied on this device (#{{lastApplied}}), which may mean the server was rolled back. Apply it anyway and overwrite local data?",
+      "remoteAhead": {
+        "title": "Remote has undownloaded updates",
+        "message": "The remote snapshot was updated by another device and these changes have not been downloaded yet. Overwriting would lose the other device's configuration; download the latest snapshot first.",
+        "downloadFirst": "Download first (recommended)",
+        "forceUpload": "Force overwrite remote"
+      }
     },
     "autoReload": "Data refreshed",
     "languageOptionChinese": "简体中文",

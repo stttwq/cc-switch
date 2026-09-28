@@ -3,11 +3,12 @@ use std::sync::PoisonError;
 
 use thiserror::Error;
 
-/// `Localized` 错误的 Display 渲染。`vault_*` key（1Password 后端错误分类）输出
-/// JSON 字符串，保证 `to_string()` / 序列化 / `format!` 包装等所有路径一致，
-/// 前端可解析出 code；其余 key 维持原有的 `{zh} ({en})` 双语格式。
+/// `Localized` 错误的 Display 渲染。`vault_*` 错误（1Password 后端错误分类）与
+/// `sync.remote_ahead`（S5-1 上传冲突）输出 JSON 字符串，保证 `to_string()` /
+/// 序列化 / `format!` 包装等所有路径一致，前端可解析出 code 并分支处理；
+/// 其余 key 维持原有的 `{zh} ({en})` 双语格式。
 fn render_localized(key: &str, zh: &str, en: &str) -> String {
-    if key.starts_with("vault_") {
+    if key.starts_with("vault_") || key == "sync.remote_ahead" {
         serde_json::json!({ "code": key, "message": zh, "messageEn": en }).to_string()
     } else {
         format!("{zh} ({en})")

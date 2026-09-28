@@ -102,6 +102,9 @@ async fn run_auto_sync_upload(
         &creds,
         &mut sync_settings,
         &kek_cache,
+        // S5-1（P1-3）：自动上传永不强制覆盖远端；遇到 sync.remote_ahead 时
+        // 记录错误状态并通知 UI，由用户手动处置。
+        false,
     ))
     .await;
     match result {

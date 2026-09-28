@@ -437,7 +437,13 @@
         "legacyNotice": "檢測到舊版雲端路徑資料。本次上傳將寫入新路徑 v2/db-v6，不會覆寫舊路徑。",
         "confirm": "確認上傳"
       },
-      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？"
+      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？",
+      "remoteAhead": {
+        "title": "遠端有未下載的更新",
+        "message": "遠端快照已被其他裝置更新，而本機尚未下載這些變更。直接覆寫會遺失其他裝置的設定，建議先下載最新快照。",
+        "downloadFirst": "先下載（建議）",
+        "forceUpload": "強制覆寫遠端"
+      }
     },
     "syncType": {
       "label": "同步方式",
@@ -540,7 +546,13 @@
         "warning": "將覆寫該 S3 路徑下已有的同步資料",
         "confirm": "確認上傳"
       },
-      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？"
+      "rollbackConfirm": "遠端快照（第 {{remoteSeq}} 號）比本機已套用的（第 {{lastApplied}} 號）更舊，可能是伺服器發生了回滾。仍要套用並覆寫本機資料嗎？",
+      "remoteAhead": {
+        "title": "遠端有未下載的更新",
+        "message": "遠端快照已被其他裝置更新，而本機尚未下載這些變更。直接覆寫會遺失其他裝置的設定，建議先下載最新快照。",
+        "downloadFirst": "先下載（建議）",
+        "forceUpload": "強制覆寫遠端"
+      }
     },
     "autoReload": "資料已重新整理",
     "languageOptionChinese": "简体中文",

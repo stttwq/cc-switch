@@ -19,7 +19,8 @@ use crate::settings::{update_webdav_sync_status, WebDavSyncSettings, WebDavSyncS
 pub(crate) use super::sync_protocol::run_with_sync_lock;
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, e2e_build_upload, e2e_describe_remote,
-    e2e_downgrade_blocked_error, e2e_open_download, effective_db_compat_version, localized,
+    e2e_downgrade_blocked_error, e2e_open_download, effective_db_compat_version,
+    ensure_remote_manifest_not_ahead, ensure_remote_seq_not_ahead, localized,
     persist_sync_success_best_effort, require_sync_passphrase, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     E2eDownload, RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES,
@@ -56,21 +57,39 @@ pub async fn check_connection(
 }
 
 /// Upload local snapshot (db + skills) to remote.
+///
+/// S5-1（P1-3）：`force = false` 时先做「本机状态过期」检查（v2 比对远端
+/// manifest 哈希），远端有本机没见过的更新则拒绝上传，由前端让用户选择
+/// 先下载或强制覆盖。自动上传恒为 `false`。
 pub async fn upload(
     db: &crate::database::Database,
     secrets: &SyncCredentials,
     settings: &mut WebDavSyncSettings,
     kek_cache: &crate::store::SyncKekCache,
+    force: bool,
 ) -> Result<Value, AppError> {
     settings.validate()?;
     let auth = auth_for(secrets, settings, None).await?;
     if settings.e2e_enabled {
-        return upload_e2e(db, secrets, settings, &auth, kek_cache).await;
+        return upload_e2e(db, secrets, settings, &auth, kek_cache, force).await;
     }
     let dir_segs = remote_dir_segments(settings, RemoteLayout::Current);
     ensure_remote_directories(&settings.base_url, &dir_segs, &auth).await?;
 
     let snapshot = build_local_snapshot(db)?;
+
+    // S5-1（P1-3）：上传前核对远端是否已被其他设备更新（current / legacy 两个
+    // 布局都可能持有旧快照，与下载的查找顺序一致）。
+    if !force {
+        if let Some(remote) = find_remote_snapshot(settings, &auth).await? {
+            let remote_hash = sha256_hex(&remote.manifest_bytes);
+            ensure_remote_manifest_not_ahead(
+                Some(&remote_hash),
+                settings.status.last_remote_manifest_hash.as_deref(),
+                &snapshot.manifest_hash,
+            )?;
+        }
+    }
 
     // Upload order: artifacts first, manifest last (best-effort consistency)
     let db_url = remote_file_url(settings, RemoteLayout::Current, REMOTE_DB_SQL)?;
@@ -113,6 +132,7 @@ async fn upload_e2e(
     settings: &mut WebDavSyncSettings,
     auth: &WebDavAuth,
     kek_cache: &crate::store::SyncKekCache,
+    force: bool,
 ) -> Result<Value, AppError> {
     use crate::services::sync_e2e::{DB_SQL_ENC, SKILLS_ZIP_ENC};
     let dir_segs = remote_dir_segments(settings, RemoteLayout::E2e);
@@ -124,6 +144,20 @@ async fn upload_e2e(
             Some((bytes, etag)) => (Some(bytes), etag),
             None => (None, None),
         };
+
+    // S5-1（P1-3）：If-Match 只防「上传窗口内」的竞态；这里再比对远端 seq，
+    // 防住「本机状态过期」——远端序号比本机已应用/已上传的都新时拒绝上传。
+    if !force {
+        let remote_seq = remote_manifest
+            .as_deref()
+            .and_then(|bytes| crate::services::sync_e2e::parse_outer_manifest(bytes).ok())
+            .map(|outer| outer.seq);
+        ensure_remote_seq_not_ahead(
+            remote_seq,
+            settings.status.last_applied_seq.unwrap_or(0),
+            settings.status.last_uploaded_seq.unwrap_or(0),
+        )?;
+    }
 
     let passphrase = require_sync_passphrase(secrets).await?;
     let upload = e2e_build_upload(

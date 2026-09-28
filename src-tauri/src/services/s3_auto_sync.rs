@@ -96,9 +96,16 @@ async fn run_auto_sync_upload(
     let state = crate::store::get_app_state(app)?;
     let creds = crate::secrets::fetch_sync_credentials(&state.vault)?;
     let kek_cache = state.sync_kek.clone();
-    let result =
-        s3_sync::run_with_sync_lock(s3_sync::upload(db, &creds, &mut sync_settings, &kek_cache))
-            .await;
+    let result = s3_sync::run_with_sync_lock(s3_sync::upload(
+        db,
+        &creds,
+        &mut sync_settings,
+        &kek_cache,
+        // S5-1（P1-3）：自动上传永不强制覆盖远端；遇到 sync.remote_ahead 时
+        // 记录错误状态并通知 UI，由用户手动处置。
+        false,
+    ))
+    .await;
     match result {
         Ok(_) => {
             emit_auto_sync_status_updated(app, "success", None);

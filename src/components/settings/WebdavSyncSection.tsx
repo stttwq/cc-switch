@@ -15,7 +15,7 @@ import type { LucideIcon } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import { extractErrorMessage } from "@/utils/errorUtils";
+import { extractErrorMessage, parseRemoteAheadError } from "@/utils/errorUtils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
@@ -323,6 +323,10 @@ export function WebdavSyncSection({
   const [dialogType, setDialogType] = useState<DialogType>(null);
   const [remoteInfo, setRemoteInfo] = useState<RemoteSnapshotInfo | null>(null);
   const [showAutoSyncConfirm, setShowAutoSyncConfirm] = useState(false);
+  // S5-1：上传时后端报 sync.remote_ahead（远端有本机未下载的更新）时的处置框。
+  const [remoteAheadDialog, setRemoteAheadDialog] = useState<
+    "webdav" | "s3" | null
+  >(null);
 
   const closeDialog = useCallback(() => {
     setDialogType(null);
@@ -580,6 +584,31 @@ export function WebdavSyncSection({
     setActionState("idle");
   }, [dirty, t]);
 
+  /** S5-1：执行 WebDAV 上传；远端有本机未下载的更新（remote_ahead）时弹出处置框。 */
+  const runWebdavUpload = useCallback(
+    async (force: boolean) => {
+      setActionState("uploading");
+      try {
+        await settingsApi.webdavSyncUpload(force || undefined);
+        toast.success(t("settings.webdavSync.uploadSuccess"));
+        await queryClient.invalidateQueries();
+      } catch (error) {
+        if (parseRemoteAheadError(error)) {
+          setRemoteAheadDialog("webdav");
+          return;
+        }
+        toast.error(
+          t("settings.webdavSync.uploadFailed", {
+            error: extractErrorMessage(error),
+          }),
+        );
+      } finally {
+        setActionState("idle");
+      }
+    },
+    [queryClient, t],
+  );
+
   /** Actually perform the upload after user confirms. */
   const handleUploadConfirm = useCallback(async () => {
     if (dirty) {
@@ -587,21 +616,8 @@ export function WebdavSyncSection({
       return;
     }
     closeDialog();
-    setActionState("uploading");
-    try {
-      await settingsApi.webdavSyncUpload();
-      toast.success(t("settings.webdavSync.uploadSuccess"));
-      await queryClient.invalidateQueries();
-    } catch (error) {
-      toast.error(
-        t("settings.webdavSync.uploadFailed", {
-          error: extractErrorMessage(error),
-        }),
-      );
-    } finally {
-      setActionState("idle");
-    }
-  }, [closeDialog, dirty, queryClient, t]);
+    await runWebdavUpload(false);
+  }, [closeDialog, dirty, runWebdavUpload, t]);
 
   /** Fetch remote info, then open download confirmation dialog. */
   const handleDownloadClick = useCallback(async () => {
@@ -829,27 +845,40 @@ export function WebdavSyncSection({
     setS3ActionState("idle");
   }, [s3Dirty, t]);
 
+  /** S5-1：执行 S3 上传；远端有本机未下载的更新（remote_ahead）时弹出处置框。 */
+  const runS3Upload = useCallback(
+    async (force: boolean) => {
+      setS3ActionState("uploading");
+      try {
+        await settingsApi.s3SyncUpload(force || undefined);
+        toast.success(t("settings.s3Sync.uploadSuccess"));
+        await queryClient.invalidateQueries();
+      } catch (error) {
+        if (parseRemoteAheadError(error)) {
+          setRemoteAheadDialog("s3");
+          return;
+        }
+        toast.error(
+          t("settings.s3Sync.uploadFailed", {
+            error: extractErrorMessage(error),
+          }),
+        );
+      } finally {
+        setS3ActionState("idle");
+      }
+    },
+    [queryClient, t],
+  );
+
+  /** Actually perform the S3 upload after user confirms. */
   const handleS3UploadConfirm = useCallback(async () => {
     if (s3Dirty) {
       toast.error(t("settings.s3Sync.unsavedChanges"));
       return;
     }
     closeS3Dialog();
-    setS3ActionState("uploading");
-    try {
-      await settingsApi.s3SyncUpload();
-      toast.success(t("settings.s3Sync.uploadSuccess"));
-      await queryClient.invalidateQueries();
-    } catch (error) {
-      toast.error(
-        t("settings.s3Sync.uploadFailed", {
-          error: extractErrorMessage(error),
-        }),
-      );
-    } finally {
-      setS3ActionState("idle");
-    }
-  }, [closeS3Dialog, s3Dirty, queryClient, t]);
+    await runS3Upload(false);
+  }, [closeS3Dialog, runS3Upload, s3Dirty, t]);
 
   const handleS3DownloadClick = useCallback(async () => {
     if (s3Dirty) {
@@ -924,6 +953,30 @@ export function WebdavSyncSection({
       setS3ActionState("idle");
     }
   }, [closeS3Dialog, s3Dirty, queryClient, t]);
+
+  // ─── S5-1 remote_ahead 处置框 ─────────────────────────────
+
+  /** 「先下载（推荐）」：关闭冲突框，进入常规下载确认流程。 */
+  const handleRemoteAheadDownloadFirst = useCallback(() => {
+    const which = remoteAheadDialog;
+    setRemoteAheadDialog(null);
+    if (which === "s3") {
+      void handleS3DownloadClick();
+    } else {
+      void handleDownloadClick();
+    }
+  }, [handleDownloadClick, handleS3DownloadClick, remoteAheadDialog]);
+
+  /** 「强制覆盖远端」：带 force 重试上传。 */
+  const handleRemoteAheadForce = useCallback(async () => {
+    const which = remoteAheadDialog;
+    setRemoteAheadDialog(null);
+    if (which === "s3") {
+      await runS3Upload(true);
+    } else {
+      await runWebdavUpload(true);
+    }
+  }, [remoteAheadDialog, runS3Upload, runWebdavUpload]);
 
   // ─── Sync type switching with mutual exclusion ─────────────
 
@@ -1922,6 +1975,52 @@ export function WebdavSyncSection({
               onClick={handleMutualExclusionConfirm}
             >
               {t("common.confirm")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ─── S5-1 remote_ahead 处置框（WebDAV / S3 共用）──── */}
+      <Dialog
+        open={remoteAheadDialog !== null}
+        onOpenChange={(open) => {
+          if (!open) setRemoteAheadDialog(null);
+        }}
+      >
+        <DialogContent className="max-w-sm" zIndex="alert">
+          <DialogHeader className="space-y-3 border-b-0 bg-transparent pb-0">
+            <DialogTitle className="flex items-center gap-2 text-lg font-semibold">
+              <AlertTriangle className="h-5 w-5 text-destructive" />
+              {t(
+                `settings.${remoteAheadDialog === "s3" ? "s3Sync" : "webdavSync"}.remoteAhead.title`,
+              )}
+            </DialogTitle>
+            <DialogDescription asChild>
+              <div className="space-y-3 text-sm leading-relaxed">
+                <p>
+                  {t(
+                    `settings.${remoteAheadDialog === "s3" ? "s3Sync" : "webdavSync"}.remoteAhead.message`,
+                  )}
+                </p>
+              </div>
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex flex-col gap-2 border-t-0 bg-transparent pt-2 sm:flex-row sm:justify-end">
+            <Button
+              variant="outline"
+              onClick={() => setRemoteAheadDialog(null)}
+            >
+              {t("common.cancel")}
+            </Button>
+            <Button variant="outline" onClick={handleRemoteAheadForce}>
+              {t(
+                `settings.${remoteAheadDialog === "s3" ? "s3Sync" : "webdavSync"}.remoteAhead.forceUpload`,
+              )}
+            </Button>
+            <Button onClick={handleRemoteAheadDownloadFirst}>
+              {t(
+                `settings.${remoteAheadDialog === "s3" ? "s3Sync" : "webdavSync"}.remoteAhead.downloadFirst`,
+              )}
             </Button>
           </DialogFooter>
         </DialogContent>

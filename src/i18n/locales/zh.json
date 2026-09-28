@@ -437,7 +437,13 @@
         "legacyNotice": "检测到旧版云端路径数据。本次上传将写入新路径 v2/db-v6，不会覆盖旧路径。",
         "confirm": "确认上传"
       },
-      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？"
+      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？",
+      "remoteAhead": {
+        "title": "远端有未下载的更新",
+        "message": "远端快照已被其他设备更新，而本机尚未下载这些改动。直接覆盖会丢失其他设备的配置，建议先下载最新快照。",
+        "downloadFirst": "先下载（推荐）",
+        "forceUpload": "强制覆盖远端"
+      }
     },
     "syncType": {
       "label": "同步方式",
@@ -540,7 +546,13 @@
         "warning": "将覆盖该 S3 路径下已有的同步数据",
         "confirm": "确认上传"
       },
-      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？"
+      "rollbackConfirm": "远端快照（第 {{remoteSeq}} 号）比本机已应用的（第 {{lastApplied}} 号）更旧，可能是服务器发生了回滚。仍要应用并覆盖本地数据吗？",
+      "remoteAhead": {
+        "title": "远端有未下载的更新",
+        "message": "远端快照已被其他设备更新，而本机尚未下载这些改动。直接覆盖会丢失其他设备的配置，建议先下载最新快照。",
+        "downloadFirst": "先下载（推荐）",
+        "forceUpload": "强制覆盖远端"
+      }
     },
     "autoReload": "数据已刷新",
     "languageOptionChinese": "简体中文",

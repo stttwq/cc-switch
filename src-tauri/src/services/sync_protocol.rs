@@ -57,6 +57,54 @@ where
     operation.await
 }
 
+// ─── Upload staleness guard（S5-1 / P1-3）────────────────────
+
+/// S5-1：远端存在本机尚未见过的更新时拒绝上传。原实现只防「上传窗口内」的
+/// 竞态（If-Match / HEAD 比较），防不住「本机状态过期」——设备 B 没下载 A 的
+/// 新快照就上传会直接覆盖掉 A 的配置。同步只带共享配置后，这类覆盖等于丢
+/// 用户的模型与设置，所以「最后写入者胜」必须改为显式冲突（`sync.remote_ahead`）。
+pub(crate) fn remote_ahead_error() -> AppError {
+    localized(
+        "sync.remote_ahead",
+        "远端有本机尚未下载的更新，请先下载最新快照再上传（直接覆盖会丢失其他设备的改动）",
+        "The remote has updates not yet downloaded on this device; download the latest snapshot before uploading (overwriting would lose changes from the other device)",
+    )
+}
+
+/// v3：比对远端外层 manifest 的 `seq` 与本机已记录的进度。远端序号大于
+/// `max(本机已应用, 本机已上传)` 即视为本机状态过期。远端不存在（首次上传）放行。
+pub(crate) fn ensure_remote_seq_not_ahead(
+    remote_seq: Option<u64>,
+    last_applied_seq: u64,
+    last_uploaded_seq: u64,
+) -> Result<(), AppError> {
+    let Some(remote_seq) = remote_seq else {
+        return Ok(());
+    };
+    if remote_seq > last_applied_seq.max(last_uploaded_seq) {
+        return Err(remote_ahead_error());
+    }
+    Ok(())
+}
+
+/// v2：比对远端 manifest 哈希。既不等于本机上次同步记录的哈希、也不等于本次
+/// 将要上传的哈希（内容相同属幂等上传），即视为本机状态过期。远端不存在放行。
+pub(crate) fn ensure_remote_manifest_not_ahead(
+    remote_manifest_hash: Option<&str>,
+    last_recorded_hash: Option<&str>,
+    local_manifest_hash: &str,
+) -> Result<(), AppError> {
+    let Some(remote_manifest_hash) = remote_manifest_hash else {
+        return Ok(());
+    };
+    if Some(remote_manifest_hash) != last_recorded_hash
+        && remote_manifest_hash != local_manifest_hash
+    {
+        return Err(remote_ahead_error());
+    }
+    Ok(())
+}
+
 // ─── Auto-sync echo suppression（S5-2 / P1-4）────────────────
 
 /// 下载 / 导入及后处理期间的自动同步回声抑制。
@@ -792,6 +840,41 @@ mod tests {
         assert!(s3_lock.try_lock().is_err());
         drop(guard);
         assert!(s3_lock.try_lock().is_ok());
+    }
+
+    #[test]
+    fn remote_seq_guard_blocks_stale_local_state() {
+        // S5-1（§8.1-4）：远端 seq 比本机已应用/已上传的都新 → remote_ahead。
+        assert!(ensure_remote_seq_not_ahead(Some(9), 5, 5).is_err());
+        // 刚下载完（applied == remote）与刚上传完（uploaded == remote）都放行。
+        assert!(ensure_remote_seq_not_ahead(Some(9), 9, 0).is_ok());
+        assert!(ensure_remote_seq_not_ahead(Some(9), 0, 9).is_ok());
+        // 本机领先远端（正常回传）放行。
+        assert!(ensure_remote_seq_not_ahead(Some(3), 9, 9).is_ok());
+        // 首次上传（远端无 manifest）放行（§9-10）。
+        assert!(ensure_remote_seq_not_ahead(None, 0, 0).is_ok());
+    }
+
+    #[test]
+    fn remote_manifest_hash_guard_blocks_stale_local_state() {
+        // S5-1（§8.1-4）：远端哈希既不是本机记录的、也不是本机将要上传的 → remote_ahead。
+        assert!(
+            ensure_remote_manifest_not_ahead(Some("hash-b"), Some("hash-a"), "hash-local").is_err()
+        );
+        // 从未同步过（无记录）但远端已有数据 → 本机状态过期，同样拦截。
+        assert!(ensure_remote_manifest_not_ahead(Some("hash-b"), None, "hash-local").is_err());
+        // 刚下载 / 刚上传（记录 == 远端）放行。
+        assert!(
+            ensure_remote_manifest_not_ahead(Some("hash-a"), Some("hash-a"), "hash-local").is_ok()
+        );
+        // 远端与本机将要上传的内容相同（幂等重传）放行。
+        assert!(ensure_remote_manifest_not_ahead(Some("hash-a"), None, "hash-a").is_ok());
+        // 首次上传（远端为空）放行。
+        assert!(ensure_remote_manifest_not_ahead(None, None, "hash-local").is_ok());
+        // 错误必须带可解析的 sync.remote_ahead 错误码（前端冲突弹框依赖）。
+        let err = ensure_remote_manifest_not_ahead(Some("x"), Some("y"), "z")
+            .expect_err("stale upload must fail");
+        assert!(err.to_string().contains("sync.remote_ahead"));
     }
 
     #[test]

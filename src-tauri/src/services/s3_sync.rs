@@ -16,7 +16,8 @@ use crate::settings::{update_s3_sync_status, S3SyncSettings, WebDavSyncStatus};
 pub(crate) use super::sync_protocol::run_with_sync_lock;
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, e2e_build_upload, e2e_describe_remote,
-    e2e_downgrade_blocked_error, e2e_open_download, e2e_remote_changed_error, localized,
+    e2e_downgrade_blocked_error, e2e_open_download, e2e_remote_changed_error,
+    ensure_remote_manifest_not_ahead, ensure_remote_seq_not_ahead, localized,
     persist_sync_success_best_effort, require_sync_passphrase, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     E2eDownload, RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES,
@@ -42,19 +43,42 @@ pub async fn check_connection(
 }
 
 /// Upload local snapshot (db + skills) to remote S3.
+///
+/// S5-1（P1-3）：`force = false` 时先做「本机状态过期」检查（v2 比对远端
+/// manifest 哈希），远端有本机没见过的更新则拒绝上传。自动上传恒为 `false`。
 pub async fn upload(
     db: &crate::database::Database,
     secrets: &SyncCredentials,
     settings: &mut S3SyncSettings,
     kek_cache: &crate::store::SyncKekCache,
+    force: bool,
 ) -> Result<Value, AppError> {
     settings.validate()?;
     let creds = creds_for(secrets, settings, None).await?;
     if settings.e2e_enabled {
-        return upload_e2e(db, secrets, settings, &creds, kek_cache).await;
+        return upload_e2e(db, secrets, settings, &creds, kek_cache, force).await;
     }
 
     let snapshot = build_local_snapshot(db)?;
+
+    // S5-1（P1-3）：S3 没有条件写，上传前的过期检查是唯一防线（首次上传时
+    // 远端 manifest 不存在，视为首次，放行）。
+    if !force {
+        if let Some((remote_manifest_bytes, _)) = s3::get_object(
+            &creds,
+            &s3_key(settings, REMOTE_MANIFEST),
+            MAX_MANIFEST_BYTES,
+        )
+        .await?
+        {
+            let remote_hash = sha256_hex(&remote_manifest_bytes);
+            ensure_remote_manifest_not_ahead(
+                Some(&remote_hash),
+                settings.status.last_remote_manifest_hash.as_deref(),
+                &snapshot.manifest_hash,
+            )?;
+        }
+    }
 
     // Upload order: artifacts first, manifest last (best-effort consistency)
     let db_key = s3_key(settings, REMOTE_DB_SQL);
@@ -96,6 +120,7 @@ async fn upload_e2e(
     settings: &mut S3SyncSettings,
     creds: &S3Credentials,
     kek_cache: &crate::store::SyncKekCache,
+    force: bool,
 ) -> Result<Value, AppError> {
     use crate::services::sync_e2e::{DB_SQL_ENC, SKILLS_ZIP_ENC};
     let manifest_key = s3_key_e2e(settings, REMOTE_MANIFEST);
@@ -104,6 +129,19 @@ async fn upload_e2e(
             Some((bytes, etag)) => (Some(bytes), etag),
             None => (None, None),
         };
+
+    // S5-1（P1-3）：远端 seq 比本机已应用/已上传的都新 → 本机状态过期，拒绝上传。
+    if !force {
+        let remote_seq = remote_manifest
+            .as_deref()
+            .and_then(|bytes| crate::services::sync_e2e::parse_outer_manifest(bytes).ok())
+            .map(|outer| outer.seq);
+        ensure_remote_seq_not_ahead(
+            remote_seq,
+            settings.status.last_applied_seq.unwrap_or(0),
+            settings.status.last_uploaded_seq.unwrap_or(0),
+        )?;
+    }
 
     let passphrase = require_sync_passphrase(secrets).await?;
     let upload = e2e_build_upload(

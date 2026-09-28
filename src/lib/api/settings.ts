@@ -195,8 +195,12 @@ export const settingsApi = {
     });
   },
 
-  async webdavSyncUpload(): Promise<WebDavSyncResult> {
-    return await invoke("webdav_sync_upload");
+  // S5-1：force=true 时跳过「远端有未下载更新」检查，仅在用户于冲突弹框中
+  // 显式选择「强制覆盖远端」后由调用方传入。
+  async webdavSyncUpload(force?: boolean): Promise<WebDavSyncResult> {
+    return await invoke("webdav_sync_upload", {
+      ...(force ? { force: true } : {}),
+    });
   },
 
   async webdavSyncDownload(allowRollback?: boolean): Promise<WebDavSyncResult> {
@@ -235,8 +239,11 @@ export const settingsApi = {
     });
   },
 
-  async s3SyncUpload(): Promise<WebDavSyncResult> {
-    return await invoke("s3_sync_upload");
+  // S5-1：同 WebDAV——force=true 仅在用户显式选择「强制覆盖远端」后传入。
+  async s3SyncUpload(force?: boolean): Promise<WebDavSyncResult> {
+    return await invoke("s3_sync_upload", {
+      ...(force ? { force: true } : {}),
+    });
   },
 
   async s3SyncDownload(allowRollback?: boolean): Promise<WebDavSyncResult> {

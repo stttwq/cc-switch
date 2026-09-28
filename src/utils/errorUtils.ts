@@ -74,6 +74,38 @@ export const extractErrorMessage = (error: unknown): string => {
   return raw;
 };
 
+/** S5-1：后端 sync.remote_ahead 上传冲突（远端有本机未下载的更新）。
+ * 与 vault_* 相同的 JSON-in-string 约定，前端据此弹「先下载 / 强制覆盖」冲突框。 */
+export interface RemoteAheadErrorInfo {
+  code: string;
+  message: string;
+}
+
+/** 从错误对象里解析 sync.remote_ahead 结构化错误；未命中返回 null。 */
+export const parseRemoteAheadError = (
+  error: unknown,
+): RemoteAheadErrorInfo | null => {
+  if (!error) return null;
+  const raw = extractRawErrorMessage(error);
+  if (!raw.includes('"sync.remote_ahead"')) return null;
+  try {
+    const parsed = JSON.parse(raw) as {
+      code?: string;
+      message?: string;
+      messageEn?: string;
+    };
+    if (parsed?.code === "sync.remote_ahead") {
+      return {
+        code: parsed.code,
+        message: parsed.messageEn || parsed.message || "",
+      };
+    }
+  } catch {
+    // 非 JSON（或被包装后截断），按未命中处理
+  }
+  return null;
+};
+
 const extractRawErrorMessage = (error: unknown): string => {
   if (!error) return "";
   if (typeof error === "string") {
