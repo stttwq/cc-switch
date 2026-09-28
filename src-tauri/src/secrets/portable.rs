@@ -327,6 +327,7 @@ pub fn import_to_vault(
                 id,
                 &merged.to_provider_secrets(),
                 false,
+                None,
             )?;
         }
     }

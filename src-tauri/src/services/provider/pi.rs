@@ -514,7 +514,7 @@ fn sync_pi_endpoint_cache_without_vault(
             base_url: Some(url.to_owned().into()),
             ..Default::default()
         };
-        super::store_provider_bundle(state, &AppType::Pi, provider_id, &secrets, true)?;
+        super::store_provider_bundle(state, &AppType::Pi, provider_id, &secrets, true, None)?;
     }
     Ok(())
 }
@@ -561,6 +561,7 @@ fn strip_and_store_pi_secrets(
         &provider.id,
         &extracted.secrets,
         merge_existing,
+        Some(&provider.name),
     )
 }
 
@@ -577,7 +578,7 @@ fn persist_pi_sync_secrets(
     provider_id: &str,
     secrets: &crate::secrets::ProviderSecrets,
 ) -> Result<(), AppError> {
-    super::store_provider_bundle(state, &AppType::Pi, provider_id, secrets, true)
+    super::store_provider_bundle(state, &AppType::Pi, provider_id, secrets, true, None)
 }
 
 /// F1-4：「导入到 1Password」——把 pending 里 Pi 供应商的明文钥匙收进 vault，
@@ -629,7 +630,7 @@ fn flush_endpoint_vault_pending_locked(state: &AppState) -> Result<usize, AppErr
                     base_url: Some(url.into()),
                     ..Default::default()
                 };
-                super::store_provider_bundle(state, &AppType::Pi, id, &secrets, true)
+                super::store_provider_bundle(state, &AppType::Pi, id, &secrets, true, None)
             }
         };
         match result {
@@ -743,7 +744,7 @@ fn import_one_provider(state: &AppState, id: &str) -> Result<bool, AppError> {
 
     let extracted = SecretExtractor::extract(id, &AppType::Pi, &config)?;
     // ① 钥匙进 vault（merge 语义；非敏感 baseUrl 由 store_provider_bundle 拆去端点表）。
-    super::store_provider_bundle(state, &AppType::Pi, id, &extracted.secrets, true)?;
+    super::store_provider_bundle(state, &AppType::Pi, id, &extracted.secrets, true, None)?;
     // ② 与 update 同序：live 节点马上要引用 $VAR，先走一次投递。严格模式（1P 恒
     //    严格）下这是 no-op——钥匙由「打开终端 / ccs env」注入，不写用户环境变量；
     //    非严格模式（凭据管理器）才真正把变量写入 HKCU\Environment。

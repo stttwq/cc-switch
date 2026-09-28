@@ -306,6 +306,20 @@ pub trait SecretVault: Send + Sync {
     /// 整包覆盖写（新建或编辑），返回条目引用。
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError>;
 
+    /// [`Self::put`] 的标题提示变体：`display_name` 是供应商当前显示名。
+    /// 新建供应商写 vault 时数据库行尚不存在（写 vault 在入库之前），标题无法
+    /// 从 DB 查到，只能由调用方传入。以条目标题定位的后端（1Password）用它
+    /// 生成标题，其余后端忽略，默认实现直接落回 [`Self::put`]。
+    fn put_titled(
+        &self,
+        group: &SecretGroup,
+        bundle: &SecretBundle,
+        display_name: Option<&str>,
+    ) -> Result<VaultRef, VaultError> {
+        let _ = display_name;
+        self.put(group, bundle)
+    }
+
     /// 删除整个条目。
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError>;
 

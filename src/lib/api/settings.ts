@@ -160,6 +160,11 @@ export const settingsApi = {
     return await invoke("get_app_config_path");
   },
 
+  /** 后端真实解析的配置根目录（安装目录 data / ~/.cc-switch / 自定义覆盖） */
+  async getAppConfigDir(): Promise<string> {
+    return await invoke("get_app_config_dir");
+  },
+
   async openAppConfigFolder(): Promise<void> {
     await invoke("open_app_config_folder");
   },

@@ -166,6 +166,13 @@ pub async fn get_app_config_path() -> Result<String, String> {
     Ok(config_path.to_string_lossy().to_string())
 }
 
+/// 后端真实解析的配置根目录（自定义覆盖 > 安装目录 data > ~/.cc-switch）。
+/// 设置界面据此展示，避免前端自算默认值与实际存储位置不一致。
+#[tauri::command]
+pub async fn get_app_config_dir() -> Result<String, String> {
+    Ok(config::get_app_config_dir().to_string_lossy().to_string())
+}
+
 #[tauri::command]
 pub async fn open_app_config_folder(handle: AppHandle) -> Result<bool, String> {
     let config_dir = config::get_app_config_dir();

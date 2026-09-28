@@ -199,30 +199,49 @@ impl OnePasswordVault {
         ]
     }
 
-    /// 方案 B：条目的**首选标题** = 用户起的供应商显示名（清洗后）。
-    /// 供应商不在库（数据库重置 / 已删除）或名字清洗后为空时，回落到旧格式
-    /// `cc-switch/<app>/<id>`，保证任何情况下都有可定位的标题。
-    fn display_title(&self, group: &SecretGroup) -> String {
+    /// 供应商显示名（清洗后）：优先用调用方传入的提示（新建供应商写 vault 在
+    /// 入库之前，DB 查不到），否则查库；查不到（数据库重置 / 已删除）或清洗后
+    /// 为空返回 `None`。
+    fn provider_display_name(&self, group: &SecretGroup, hint: Option<&str>) -> Option<String> {
+        let SecretGroup::Provider { app, provider_id } = group else {
+            return None;
+        };
+        if let Some(name) = hint.and_then(sanitize_display_name) {
+            return Some(name);
+        }
+        self.db
+            .get_provider_by_id(provider_id, app.as_str())
+            .ok()
+            .flatten()
+            .and_then(|p| sanitize_display_name(&p.name))
+    }
+
+    /// 方案 B 增补：条目的**首选标题** = `<app>/<供应商显示名>`（清洗后）。
+    /// 应用前缀区分不同应用的供应商，又不会回到旧格式 `cc-switch/<app>/<id>`
+    /// 的长串。供应商不在库且无提示、或名字清洗后为空时，回落旧格式标题，
+    /// 保证任何情况下都有可定位的标题。
+    fn preferred_title(&self, group: &SecretGroup, hint: Option<&str>) -> String {
         match group {
-            SecretGroup::Provider { app, provider_id } => {
-                let name = self
-                    .db
-                    .get_provider_by_id(provider_id, app.as_str())
-                    .ok()
-                    .flatten()
-                    .and_then(|p| sanitize_display_name(&p.name));
-                name.unwrap_or_else(|| item_title(group))
-            }
+            SecretGroup::Provider { app, .. } => self
+                .provider_display_name(group, hint)
+                .map(|name| format!("{}/{}", app.as_str(), name))
+                .unwrap_or_else(|| item_title(group)),
             SecretGroup::AppSync => item_title(group),
         }
     }
 
-    /// 定位条目时依次尝试的标题：新格式（显示名）优先，旧格式（结构化标题）
-    /// 兜底——存量条目在下次保存前仍是旧标题。
+    /// 定位条目时依次尝试的标题：新格式（`<app>/<显示名>`）优先，其后是
+    /// 过渡格式（方案 B 早期版本写入的裸显示名）、旧格式（结构化标题）兜底——
+    /// 存量条目在下次保存或「对账条目标题」前仍是旧标题。
     fn candidate_titles(&self, group: &SecretGroup) -> Vec<String> {
-        let mut titles = vec![self.display_title(group)];
+        let mut titles = vec![self.preferred_title(group, None)];
+        if let Some(name) = self.provider_display_name(group, None) {
+            if !titles.contains(&name) {
+                titles.push(name);
+            }
+        }
         let legacy = item_title(group);
-        if titles[0] != legacy {
+        if !titles.contains(&legacy) {
             titles.push(legacy);
         }
         titles
@@ -355,6 +374,68 @@ impl OnePasswordVault {
             Err(RunErr::NotFound) => Ok(()),
             Err(RunErr::Vault(e)) => Err(e),
         }
+    }
+
+    /// 「对账条目标题」：把 `secret_refs` 里登记的全部供应商条目改名为当前首选
+    /// 标题（`<app>/<显示名>`）。存量旧格式 / 过渡格式条目在钥匙不变时不会被
+    /// put 触碰（整包无变化短路），这里提供一次性修复。归档条目视为已删除跳过。
+    /// 返回 (扫描的条目数, 改名数)。
+    pub(crate) fn retitle_managed_items(&self) -> Result<(usize, usize), VaultError> {
+        let refs = self
+            .db
+            .list_secret_ref_identities()
+            .map_err(|e| VaultError::Other(format!("读取 secret_refs 失败（仅结构信息）: {e}")))?;
+        let mut total = 0usize;
+        let mut renamed = 0usize;
+        for (app_str, provider_id, ref_vault, item_id) in refs {
+            let Ok(app) = app_str.parse::<AppType>() else {
+                continue; // `_app/_sync` 等非供应商行没有标题概念
+            };
+            if ref_vault != self.vault {
+                continue;
+            }
+            let group = SecretGroup::provider(app, provider_id);
+            if is_placeholder_item_id(&item_id, &group) {
+                continue;
+            }
+            total += 1;
+            let expected = self.preferred_title(&group, None);
+            let raw = match self.run_op(&self.base_read_args(&item_id), None) {
+                Ok(raw) => raw,
+                Err(RunErr::NotFound) => continue,
+                Err(RunErr::Vault(e)) => return Err(e),
+            };
+            if is_archived_item(&raw) {
+                continue;
+            }
+            let mut item: serde_json::Value = serde_json::from_slice(&raw)
+                .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+            if item.get("title").and_then(|t| t.as_str()) == Some(expected.as_str()) {
+                continue;
+            }
+            item["title"] = serde_json::Value::String(expected);
+            let edited = Zeroizing::new(
+                serde_json::to_vec(&item)
+                    .map_err(|e| VaultError::Other(format!("serialize op item failed: {e}")))?,
+            );
+            let edit_args = [
+                "item",
+                "edit",
+                item_id.as_str(),
+                "--vault",
+                &self.vault,
+                "--account",
+                &self.account,
+                "--format",
+                "json",
+                "--no-color",
+                "-",
+            ];
+            self.run_op(&edit_args, Some(edited.as_slice()))
+                .map_err(RunErr::into_vault)?;
+            renamed += 1;
+        }
+        Ok((total, renamed))
     }
 
     /// F4-5：「从 1Password 重建引用」原语——按 id 读单个条目的托管字段 label 清单、
@@ -496,6 +577,110 @@ impl OnePasswordVault {
             }
         }
         Ok(None)
+    }
+    fn put_inner(
+        &self,
+        group: &SecretGroup,
+        bundle: &SecretBundle,
+        title: String,
+    ) -> Result<VaultRef, VaultError> {
+        let group_value = group_field_value(group);
+
+        // F1-1（P0-2）：覆盖写改为原子的「读取 → 就地编辑」，不再先归档删除再新建。
+        // 旧实现（delete + create）非原子：删除成功、新建失败会把条目留在归档里
+        // （CCS 视为没钥匙），每次覆盖写还在归档里多留一份旧钥匙副本，item id 也
+        // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
+        // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
+        // F2-2：读取定位按「id 直达 → 标题兜底（新旧标题都试）→ 同名核对归属」。
+        let fetched = self.fetch_item_resolved(group)?;
+
+        let item_id = match fetched {
+            None => {
+                // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
+                let template = build_template_json(&title, bundle, &group_value)?;
+                let create_args = [
+                    "item",
+                    "create",
+                    "--vault",
+                    &self.vault,
+                    "--account",
+                    &self.account,
+                    "--format",
+                    "json",
+                    "--no-color",
+                    "-",
+                ];
+                let out = self
+                    .run_op(&create_args, Some(template.as_slice()))
+                    .map_err(RunErr::into_vault)?;
+                parse_item_id(&out).unwrap_or_default()
+            }
+            Some(fetched) => {
+                // 已存在：定位到的 item id（标题兜底命中时先回写引用行）。
+                let item_id = match fetched.item_id {
+                    Some(id) => {
+                        self.repair_ref(group, &id, &fetched.bundle);
+                        id
+                    }
+                    None => self.ref_item_id(group).ok_or_else(|| {
+                        VaultError::Other("op 条目缺少 id，无法就地编辑".to_string())
+                    })?,
+                };
+                // 在条目 JSON 原文上就地改托管字段后整份走 stdin edit。
+                let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
+                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+                // 方案 B：标题同步为当前显示名（供应商改名后，下次保存时 1P 条目跟随）。
+                item["title"] = serde_json::Value::String(title.clone());
+                apply_managed_fields_to_item(&mut item, bundle, &group_value);
+                let edited_input =
+                    Zeroizing::new(serde_json::to_vec(&item).map_err(|e| {
+                        VaultError::Other(format!("serialize op item failed: {e}"))
+                    })?);
+                // edit 后立即 drop 反序列化用的 Value（内存卫生）。
+                drop(item);
+                let edit_args = [
+                    "item",
+                    "edit",
+                    item_id.as_str(),
+                    "--vault",
+                    &self.vault,
+                    "--account",
+                    &self.account,
+                    "--format",
+                    "json",
+                    "--no-color",
+                    "-",
+                ];
+                let out = self
+                    .run_op(&edit_args, Some(&edited_input))
+                    .map_err(RunErr::into_vault)?;
+                // 校验托管字段集合 == 目标集合；合并语义残留用 `[delete]` 定点删。
+                let edited: serde_json::Value = serde_json::from_slice(&out)
+                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+                for label in leftover_managed_labels(&edited, bundle) {
+                    let delete_field_arg = format!("{label}[delete]");
+                    let delete_args = [
+                        "item",
+                        "edit",
+                        item_id.as_str(),
+                        "--vault",
+                        &self.vault,
+                        "--account",
+                        &self.account,
+                        delete_field_arg.as_str(),
+                        "--no-color",
+                    ];
+                    self.run_op(&delete_args, None)
+                        .map_err(RunErr::into_vault)?;
+                }
+                item_id
+            }
+        };
+        Ok(VaultRef {
+            vault_id: self.vault.clone(),
+            item_id,
+            fields: bundle.field_names(),
+        })
     }
 }
 
@@ -1250,104 +1435,16 @@ impl SecretVault for OnePasswordVault {
     }
 
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError> {
-        let title = self.display_title(group);
-        let group_value = group_field_value(group);
+        self.put_inner(group, bundle, self.preferred_title(group, None))
+    }
 
-        // F1-1（P0-2）：覆盖写改为原子的「读取 → 就地编辑」，不再先归档删除再新建。
-        // 旧实现（delete + create）非原子：删除成功、新建失败会把条目留在归档里
-        // （CCS 视为没钥匙），每次覆盖写还在归档里多留一份旧钥匙副本，item id 也
-        // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
-        // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
-        // F2-2：读取定位按「id 直达 → 标题兜底（新旧标题都试）→ 同名核对归属」。
-        let fetched = self.fetch_item_resolved(group)?;
-
-        let item_id = match fetched {
-            None => {
-                // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
-                let template = build_template_json(&title, bundle, &group_value)?;
-                let create_args = [
-                    "item",
-                    "create",
-                    "--vault",
-                    &self.vault,
-                    "--account",
-                    &self.account,
-                    "--format",
-                    "json",
-                    "--no-color",
-                    "-",
-                ];
-                let out = self
-                    .run_op(&create_args, Some(template.as_slice()))
-                    .map_err(RunErr::into_vault)?;
-                parse_item_id(&out).unwrap_or_default()
-            }
-            Some(fetched) => {
-                // 已存在：定位到的 item id（标题兜底命中时先回写引用行）。
-                let item_id = match fetched.item_id {
-                    Some(id) => {
-                        self.repair_ref(group, &id, &fetched.bundle);
-                        id
-                    }
-                    None => self.ref_item_id(group).ok_or_else(|| {
-                        VaultError::Other("op 条目缺少 id，无法就地编辑".to_string())
-                    })?,
-                };
-                // 在条目 JSON 原文上就地改托管字段后整份走 stdin edit。
-                let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
-                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
-                // 方案 B：标题同步为当前显示名（供应商改名后，下次保存时 1P 条目跟随）。
-                item["title"] = serde_json::Value::String(title.clone());
-                apply_managed_fields_to_item(&mut item, bundle, &group_value);
-                let edited_input =
-                    Zeroizing::new(serde_json::to_vec(&item).map_err(|e| {
-                        VaultError::Other(format!("serialize op item failed: {e}"))
-                    })?);
-                // edit 后立即 drop 反序列化用的 Value（内存卫生）。
-                drop(item);
-                let edit_args = [
-                    "item",
-                    "edit",
-                    item_id.as_str(),
-                    "--vault",
-                    &self.vault,
-                    "--account",
-                    &self.account,
-                    "--format",
-                    "json",
-                    "--no-color",
-                    "-",
-                ];
-                let out = self
-                    .run_op(&edit_args, Some(&edited_input))
-                    .map_err(RunErr::into_vault)?;
-                // 校验托管字段集合 == 目标集合；合并语义残留用 `[delete]` 定点删。
-                let edited: serde_json::Value = serde_json::from_slice(&out)
-                    .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
-                for label in leftover_managed_labels(&edited, bundle) {
-                    let delete_field_arg = format!("{label}[delete]");
-                    let delete_args = [
-                        "item",
-                        "edit",
-                        item_id.as_str(),
-                        "--vault",
-                        &self.vault,
-                        "--account",
-                        &self.account,
-                        delete_field_arg.as_str(),
-                        "--no-color",
-                    ];
-                    self.run_op(&delete_args, None)
-                        .map_err(RunErr::into_vault)?;
-                }
-                item_id
-            }
-        };
-        Ok(VaultRef {
-            vault_id: self.vault.clone(),
-            item_id,
-            fields: bundle.field_names(),
-        })
+    fn put_titled(
+        &self,
+        group: &SecretGroup,
+        bundle: &SecretBundle,
+        display_name: Option<&str>,
+    ) -> Result<VaultRef, VaultError> {
+        self.put_inner(group, bundle, self.preferred_title(group, display_name))
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
@@ -1896,6 +1993,114 @@ mod tests {
             "cc-switch/claude/p1"
         );
         assert_eq!(item_title(&SecretGroup::AppSync), "cc-switch/app/sync");
+    }
+
+    /// 方案 B 增补：首选标题 = `<app>/<显示名>`；无提示且库中无供应商时回落旧格式。
+    #[test]
+    fn preferred_title_uses_app_prefix_and_hint() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let v = OnePasswordVault::new(
+            PathBuf::from("op"),
+            String::from("acc"),
+            String::from("vault"),
+            db,
+        );
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+
+        // 无提示且库中无供应商 → 回落旧格式长标题。
+        assert_eq!(v.preferred_title(&group, None), "cc-switch/claude/p1");
+        // 有提示 → <app>/<清洗后的名字>。
+        assert_eq!(
+            v.preferred_title(&group, Some("My Provider")),
+            "claude/My Provider"
+        );
+        // 路径分隔符被剔除后 trim；清洗后为空 → 回落旧格式。
+        assert_eq!(
+            v.preferred_title(&group, Some(" a/b ")),
+            "claude/ab".to_string()
+        );
+        assert_eq!(
+            v.preferred_title(&group, Some(" / ")),
+            "cc-switch/claude/p1"
+        );
+        // AppSync 组没有供应商名概念，恒为固定标题。
+        assert_eq!(
+            v.preferred_title(&SecretGroup::AppSync, Some("x")),
+            "cc-switch/app/sync"
+        );
+    }
+
+    /// 无提示时查库取显示名；提示优先于库（写路径传的提示即本次表单值）。
+    #[test]
+    fn preferred_title_falls_back_to_db_name() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        db.save_provider(
+            "claude",
+            &crate::provider::Provider {
+                id: "p1".to_string(),
+                name: "OpenRouter".to_string(),
+                settings_config: serde_json::json!({}),
+                website_url: None,
+                category: None,
+                created_at: None,
+                sort_index: None,
+                notes: None,
+                meta: None,
+                icon: None,
+                icon_color: None,
+            },
+        )
+        .expect("save provider");
+        let v = OnePasswordVault::new(
+            PathBuf::from("op"),
+            String::from("acc"),
+            String::from("vault"),
+            db,
+        );
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+
+        assert_eq!(v.preferred_title(&group, None), "claude/OpenRouter");
+        assert_eq!(v.preferred_title(&group, Some("Renamed")), "claude/Renamed");
+    }
+
+    /// 候选标题顺序：新格式 → 过渡格式（裸显示名）→ 旧格式，去重不重复。
+    #[test]
+    fn candidate_titles_cover_current_and_legacy() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        db.save_provider(
+            "claude",
+            &crate::provider::Provider {
+                id: "p1".to_string(),
+                name: "OpenRouter".to_string(),
+                settings_config: serde_json::json!({}),
+                website_url: None,
+                category: None,
+                created_at: None,
+                sort_index: None,
+                notes: None,
+                meta: None,
+                icon: None,
+                icon_color: None,
+            },
+        )
+        .expect("save provider");
+        let v = OnePasswordVault::new(
+            PathBuf::from("op"),
+            String::from("acc"),
+            String::from("vault"),
+            db,
+        );
+        let group = SecretGroup::provider(AppType::Claude, "p1");
+
+        let titles = v.candidate_titles(&group);
+        assert_eq!(
+            titles,
+            vec![
+                "claude/OpenRouter".to_string(),
+                "OpenRouter".to_string(),
+                "cc-switch/claude/p1".to_string(),
+            ]
+        );
     }
 
     /// F3-8：孤儿清理的原语——`list_tagged_items` 走 `op item list`（不带 --reveal，
@@ -2691,8 +2896,9 @@ mod tests {
             None,
         );
         db.save_provider("pi", &provider).expect("save provider");
+        // 候选标题依次为 pi/OpenRouter、OpenRouter、cc-switch/pi/p1。
         // 第 1 次调用：按显示名标题命中 claude 的条目（归属不符）；
-        // 第 2 次调用：回退旧格式标题 cc-switch/pi/p1，应 NotFound。
+        // 第 2、3 次调用：其余候选标题均应 NotFound。
         let claude_item = item_json_with_title(
             "item-of-claude",
             "OpenRouter",
@@ -2703,6 +2909,7 @@ mod tests {
         );
         let runner = Arc::new(FakeOpRunner::new(vec![
             Ok(claude_item.into_bytes()),
+            Err(RunErr::NotFound),
             Err(RunErr::NotFound),
         ]));
         let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);
@@ -2726,8 +2933,9 @@ mod tests {
             None,
         );
         db.save_provider("pi", &provider).expect("save provider");
-        // 第 1 次：显示名「OpenRouter」命中 claude 的条目（归属不符）；
-        // 第 2 次：旧格式标题 cc-switch/pi/p1 命中正确条目（无 group 字段，
+        // 候选标题依次为 pi/OpenRouter、OpenRouter、cc-switch/pi/p1。
+        // 第 1 次：显示名命中 claude 的条目（归属不符）；第 2 次：NotFound；
+        // 第 3 次：旧格式标题 cc-switch/pi/p1 命中正确条目（无 group 字段，
         // 但结构化标题的归属可证明）。
         let claude_item = item_json_with_title(
             "item-of-claude",
@@ -2744,6 +2952,7 @@ mod tests {
         );
         let runner = Arc::new(FakeOpRunner::new(vec![
             Ok(claude_item.into_bytes()),
+            Err(RunErr::NotFound),
             Ok(pi_item.into_bytes()),
         ]));
         let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);
@@ -2771,8 +2980,9 @@ mod tests {
             None,
         );
         db.save_provider("pi", &provider).expect("save provider");
+        // 候选标题依次为 pi/OpenRouter、OpenRouter、cc-switch/pi/p1。
         // 第 1 次：显示名命中一个没有 group 字段的条目（无法证明归属）；
-        // 第 2 次：旧格式标题 NotFound。
+        // 第 2、3 次：其余候选标题均应 NotFound。
         let stranger = item_json_with_title(
             "item-stranger",
             "OpenRouter",
@@ -2780,6 +2990,7 @@ mod tests {
         );
         let runner = Arc::new(FakeOpRunner::new(vec![
             Ok(stranger.into_bytes()),
+            Err(RunErr::NotFound),
             Err(RunErr::NotFound),
         ]));
         let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);

@@ -1827,6 +1827,8 @@
     "cleanupOrphansConfirmTitle": "Found {count} orphan items",
     "cleanupOrphansConfirmMessage": "The following 1Password items have no matching provider in the database. Archive them?",
     "cleanupOrphansDone": "Removed {count} orphan credential(s)",
+    "retitleItems": "Reconcile item titles",
+    "retitleItemsDone": "Updated {renamed}/{total} item titles to \"app/provider name\"",
     "warningsTitle": "Migration notes (fields only, no values):",
     "warnGlobalProxyUrlInvalidated": "The saved outbound proxy URL contained a username/password and was discarded entirely. Re-enter it under Settings → Global Proxy, without credentials.",
     "warnGeminiNativeApiFormat": "Providers that used the Gemini generateContent upstream format were reset to OpenAI Chat Completions; format conversion no longer ships, so please verify their endpoints.",

@@ -247,7 +247,7 @@ fn import_one_live_plaintext(
         return Ok(false);
     }
     // ① 钥匙进 vault（merge 语义；非敏感 base_url 由 store_provider_bundle 拆去端点表）。
-    store_provider_bundle(state, app_type, id, &extracted.secrets, true)?;
+    store_provider_bundle(state, app_type, id, &extracted.secrets, true, None)?;
     // ② refs 已登记 api_key，就地剥离现在满足前提。
     let outcome = match app_type {
         AppType::Claude => live::strip_claude_live_plaintext_in_place(true)?,
@@ -2295,6 +2295,7 @@ fn strip_and_store_provider_secrets(
         &provider.id,
         &extracted.secrets,
         merge_existing,
+        Some(&provider.name),
     )?;
     Ok(())
 }
@@ -2312,6 +2313,7 @@ pub(crate) fn store_provider_bundle(
     provider_id: &str,
     secrets: &ProviderSecrets,
     merge_existing: bool,
+    display_name: Option<&str>,
 ) -> Result<(), AppError> {
     use crate::secrets::{SecretBundle, SecretGroup};
     let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
@@ -2348,7 +2350,7 @@ pub(crate) fn store_provider_bundle(
         // fetch 已经发生，但写侧零往返（避免每次切换白白触发解锁）。
         return Ok(());
     }
-    let vref = state.vault.put(&group, &bundle)?;
+    let vref = state.vault.put_titled(&group, &bundle, display_name)?;
     // §4.3：整包写入后登记引用（只字段名，不含值），列表/校验/删除据此零 vault 往返。
     state.db.upsert_secret_ref(
         app_type.as_str(),
@@ -2447,7 +2449,7 @@ pub(crate) fn scrub_imported_plaintext_via_vault(
             // 只含 OAuth 登录态的行必须把被丢弃的 tokens 从 DB 里剥掉。
             if !extracted.secrets.is_empty() {
                 if let Err(e) =
-                    store_provider_bundle(state, &app_type, &id, &extracted.secrets, true)
+                    store_provider_bundle(state, &app_type, &id, &extracted.secrets, true, None)
                 {
                     pending.push(key.clone());
                     log::warn!(
@@ -3302,7 +3304,7 @@ mod onepassword_endpoint_tests {
         let secrets = ProviderSecrets::new()
             .with_api_key("sk-1")
             .with_base_url("https://api.example.com");
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false, None).expect("store");
 
         // D3-B：端点表有值（缓存）；vault 整包含 base_url；refs 登记 base_url。
         assert_eq!(
@@ -3357,7 +3359,7 @@ mod onepassword_endpoint_tests {
 
         // 只更新端点（api_key 未回传，merge 保留旧值）。
         let secrets = ProviderSecrets::new().with_base_url("https://new.example.com");
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true, None).expect("store");
 
         assert_eq!(counting.fetch_count(), 1, "merge 需要一次 fetch");
         assert_eq!(counting.put_count(), 1, "base_url 变化需要一次 put");
@@ -3394,10 +3396,10 @@ mod onepassword_endpoint_tests {
         let secrets = ProviderSecrets::new()
             .with_api_key("sk-1")
             .with_base_url("https://api.example.com");
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false, None).expect("store");
         counting.reset();
 
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true).expect("store");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, true, None).expect("store");
         assert_eq!(counting.fetch_count(), 1, "merge 需要一次 fetch");
         assert_eq!(counting.put_count(), 0, "整包无变化不得 put");
     }
@@ -3408,7 +3410,7 @@ mod onepassword_endpoint_tests {
         let secrets = ProviderSecrets::new()
             .with_api_key("sk-1")
             .with_base_url("https://user:pass@api.example.com");
-        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false).expect("store");
+        store_provider_bundle(&state, &AppType::Codex, "p1", &secrets, false, None).expect("store");
 
         assert_eq!(
             state

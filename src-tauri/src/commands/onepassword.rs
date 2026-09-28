@@ -445,6 +445,31 @@ pub async fn onepassword_rebuild_refs(
     .map_err(|e| e.to_string())
 }
 
+/// 「对账条目标题」：把 `secret_refs` 登记的全部供应商条目标题改成当前首选
+/// 格式（`<app>/<供应商名>`）。存量旧格式（`cc-switch/<app>/<id>`）与过渡格式
+/// （裸显示名）条目在钥匙不变时不会被 put 改名，这里提供用户主动触发的一次性
+/// 修复。读取定位不含值、不弹解锁；改名走 `op item edit`（结构信息 + 标题）。
+#[tauri::command]
+pub async fn onepassword_retitle_items(state: State<'_, AppState>) -> Result<Value, String> {
+    if !crate::settings::is_onepassword_backend() {
+        return Err(crate::error::AppError::localized(
+            "onepassword.retitle.not_1p",
+            "仅 1Password 模式下可对账条目标题",
+            "Item title reconciliation is only available in 1Password mode",
+        )
+        .to_string());
+    }
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let vault = crate::secrets::onepassword_from_settings(state.db.clone())
+            .map_err(crate::error::AppError::from)?;
+        let (total, renamed) = vault.retitle_managed_items().map_err(|e| e.to_string())?;
+        Ok::<_, String>(serde_json::json!({ "total": total, "renamed": renamed }))
+    })
+    .await
+    .map_err(|e| format!("对账条目标题任务失败: {e}"))?
+}
+
 /// 轻量查询当前凭据后端标识（不调 op）。前端据此置灰/隐藏相关区块。
 #[tauri::command]
 pub async fn secret_backend_name(_state: State<'_, AppState>) -> Result<String, String> {
@@ -734,6 +759,7 @@ pub async fn onepassword_endpoint_reconcile(
                             provider_id,
                             &secrets,
                             true,
+                            None,
                         )
                     }
                     // 敏感 URL 不落端点表（§9-7），缓存里不可能有，这里只能跳过。

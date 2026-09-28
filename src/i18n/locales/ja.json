@@ -1827,6 +1827,8 @@
     "cleanupOrphansConfirmTitle": "{count} 件の孤立アイテムが見つかりました",
     "cleanupOrphansConfirmMessage": "以下の 1Password アイテムはデータベースに対応するプロバイダーがありません。アーカイブしますか？",
     "cleanupOrphansDone": "{count} 件の残存資格情報を削除しました",
+    "retitleItems": "アイテムタイトルの整合",
+    "retitleItemsDone": "{renamed}/{total} 件のアイテムタイトルを「アプリ/プロバイダー名」に更新しました",
     "warningsTitle": "移行時の注意点（フィールドのみ、値は含みません）：",
     "warnGlobalProxyUrlInvalidated": "保存されていた外向きプロキシ URL にユーザー名/パスワードが含まれていたため、安全ポリシーにより削除しました。「設定 → グローバルプロキシ」で認証情報なしで再入力してください。",
     "warnGeminiNativeApiFormat": "Gemini generateContent 上流フォーマットを使っていたサプライヤーは OpenAI Chat Completions に変更されました。プロトコル変換は削除されたため、エンドポイントをご確認ください。",

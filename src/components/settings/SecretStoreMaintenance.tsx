@@ -27,6 +27,7 @@ interface OnePasswordOrphan {
 export function SecretStoreMaintenance() {
   const { t } = useTranslation();
   const [busy, setBusy] = useState(false);
+  const [retitling, setRetitling] = useState(false);
   const [backend, setBackend] = useState<string>("windows");
   const [orphans, setOrphans] = useState<OnePasswordOrphan[] | null>(null);
 
@@ -72,6 +73,25 @@ export function SecretStoreMaintenance() {
     }
   };
 
+  const retitleItems = async () => {
+    setRetitling(true);
+    try {
+      const result = await invoke<{ total: number; renamed: number }>(
+        "onepassword_retitle_items",
+      );
+      toast.success(
+        t("secretsMigration.retitleItemsDone", {
+          renamed: result.renamed,
+          total: result.total,
+        }),
+      );
+    } catch (error) {
+      toast.error(extractErrorMessage(error));
+    } finally {
+      setRetitling(false);
+    }
+  };
+
   const orphanMessage = (orphans ?? [])
     .map((o) => `${o.title} (${o.updated_at})`)
     .join("\n");
@@ -83,15 +103,28 @@ export function SecretStoreMaintenance() {
           ? t("secretsMigration.cleanupOrphansHint1P")
           : t("secretsMigration.cleanupOrphansHint")}
       </p>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={busy}
-        onClick={() => (isOnePassword ? cleanupOrphans1P() : cleanupOrphans())}
-      >
-        {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-        {t("secretsMigration.cleanupOrphans")}
-      </Button>
+      <div className="flex shrink-0 items-center gap-2">
+        {isOnePassword && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={busy || retitling}
+            onClick={retitleItems}
+          >
+            {retitling && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {t("secretsMigration.retitleItems")}
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={busy || retitling}
+          onClick={() => (isOnePassword ? cleanupOrphans1P() : cleanupOrphans())}
+        >
+          {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+          {t("secretsMigration.cleanupOrphans")}
+        </Button>
+      </div>
 
       {orphans !== null && (
         <ConfirmDialog

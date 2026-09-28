@@ -55,6 +55,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - SQL 导出体验：私有权限写入、默认文件名 `cc-switch-config-{日期}.sql`、按凭据模式区分导出说明；数据库备份不含钥匙的说明与 `pre-secrets-migration` 备份清理豁免。
   - 1P 模式「有未上传改动」提示（自动同步停用时）；端点对账诊断增补 vault id 有效性校验（settings 的 vault 值损坏可被检出）；端点回填遇带凭据 URL 时记入本机清单并从待办排除。
 
+- **1Password 条目标题改为「应用前缀/供应商名」**（方案 B 增补）：新标题形如
+  `pi/OpenRouter`、`claude/My Provider`，用应用前缀区分不同应用的供应商，又不再
+  回落成 `cc-switch/pi/<provider_id>` 的长串。
+  - 修复根因：新建供应商写 vault 在入库之前，标题查库必失败、恒落旧格式长标题——
+    现由保存流程把供应商显示名作为标题提示直传 `put_titled`，新建即得短标题。
+  - 读取定位候选标题依次为新格式 → 过渡格式（裸显示名）→ 旧格式，存量条目全部可读。
+  - 设置 → 凭据存储维护新增「对账条目标题」：一次性把存量条目改名为当前首选标题。
+- 设置界面「CC Switch 配置目录」改显后端真实解析目录：此前前端自算 `~/.cc-switch`
+  展示，与 MSI 安装版实际的「安装目录 data」不一致，造成"还在旧版本目录"的误解。
+
 ## [2.2.9] - 2026-09-25
 
 ### Added

@@ -41,19 +41,6 @@ const sanitizeDir = (value?: string | null): string | undefined => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const computeDefaultAppConfigDir = async (): Promise<string | undefined> => {
-  try {
-    const home = await homeDir();
-    return await join(home, ".cc-switch");
-  } catch (error) {
-    console.error(
-      "[useDirectorySettings] Failed to resolve default app config dir",
-      error,
-    );
-    return undefined;
-  }
-};
-
 const computeDefaultConfigDir = async (
   app: DirectoryAppId,
 ): Promise<string | undefined> => {
@@ -147,7 +134,8 @@ export function useDirectorySettings({
           settingsApi.getConfigDir("claude"),
           settingsApi.getConfigDir("codex"),
           settingsApi.getConfigDir("pi"),
-          computeDefaultAppConfigDir(),
+          // 默认值以后端真实解析为准（安装目录 data / ~/.cc-switch），前端不自算。
+          settingsApi.getAppConfigDir(),
           computeDefaultConfigDir("claude"),
           computeDefaultConfigDir("codex"),
           computeDefaultConfigDir("pi"),
@@ -290,7 +278,7 @@ export function useDirectorySettings({
 
   const resetAppConfigDir = useCallback(async () => {
     if (!defaultsRef.current.appConfig) {
-      const fallback = await computeDefaultAppConfigDir();
+      const fallback = await settingsApi.getAppConfigDir();
       if (fallback) {
         defaultsRef.current = {
           ...defaultsRef.current,

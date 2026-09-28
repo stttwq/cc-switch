@@ -223,6 +223,11 @@ export const handlers = [
     success(getAppConfigDirOverride()),
   ),
 
+  // 后端真实解析的配置根目录（与 tauriMocks 的 homeDir 值保持一致）
+  http.post(`${TAURI_ENDPOINT}/get_app_config_dir`, () =>
+    success("/home/mock/.cc-switch"),
+  ),
+
   http.post(
     `${TAURI_ENDPOINT}/apply_claude_plugin_config`,
     async ({ request }) => {
