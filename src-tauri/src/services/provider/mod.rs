@@ -424,6 +424,7 @@ pub(crate) use live::{
     write_live_with_common_config_for_state,
 };
 pub(crate) use pi::import_pi_plaintext_to_vault;
+pub(crate) use pi::invalidate_native_fingerprint;
 
 // Internal re-exports
 

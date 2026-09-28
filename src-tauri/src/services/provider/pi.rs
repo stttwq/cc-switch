@@ -6,19 +6,100 @@ use crate::secrets::SecretExtractor;
 use crate::store::AppState;
 use indexmap::IndexMap;
 use serde_json::Value;
+use std::sync::Mutex;
 
 const PI_APP: &str = "pi";
 
+/// S1-4：models.json 指纹（进程级缓存）。`None` = 需要完整原生同步
+/// （首次进入，或被 [`invalidate_native_fingerprint`] 失效）。
+static NATIVE_FINGERPRINT: Mutex<Option<NativeFingerprint>> = Mutex::new(None);
+
+/// 一次成功原生同步时 models.json 的指纹：先比 len + mtime（不同直接视为变化），
+/// 相同再比 sha256（models.json 很小，哈希微秒级，§4.2 S1-4）。
+#[derive(Clone, PartialEq, Eq)]
+struct NativeFingerprint {
+    len: u64,
+    modified: std::time::SystemTime,
+    sha256: [u8; 32],
+}
+
+/// S1-4：外部事件使指纹失效，强制下次 `list` 完整原生同步。
+///
+/// 调用点：Pi 的 add / update / delete / remove / enable、导入明文
+/// （`import_pi_plaintext_to_vault`）、（S4 起）SQL 导入 / `.db` 恢复 / 云同步
+/// 下载、后端切换。漏掉一个就会出现「DB 已被覆盖，但列表不再和原生对齐」
+/// （§4.2 S1-4 / §9-9）。
+pub(crate) fn invalidate_native_fingerprint() {
+    if let Ok(mut fp) = NATIVE_FINGERPRINT.lock() {
+        *fp = None;
+    }
+}
+
+fn compute_native_fingerprint() -> Option<NativeFingerprint> {
+    let path = crate::pi_config::get_pi_models_path().ok()?;
+    let bytes = std::fs::read(&path).ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let len = meta.len();
+    if len != bytes.len() as u64 {
+        // models.json 是原子写入，正常读不到半写文件；读到就当作「未对齐」。
+        return None;
+    }
+    let modified = meta.modified().ok()?;
+    Some(NativeFingerprint {
+        len,
+        modified,
+        sha256: sha256(&bytes),
+    })
+}
+
+fn sha256(bytes: &[u8]) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(bytes);
+    hasher.finalize().into()
+}
+
+/// 指纹未变（可短路）时返回 `true`。
+fn native_fingerprint_unchanged() -> bool {
+    let cached = match NATIVE_FINGERPRINT.lock() {
+        Ok(guard) => guard.clone(),
+        Err(_) => return false,
+    };
+    let Some(cached) = cached else {
+        return false;
+    };
+    let Some(current) = compute_native_fingerprint() else {
+        return false;
+    };
+    cached.len == current.len
+        && cached.modified == current.modified
+        && cached.sha256 == current.sha256
+}
+
+/// 记录当前 models.json 指纹（仅在原生同步成功后调用）。
+fn store_native_fingerprint() {
+    if let Ok(mut fp) = NATIVE_FINGERPRINT.lock() {
+        *fp = compute_native_fingerprint();
+    }
+}
+
 pub(super) fn list(state: &AppState) -> Result<IndexMap<String, Provider>, AppError> {
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
-    match crate::pi_config::read_pi_native_providers() {
-        Ok(native) => {
-            if let Err(error) = sync_native_locked(state, &native) {
-                log::warn!("Failed to sync Pi providers from native config: {error}");
+    // S1-4：models.json 未变且未被事件失效时，跳过全量原生同步直接读 DB。
+    // 原生契约「每次进入列表都同步外部修改」只在文件变化时才需要兑现；短路省掉
+    // 提取、清洗、比较的全部 CPU / IO，语义不变（§4.2 S1-4）。
+    if !native_fingerprint_unchanged() {
+        match crate::pi_config::read_pi_native_providers() {
+            Ok(native) => match sync_native_locked(state, &native) {
+                // 同步失败不记指纹，下次进入列表重试。
+                Ok(_) => store_native_fingerprint(),
+                Err(error) => {
+                    log::warn!("Failed to sync Pi providers from native config: {error}");
+                }
+            },
+            Err(error) => {
+                log::warn!("Failed to read Pi providers; showing saved catalog: {error}");
             }
-        }
-        Err(error) => {
-            log::warn!("Failed to read Pi providers; showing saved catalog: {error}");
         }
     }
     state.db.get_all_providers(PI_APP)
@@ -50,6 +131,8 @@ pub(super) fn add(
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     strip_unsupported_pi_metadata(&mut provider);
     ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
     align_native_display_name(&mut provider);
@@ -103,6 +186,8 @@ pub(super) fn update(
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     let original_id = original_id.unwrap_or(&provider.id).to_string();
     if original_id != provider.id {
         return Err(AppError::InvalidInput(
@@ -153,6 +238,8 @@ pub(super) fn update(
 pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     let Some(_) = state.db.get_provider_by_id(id, app_type.as_str())? else {
         return Ok(());
     };
@@ -180,6 +267,8 @@ pub(super) fn delete(state: &AppState, id: &str) -> Result<(), AppError> {
 pub(super) fn remove(state: &AppState, id: &str) -> Result<(), AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     let provider = state
         .db
         .get_provider_by_id(id, app_type.as_str())?
@@ -218,6 +307,8 @@ fn hydrate_pi_base_url_for_live(state: &AppState, provider: &Provider) -> Result
 pub(super) fn enable(state: &AppState, id: &str) -> Result<SwitchResult, AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     let provider = state
         .db
         .get_provider_by_id(id, app_type.as_str())?
@@ -494,6 +585,8 @@ fn persist_pi_sync_secrets(
 /// 用户主动触发（允许 op 往返与解锁弹窗）。返回本轮成功导入的供应商数。
 pub(crate) fn import_pi_plaintext_to_vault(state: &AppState) -> Result<usize, AppError> {
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(PI_APP));
+    // S1-4（§9-9）：写路径让指纹失效，下次 list 强制与原生重新对齐。
+    invalidate_native_fingerprint();
     let pending = crate::settings::get_pi_plaintext_pending();
     let mut imported = 0;
     let mut remaining = Vec::new();
@@ -926,6 +1019,70 @@ mod list_perf_tests {
         assert!(
             crate::settings::get_pi_endpoint_vault_pending().is_empty(),
             "凭据管理器模式不产生待写回清单"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn list_short_circuits_on_unchanged_models_and_realigned_after_invalidation() {
+        let _home = TempHome::new("fp-short");
+        let _agent = crate::pi_config::test_support::TestAgentDir::new();
+        write_models(&perf_models(None));
+        let _onep = OnePBackend::enable();
+        let (state, _vault, counting) = onepassword_pi_state();
+        let counts = crate::test_support::HookCounts::install(&state.db);
+
+        // 第一次 list：完整同步，产生 DB 写入。
+        list(&state).expect("first list");
+        let writes_after_first = counts.total();
+        assert!(
+            writes_after_first > 0,
+            "首次 list 必须完整同步（新供应商入库）"
+        );
+        counting.reset();
+
+        // 第 2、3 次 list：指纹短路——0 次 DB 写入、0 次 vault 往返（§4.3）。
+        list(&state).expect("second list");
+        list(&state).expect("third list");
+        assert_eq!(
+            counts.total(),
+            writes_after_first,
+            "models.json 未变时 list 不得产生任何 DB 写入（S1-4 指纹短路）"
+        );
+        assert_eq!(counting.fetch_count(), 0);
+        assert_eq!(counting.put_count(), 0);
+
+        // 外部修改 models.json → 短路失效，同步恢复并更新端点缓存。
+        write_models(&perf_models(Some((0, "https://fingerprint.example/v1"))));
+        list(&state).expect("list after external change");
+        assert!(
+            counts.total() > writes_after_first,
+            "外部修改必须打破短路并触发重新同步"
+        );
+        assert_eq!(
+            state.db.get_provider_endpoint(PI_APP, "pi-perf-0").unwrap(),
+            Some("https://fingerprint.example/v1".to_string())
+        );
+
+        // 事件失效（§9-9）：DB 行被改而 models.json 未变时，invalidate 后的
+        // list 必须把 DB 拉回与原生一致——这就是失效清单不能漏的原因。
+        let mut row = state
+            .db
+            .get_provider_by_id("pi-perf-0", PI_APP)
+            .expect("read")
+            .expect("row exists");
+        row.name = "Tampered".to_string();
+        state.db.save_provider(PI_APP, &row).expect("tamper db");
+        invalidate_native_fingerprint();
+        list(&state).expect("list after invalidate");
+        let row = state
+            .db
+            .get_provider_by_id("pi-perf-0", PI_APP)
+            .expect("read")
+            .expect("row exists");
+        assert_eq!(
+            row.name, "Perf 0",
+            "指纹失效后 list 必须把 DB 重新对齐到 models.json（S1-4）"
         );
     }
 }

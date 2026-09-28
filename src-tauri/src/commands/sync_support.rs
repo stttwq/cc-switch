@@ -8,6 +8,10 @@ use crate::store::AppState;
 pub(crate) fn run_post_import_sync(app_state: &AppState) -> Result<(), AppError> {
     let mut failures = Vec::new();
 
+    // S1-4（§9-9）：导入会改写 Pi 的 DB 行，让 models.json 指纹失效，
+    // 下次进入 Pi 列表必须与原生重新对齐（S4 起所有导入入口统一走这里）。
+    crate::services::provider::invalidate_native_fingerprint();
+
     if let Err(error) = ProviderService::sync_current_to_live(app_state) {
         failures.push(format!("live configuration: {error}"));
     }
