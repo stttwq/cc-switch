@@ -7,8 +7,8 @@ use tauri_plugin_dialog::DialogExt;
 use zeroize::Zeroizing;
 
 use crate::commands::sync_support::{
-    post_sync_warning_from_result, run_post_import_sync, snapshot_pi_providers,
-    success_payload_with_warning,
+    combine_post_sync_results, post_sync_warning_from_result, run_post_import_sync,
+    snapshot_pi_providers, success_payload_with_warning,
 };
 use crate::database::backup::BackupEntry;
 use crate::database::Database;
@@ -217,11 +217,23 @@ async fn import_config_from_path(
                 outcome.report.unlinked_providers.len()
             );
             let adopted_refs = outcome.report.adopted_refs;
-            app_state_for_sync.scrub_imported_plaintext()?;
-            let warning = post_sync_warning_from_result(Ok(run_post_import_sync(
-                &app_state_for_sync,
-                Some(&pi_before),
-            )));
+            // S5-3（P1-5）：主库已被替换，scrub 失败不再让整个导入返回失败（会误导
+            // 用户以为导入没成功），降级为 warning 并附上待导入明文数量；后处理
+            // （live 刷新等）独立执行、不受 scrub 失败影响。
+            let scrub = app_state_for_sync.scrub_imported_plaintext();
+            let scrub_failed = scrub.is_err();
+            let post = run_post_import_sync(&app_state_for_sync, Some(&pi_before));
+            let mut warning = post_sync_warning_from_result(Ok(combine_post_sync_results(vec![
+                scrub, post,
+            ])));
+            if let Some(message) = warning.as_mut() {
+                if scrub_failed {
+                    let pending = crate::settings::get_secrets_import_pending().len();
+                    message.push_str(&format!(
+                        "（{pending} 个供应商的明文钥匙待导入，可在横幅中重试）"
+                    ));
+                }
+            }
             if let Some(msg) = warning.as_ref() {
                 log::warn!("[Import] post-import sync warning: {msg}");
             }
@@ -320,11 +332,12 @@ pub async fn restore_db_backup(
                 (restored, pi_before)
             };
             let (restored, pi_before) = restored;
-            app_state_for_sync.scrub_imported_plaintext()?;
-            let warning = post_sync_warning_from_result(Ok(run_post_import_sync(
-                &app_state_for_sync,
-                Some(&pi_before),
-            )));
+            // S5-3（P1-5）：同手动导入——恢复成功后 scrub 失败只记 warning，
+            // 不让整个恢复命令失败；后处理独立执行。
+            let scrub = app_state_for_sync.scrub_imported_plaintext();
+            let post = run_post_import_sync(&app_state_for_sync, Some(&pi_before));
+            let warning =
+                post_sync_warning_from_result(Ok(combine_post_sync_results(vec![scrub, post])));
             if let Some(message) = warning {
                 // This legacy command returns only the restored filename, so keep
                 // restore success and surface incomplete projection in the log.

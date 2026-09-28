@@ -4,8 +4,8 @@ use serde_json::{json, Value};
 use tauri::State;
 
 use crate::commands::sync_support::{
-    attach_unlinked_count, attach_warning, post_sync_warning_from_result, run_post_import_sync,
-    snapshot_pi_providers,
+    attach_unlinked_count, attach_warning, combine_post_sync_results, is_rollback_conflict,
+    post_sync_warning_from_result, run_post_import_sync, snapshot_pi_providers,
 };
 use crate::error::AppError;
 use crate::services::webdav_sync as webdav_sync_service;
@@ -164,15 +164,23 @@ pub async fn webdav_sync_download(
             allow_rollback.unwrap_or(false),
         ),
         |result| async move {
-            let post_sync_result = tauri::async_runtime::spawn_blocking(move || {
-                // 远端遗留快照可能含明文密钥：先 scrub（extract→凭据管理器→回写剥离），
-                // 再刷新派生的 live 配置。
-                app_state_for_sync
-                    .scrub_imported_plaintext()
-                    .and_then(|_| run_post_import_sync(&app_state_for_sync, Some(&pi_before)))
-            })
-            .await
-            .map_err(|e| e.to_string());
+            // S5-3（P1-5）：回滚冲突时快照没有落地，scrub / live 刷新不执行，
+            // 直接把结构化冲突返回给前端。
+            let post_sync_result = if is_rollback_conflict(&result) {
+                Ok(Ok(()))
+            } else {
+                tauri::async_runtime::spawn_blocking(move || {
+                    // 远端遗留快照可能含明文密钥：先 scrub（extract→凭据管理器→回写剥离），
+                    // 再刷新派生的 live 配置。
+                    // S5-3：两步独立执行、失败合并为 warning（scrub 失败不再吞掉
+                    // 整个 live 刷新）。
+                    let scrub = app_state_for_sync.scrub_imported_plaintext();
+                    let post = run_post_import_sync(&app_state_for_sync, Some(&pi_before));
+                    combine_post_sync_results(vec![scrub, post])
+                })
+                .await
+                .map_err(|e| e.to_string())
+            };
             Ok((result, post_sync_result))
         },
     )

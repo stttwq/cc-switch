@@ -91,6 +91,32 @@ fn post_sync_warning<E: std::fmt::Display>(err: E) -> String {
     .to_string()
 }
 
+/// S5-3（P1-5）：下载结果是「回滚冲突」时，快照没有落地到本机，
+/// 后处理（scrub / live 刷新）应整体跳过，直接把冲突返回给前端。
+pub(crate) fn is_rollback_conflict(result: &Value) -> bool {
+    result.get("status").and_then(Value::as_str) == Some("rollbackConflict")
+}
+
+/// S5-3（P1-5）：后处理各步（scrub、live 刷新……）独立执行后，把所有失败合并为
+/// 一个错误（由调用方降级为 warning）。原先用 `.and_then` 串行，scrub 失败会
+/// 吞掉整个 live 刷新。
+pub(crate) fn combine_post_sync_results(
+    results: Vec<Result<(), AppError>>,
+) -> Result<(), AppError> {
+    let failures: Vec<String> = results
+        .into_iter()
+        .filter_map(|result| result.err().map(|e| e.to_string()))
+        .collect();
+    if failures.is_empty() {
+        Ok(())
+    } else {
+        Err(AppError::Message(format!(
+            "部分导入后同步失败: {}",
+            failures.join("; ")
+        )))
+    }
+}
+
 pub(crate) fn post_sync_warning_from_result(
     result: Result<Result<(), AppError>, String>,
 ) -> Option<String> {
@@ -153,8 +179,40 @@ pub(crate) fn success_payload_with_warning(
 
 #[cfg(test)]
 mod tests {
-    use super::{attach_warning, post_sync_warning_from_result};
+    use super::{
+        attach_warning, combine_post_sync_results, is_rollback_conflict,
+        post_sync_warning_from_result,
+    };
+    use crate::error::AppError;
     use serde_json::json;
+
+    #[test]
+    fn is_rollback_conflict_matches_only_rollback_status() {
+        // S5-3：只有 rollbackConflict 跳过后处理；正常下载照常执行。
+        assert!(is_rollback_conflict(&json!({
+            "status": "rollbackConflict",
+            "remoteSeq": 3,
+            "lastApplied": 9,
+        })));
+        assert!(!is_rollback_conflict(&json!({ "status": "downloaded" })));
+        assert!(!is_rollback_conflict(&json!({})));
+    }
+
+    #[test]
+    fn combine_post_sync_results_merges_all_failures() {
+        // S5-3：scrub 与 live 刷新独立执行后，所有失败都要出现在合并结果里，
+        // 不能因为第一步失败就丢掉后面步骤的失败信息。
+        assert!(combine_post_sync_results(vec![Ok(()), Ok(())]).is_ok());
+
+        let merged = combine_post_sync_results(vec![
+            Err(AppError::Config("scrub boom".into())),
+            Err(AppError::Config("live boom".into())),
+        ])
+        .expect_err("failures must merge into one error");
+        let text = merged.to_string();
+        assert!(text.contains("scrub boom"), "unexpected: {text}");
+        assert!(text.contains("live boom"), "unexpected: {text}");
+    }
 
     #[test]
     fn post_sync_warning_from_result_returns_none_on_success() {
