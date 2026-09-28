@@ -345,6 +345,7 @@
     "backupId": "備份 ID",
     "backupManager": {
       "title": "資料庫備份",
+      "onePasswordHint": "資料庫備份不含鑰匙；還原後本機的 1Password 關聯會保留。",
       "description": "自動備份的資料庫快照，可用於還原至之前的狀態",
       "empty": "暫無備份",
       "restore": "還原",

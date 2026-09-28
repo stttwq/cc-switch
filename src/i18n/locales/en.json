@@ -345,6 +345,7 @@
     "backupId": "Backup ID",
     "backupManager": {
       "title": "Database Backups",
+      "onePasswordHint": "Database backups do not contain keys; your local 1Password links are preserved after a restore.",
       "description": "Automatic database snapshots for restoring to a previous state",
       "empty": "No backups yet",
       "restore": "Restore",

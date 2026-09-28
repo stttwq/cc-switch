@@ -686,6 +686,15 @@ impl Database {
                 break;
             }
             let path = entry.path();
+            // D-S8（P2-7）：`pre-secrets-migration-*` 是凭据迁移的回退点，
+            // 被轮换删除后无法恢复，豁免自动清理（不占用保留名额）。
+            let file_name = path
+                .file_name()
+                .and_then(|f| f.to_str())
+                .unwrap_or_default();
+            if file_name.starts_with("pre-secrets-migration") {
+                continue;
+            }
             if protected_paths
                 .iter()
                 .any(|protected| Self::same_existing_backup_path(&path, protected))
@@ -1372,6 +1381,33 @@ mod tests {
         fn drop(&mut self) {
             let _ = update_settings(self.previous.clone());
         }
+    }
+
+    // S6-4（P2-7 / D-S8）：`pre-secrets-migration-*` 备份是凭据迁移的回退点，
+    // 轮换清理必须豁免它们。
+    #[test]
+    #[serial]
+    fn cleanup_spares_pre_secrets_migration_backups() {
+        let _test_home = TestHomeGuard::new();
+        let _settings = SettingsGuard::with_backup_retain_count(2);
+
+        let dir = tempfile::tempdir().expect("temp backup dir");
+        let make = |name: &str| -> std::path::PathBuf {
+            let p = dir.path().join(name);
+            std::fs::write(&p, b"x").expect("write backup stub");
+            p
+        };
+        let oldest = make("pre-secrets-migration_20260101_000000.db");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let middle = make("db_backup_20260102_000000.db");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let newest = make("db_backup_20260103_000000.db");
+
+        Database::cleanup_db_backups(dir.path(), &[]).expect("cleanup");
+
+        assert!(oldest.exists(), "迁移回退点必须豁免轮换清理");
+        assert!(!middle.exists(), "最旧的普通备份应被轮换删除");
+        assert!(newest.exists(), "最新备份保留");
     }
 
     #[test]

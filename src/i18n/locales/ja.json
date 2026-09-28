@@ -345,6 +345,7 @@
     "backupId": "バックアップ ID",
     "backupManager": {
       "title": "データベースバックアップ",
+      "onePasswordHint": "データベースバックアップにキーは含まれません。復元後もローカルの 1Password リンクは保持されます。",
       "description": "以前の状態に復元するための自動データベーススナップショット",
       "empty": "バックアップはまだありません",
       "restore": "復元",

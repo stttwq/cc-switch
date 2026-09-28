@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useBackupManager } from "@/hooks/useBackupManager";
+import { useSettingsQuery } from "@/lib/query";
 import { extractErrorMessage } from "@/utils/errorUtils";
 
 interface BackupListSectionProps {
@@ -79,6 +80,9 @@ export function BackupListSection({
     remove,
     isDeleting,
   } = useBackupManager();
+  // S6-4：1P 模式下说明数据库备份的钥匙边界。
+  const { data: settings } = useSettingsQuery();
+  const isOnePassword = settings?.secretBackend === "onepassword";
   const [confirmFilename, setConfirmFilename] = useState<string | null>(null);
   const [deleteFilename, setDeleteFilename] = useState<string | null>(null);
   const [editingFilename, setEditingFilename] = useState<string | null>(null);
@@ -291,6 +295,13 @@ export function BackupListSection({
                 })}
           </Button>
         </div>
+
+        {/* S6-4：1P 模式下说明数据库备份的钥匙边界。 */}
+        {isOnePassword ? (
+          <p className="mb-2 text-xs text-muted-foreground leading-relaxed">
+            {t("settings.backupManager.onePasswordHint")}
+          </p>
+        ) : null}
 
         {isLoading ? (
           <div className="text-sm text-muted-foreground py-2">Loading...</div>

@@ -345,6 +345,7 @@
     "backupId": "备份ID",
     "backupManager": {
       "title": "数据库备份",
+      "onePasswordHint": "数据库备份不含钥匙；恢复后本机的 1Password 关联会保留。",
       "description": "自动备份的数据库快照，可用于恢复到之前的状态",
       "empty": "暂无备份",
       "restore": "恢复",
