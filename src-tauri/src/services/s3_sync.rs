@@ -17,8 +17,8 @@ pub(crate) use super::sync_protocol::run_with_sync_lock;
 use super::sync_protocol::{
     apply_snapshot, build_local_snapshot, e2e_build_upload, e2e_describe_remote,
     e2e_downgrade_blocked_error, e2e_open_download, e2e_remote_changed_error,
-    ensure_remote_manifest_not_ahead, ensure_remote_seq_not_ahead, localized,
-    persist_sync_success_best_effort, require_sync_passphrase, sha256_hex,
+    effective_db_compat_version, ensure_remote_manifest_not_ahead, ensure_remote_seq_not_ahead,
+    localized, persist_sync_success_best_effort, require_sync_passphrase, sha256_hex,
     validate_artifact_size_limit, validate_manifest_compat, verify_artifact, ArtifactMeta,
     E2eDownload, RemoteLayout, SyncManifest, DB_COMPAT_VERSION, MAX_MANIFEST_BYTES,
     MAX_SYNC_ARTIFACT_BYTES, PROTOCOL_VERSION, REMOTE_DB_SQL, REMOTE_MANIFEST, REMOTE_SKILLS_ZIP,
@@ -62,16 +62,11 @@ pub async fn upload(
     let snapshot = build_local_snapshot(db)?;
 
     // S5-1（P1-3）：S3 没有条件写，上传前的过期检查是唯一防线（首次上传时
-    // 远端 manifest 不存在，视为首次，放行）。
+    // 远端 manifest 不存在，视为首次，放行）。current / legacy 两个布局都可能
+    // 持有旧快照，与下载的查找顺序一致（S7-1）。
     if !force {
-        if let Some((remote_manifest_bytes, _)) = s3::get_object(
-            &creds,
-            &s3_key(settings, REMOTE_MANIFEST),
-            MAX_MANIFEST_BYTES,
-        )
-        .await?
-        {
-            let remote_hash = sha256_hex(&remote_manifest_bytes);
+        if let Some(remote) = find_remote_snapshot(settings, &creds).await? {
+            let remote_hash = sha256_hex(&remote.manifest_bytes);
             ensure_remote_manifest_not_ahead(
                 Some(&remote_hash),
                 settings.status.last_remote_manifest_hash.as_deref(),
@@ -214,8 +209,8 @@ pub async fn download(
         return download_e2e(db, secrets, settings, &creds, kek_cache, allow_rollback).await;
     }
 
-    let manifest_key = s3_key(settings, REMOTE_MANIFEST);
-    let (manifest_bytes, etag) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES)
+    // S7-1（P2-4）：与 WebDAV 一致，current 布局缺失时回退 legacy 布局查找。
+    let snapshot = find_remote_snapshot(settings, &creds)
         .await?
         .ok_or_else(|| {
             localized(
@@ -225,39 +220,43 @@ pub async fn download(
             )
         })?;
 
-    let manifest: SyncManifest =
-        serde_json::from_slice(&manifest_bytes).map_err(|e| AppError::Json {
-            path: REMOTE_MANIFEST.to_string(),
-            source: e,
-        })?;
-
-    validate_manifest_compat(&manifest, RemoteLayout::Current)?;
+    validate_manifest_compat(&snapshot.manifest, snapshot.layout)?;
 
     // Download and verify artifacts
     let db_sql = download_and_verify(
         secrets,
         settings,
         &creds,
+        snapshot.layout,
         REMOTE_DB_SQL,
-        &manifest.artifacts,
+        &snapshot.manifest.artifacts,
     )
     .await?;
     let skills_zip = download_and_verify(
         secrets,
         settings,
         &creds,
+        snapshot.layout,
         REMOTE_SKILLS_ZIP,
-        &manifest.artifacts,
+        &snapshot.manifest.artifacts,
     )
     .await?;
 
     // Apply snapshot
     apply_snapshot(db, &db_sql, &skills_zip)?;
 
-    let manifest_hash = sha256_hex(&manifest_bytes);
-    let _persisted =
-        persist_sync_success_best_effort(settings, manifest_hash, etag, persist_sync_success);
-    Ok(serde_json::json!({ "status": "downloaded" }))
+    let manifest_hash = sha256_hex(&snapshot.manifest_bytes);
+    let _persisted = persist_sync_success_best_effort(
+        settings,
+        manifest_hash,
+        snapshot.etag,
+        persist_sync_success,
+    );
+    Ok(serde_json::json!({
+        "status": "downloaded",
+        "sourceLayout": snapshot.layout.as_str(),
+        "sourcePath": s3_dir_display(settings, snapshot.layout),
+    }))
 }
 
 /// E2E v3 下载：只认 v3 key；本机开启却只有 v2 明文快照 → 拒绝降级。
@@ -274,14 +273,9 @@ async fn download_e2e(
     let Some((outer_bytes, etag)) =
         s3::get_object(creds, &manifest_key, MAX_MANIFEST_BYTES).await?
     else {
-        let v2_exists = s3::get_object(
-            creds,
-            &s3_key(settings, REMOTE_MANIFEST),
-            MAX_MANIFEST_BYTES,
-        )
-        .await?
-        .is_some();
-        if v2_exists {
+        // v3 目录为空：若 v2 明文快照还在（current / legacy 任一布局），
+        // 本机开启加密时不能拿它降级还原（S7-1：与 WebDAV 一致）。
+        if find_remote_snapshot(settings, creds).await?.is_some() {
             return Err(e2e_downgrade_blocked_error());
         }
         return Err(localized(
@@ -387,6 +381,11 @@ pub async fn fetch_remote_info(
         let manifest_key = s3_key_e2e(settings, REMOTE_MANIFEST);
         let Some((bytes, _)) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES).await?
         else {
+            // S7-1（P2-4）：与 WebDAV 一致——v3 缺失但 v2 明文快照还在时，
+            // 预览也直接给降级拒绝，而非"无数据"。
+            if find_remote_snapshot(settings, &creds).await?.is_some() {
+                return Err(e2e_downgrade_blocked_error());
+            }
             return Ok(None);
         };
         let info = e2e_describe_remote(secrets, &bytes).await;
@@ -405,30 +404,26 @@ pub async fn fetch_remote_info(
             "remotePath": s3_key_e2e(settings, ""),
         })));
     }
-    let manifest_key = s3_key(settings, REMOTE_MANIFEST);
-
-    let Some((bytes, _)) = s3::get_object(&creds, &manifest_key, MAX_MANIFEST_BYTES).await? else {
+    let Some(snapshot) = find_remote_snapshot(settings, &creds).await? else {
         return Ok(None);
     };
 
-    let manifest: SyncManifest = serde_json::from_slice(&bytes).map_err(|e| AppError::Json {
-        path: REMOTE_MANIFEST.to_string(),
-        source: e,
-    })?;
-
-    let compatible = validate_manifest_compat(&manifest, RemoteLayout::Current).is_ok();
+    // S7-1（P2-4）：legacy 布局的 manifest 不带 dbCompatVersion，按布局取有效值，
+    // 而不是返回原始字段（WebDAV 同款语义）。
+    let compatible = validate_manifest_compat(&snapshot.manifest, snapshot.layout).is_ok();
+    let db_compat_version = effective_db_compat_version(&snapshot.manifest, snapshot.layout);
 
     let payload = serde_json::json!({
-        "deviceName": manifest.device_name,
-        "createdAt": manifest.created_at,
-        "snapshotId": manifest.snapshot_id,
-        "version": manifest.version,
-        "protocolVersion": manifest.version,
-        "dbCompatVersion": manifest.db_compat_version,
+        "deviceName": snapshot.manifest.device_name,
+        "createdAt": snapshot.manifest.created_at,
+        "snapshotId": snapshot.manifest.snapshot_id,
+        "version": snapshot.manifest.version,
+        "protocolVersion": snapshot.manifest.version,
+        "dbCompatVersion": db_compat_version,
         "compatible": compatible,
-        "artifacts": manifest.artifacts.keys().collect::<Vec<_>>(),
-        "layout": RemoteLayout::Current.as_str(),
-        "remotePath": s3_dir_display(settings),
+        "artifacts": snapshot.manifest.artifacts.keys().collect::<Vec<_>>(),
+        "layout": snapshot.layout.as_str(),
+        "remotePath": s3_dir_display(settings, snapshot.layout),
     });
 
     Ok(Some(payload))
@@ -457,10 +452,66 @@ fn persist_sync_success(
 
 // ─── Download & verify ───────────────────────────────────────
 
+/// S7-1（P2-4）：远端快照查找结果——manifest 原文 + 解析结果 + 所在布局。
+struct RemoteSnapshot {
+    layout: RemoteLayout,
+    manifest: SyncManifest,
+    manifest_bytes: Vec<u8>,
+    etag: Option<String>,
+}
+
+/// S7-1（P2-4）：按 current → legacy 顺序查找远端 manifest（与 WebDAV
+/// `find_remote_snapshot` 同语义）。manifest 解析失败是错误，不是"换下一个布局"。
+async fn find_remote_snapshot(
+    settings: &S3SyncSettings,
+    creds: &S3Credentials,
+) -> Result<Option<RemoteSnapshot>, AppError> {
+    let keys = [
+        s3_key_for(settings, RemoteLayout::Current, REMOTE_MANIFEST),
+        s3_key_for(settings, RemoteLayout::Legacy, REMOTE_MANIFEST),
+    ];
+    // 测试注入点：生产实现就是 s3::get_object，测试用本地内存 mock，不碰网络。
+    find_remote_snapshot_with(keys, |key| async move {
+        s3::get_object(creds, &key, MAX_MANIFEST_BYTES).await
+    })
+    .await
+}
+
+async fn find_remote_snapshot_with<F, Fut>(
+    keys: [String; 2],
+    fetch: F,
+) -> Result<Option<RemoteSnapshot>, AppError>
+where
+    F: Fn(String) -> Fut,
+    Fut: std::future::Future<Output = Result<Option<(Vec<u8>, Option<String>)>, AppError>>,
+{
+    for (key, layout) in keys
+        .into_iter()
+        .zip([RemoteLayout::Current, RemoteLayout::Legacy])
+    {
+        let Some((bytes, etag)) = fetch(key).await? else {
+            continue;
+        };
+        let manifest: SyncManifest =
+            serde_json::from_slice(&bytes).map_err(|e| AppError::Json {
+                path: REMOTE_MANIFEST.to_string(),
+                source: e,
+            })?;
+        return Ok(Some(RemoteSnapshot {
+            layout,
+            manifest,
+            manifest_bytes: bytes,
+            etag,
+        }));
+    }
+    Ok(None)
+}
+
 async fn download_and_verify(
     _secrets: &SyncCredentials,
     settings: &S3SyncSettings,
     creds: &S3Credentials,
+    layout: RemoteLayout,
     artifact_name: &str,
     artifacts: &BTreeMap<String, ArtifactMeta>,
 ) -> Result<Vec<u8>, AppError> {
@@ -473,7 +524,7 @@ async fn download_and_verify(
     })?;
     validate_artifact_size_limit(artifact_name, meta.size)?;
 
-    let key = s3_key(settings, artifact_name);
+    let key = s3_key_for(settings, layout, artifact_name);
     let (bytes, _) = s3::get_object(creds, &key, MAX_SYNC_ARTIFACT_BYTES as usize)
         .await?
         .ok_or_else(|| {
@@ -495,10 +546,22 @@ async fn download_and_verify(
 /// Format: `{remote_root}/v{PROTOCOL_VERSION}/db-v{DB_COMPAT_VERSION}/{profile}/{artifact}`
 /// Example: `cc-switch-sync/v2/db-v6/default/manifest.json`
 fn s3_key(settings: &S3SyncSettings, artifact: &str) -> String {
-    format!(
-        "{}/v{}/db-v{}/{}/{}",
-        settings.remote_root, PROTOCOL_VERSION, DB_COMPAT_VERSION, settings.profile, artifact
-    )
+    s3_key_for(settings, RemoteLayout::Current, artifact)
+}
+
+/// S7-1（P2-4）：按布局生成 key——current 带 `db-v*` 子目录，legacy 不带
+/// （与 WebDAV `remote_dir_segments` 的布局定义一致）。
+fn s3_key_for(settings: &S3SyncSettings, layout: RemoteLayout, artifact: &str) -> String {
+    match layout {
+        RemoteLayout::Current | RemoteLayout::E2e => format!(
+            "{}/v{}/db-v{}/{}/{}",
+            settings.remote_root, PROTOCOL_VERSION, DB_COMPAT_VERSION, settings.profile, artifact
+        ),
+        RemoteLayout::Legacy => format!(
+            "{}/v{}/{}/{}",
+            settings.remote_root, PROTOCOL_VERSION, settings.profile, artifact
+        ),
+    }
 }
 
 /// E2E v3 key：`{remote_root}/v3/{profile}/{artifact}`（不带 db-v* 子目录）。
@@ -512,11 +575,17 @@ fn s3_key_e2e(settings: &S3SyncSettings, artifact: &str) -> String {
     )
 }
 
-fn s3_dir_display(settings: &S3SyncSettings) -> String {
-    format!(
-        "{}/v{}/db-v{}/{}",
-        settings.remote_root, PROTOCOL_VERSION, DB_COMPAT_VERSION, settings.profile
-    )
+fn s3_dir_display(settings: &S3SyncSettings, layout: RemoteLayout) -> String {
+    match layout {
+        RemoteLayout::Current | RemoteLayout::E2e => format!(
+            "{}/v{}/db-v{}/{}",
+            settings.remote_root, PROTOCOL_VERSION, DB_COMPAT_VERSION, settings.profile
+        ),
+        RemoteLayout::Legacy => format!(
+            "{}/v{}/{}",
+            settings.remote_root, PROTOCOL_VERSION, settings.profile
+        ),
+    }
 }
 
 async fn creds_for(
@@ -604,6 +673,141 @@ mod tests {
             std::ptr::eq(m1, m2),
             "sync_mutex must return the same instance"
         );
+    }
+
+    // ─── S7-1（P2-4）：布局 key 与查找回退（本地 mock，不依赖网络）───
+
+    #[test]
+    fn s3_key_for_layout_current_and_legacy() {
+        let settings = test_settings();
+        assert_eq!(
+            s3_key_for(&settings, RemoteLayout::Current, "manifest.json"),
+            "cc-switch-sync/v2/db-v6/default/manifest.json"
+        );
+        // legacy 布局不带 db-v* 子目录（与 WebDAV remote_dir_segments 一致）。
+        assert_eq!(
+            s3_key_for(&settings, RemoteLayout::Legacy, "manifest.json"),
+            "cc-switch-sync/v2/default/manifest.json"
+        );
+    }
+
+    #[test]
+    fn s3_dir_display_for_layout_current_and_legacy() {
+        let settings = test_settings();
+        assert_eq!(
+            s3_dir_display(&settings, RemoteLayout::Current),
+            "cc-switch-sync/v2/db-v6/default"
+        );
+        assert_eq!(
+            s3_dir_display(&settings, RemoteLayout::Legacy),
+            "cc-switch-sync/v2/default"
+        );
+    }
+
+    fn manifest_json(db_compat: Option<u32>) -> Vec<u8> {
+        let mut manifest = serde_json::json!({
+            "format": super::super::sync_protocol::PROTOCOL_FORMAT,
+            "version": 2,
+            "deviceName": "device-a",
+            "createdAt": "2026-09-28T00:00:00Z",
+            "snapshotId": "snap-1",
+            "artifacts": {},
+        });
+        if let Some(v) = db_compat {
+            manifest["dbCompatVersion"] = serde_json::json!(v);
+        }
+        serde_json::to_vec(&manifest).expect("serialize manifest")
+    }
+
+    async fn find_with_map(
+        current: Option<Vec<u8>>,
+        legacy: Option<Vec<u8>>,
+    ) -> Result<Option<RemoteSnapshot>, AppError> {
+        let keys = [
+            "current/manifest.json".to_string(),
+            "legacy/manifest.json".to_string(),
+        ];
+        let mut store = std::collections::HashMap::new();
+        if let Some(bytes) = current {
+            store.insert("current/manifest.json".to_string(), (bytes, None));
+        }
+        if let Some(bytes) = legacy {
+            store.insert("legacy/manifest.json".to_string(), (bytes, None));
+        }
+        find_remote_snapshot_with(keys, move |key| {
+            let entry = store.get(&key).cloned();
+            async move { Ok(entry) }
+        })
+        .await
+    }
+
+    #[tokio::test]
+    async fn find_remote_snapshot_prefers_current_layout() {
+        let snapshot = find_with_map(
+            Some(manifest_json(Some(DB_COMPAT_VERSION))),
+            Some(manifest_json(None)),
+        )
+        .await
+        .expect("find should succeed");
+        let snapshot = snapshot.expect("current layout should win");
+        assert_eq!(snapshot.layout, RemoteLayout::Current);
+        assert_eq!(snapshot.manifest.device_name, "device-a");
+    }
+
+    #[tokio::test]
+    async fn find_remote_snapshot_falls_back_to_legacy() {
+        let snapshot = find_with_map(None, Some(manifest_json(None)))
+            .await
+            .expect("find should succeed");
+        let snapshot = snapshot.expect("legacy layout should be found");
+        assert_eq!(snapshot.layout, RemoteLayout::Legacy);
+        // legacy manifest 没有 dbCompatVersion —— fetch_remote_info 必须经
+        // effective_db_compat_version 兜底而不是返回原始 None。
+        assert_eq!(snapshot.manifest.db_compat_version, None);
+    }
+
+    #[tokio::test]
+    async fn find_remote_snapshot_returns_none_when_both_missing() {
+        let snapshot = find_with_map(None, None)
+            .await
+            .expect("find should succeed");
+        assert!(snapshot.is_none());
+    }
+
+    #[tokio::test]
+    async fn find_remote_snapshot_rejects_invalid_manifest_json() {
+        let result = find_with_map(Some(b"not-json".to_vec()), Some(manifest_json(None))).await;
+        assert!(
+            result.is_err(),
+            "malformed manifest is an error, not a fallback"
+        );
+    }
+
+    #[test]
+    fn effective_db_compat_version_fills_legacy_default() {
+        let manifest: SyncManifest =
+            serde_json::from_slice(&manifest_json(None)).expect("valid manifest");
+        assert_eq!(
+            effective_db_compat_version(&manifest, RemoteLayout::Legacy),
+            Some(super::super::sync_protocol::LEGACY_DB_COMPAT_VERSION)
+        );
+        assert_eq!(
+            effective_db_compat_version(&manifest, RemoteLayout::Current),
+            None
+        );
+    }
+
+    #[test]
+    fn manifest_format_field_is_used_by_parser() {
+        // 防止 manifest_json 样本与 SyncManifest 的字段名悄悄脱节。
+        let manifest: SyncManifest =
+            serde_json::from_slice(&manifest_json(Some(DB_COMPAT_VERSION)))
+                .expect("sample manifest must parse");
+        assert_eq!(
+            manifest.format,
+            super::super::sync_protocol::PROTOCOL_FORMAT
+        );
+        assert_eq!(manifest.version, PROTOCOL_VERSION);
     }
 
     // Test removed - credential mapping now handled by SecretStore in Phase 2B
