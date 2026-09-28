@@ -1,6 +1,6 @@
 # 施工方案：云同步 / SQL 导入导出的数据边界（1Password 模式）+ Pi 页面卡顿优化（2.3.x）
 
-状态：待施工（只出方案，由其他模型施工）
+状态：S0–S7 施工完毕（2026-09-28）；§8.2 真机验收第 2–7 项待用户执行
 基线：`1password` 分支 @ 8703c42（D3-B：base_url 随整包进 1Password；端点表降级为读取缓存）
 上位文档：
 - `docs/plans/1password-backend-impl-plan-zh.md`（原方案，D1–D10）
@@ -430,6 +430,9 @@
 - 手册修正 P2-7：二选一——给 `cleanup_db_backups` 加上 `pre-secrets-migration` 前缀豁免（推荐，因为这类备份是迁移回退点），或者修改手册的说法。见 D-S8。
 
 ### 5.7 S7：收尾
+
+> **✅ 已于 2026-09-28 完成**（001e699 / ba57bc1 / 文档提交）。S0–S7 全部施工完毕，剩余 §8.2 真机验收第 2–7 项由用户执行。
+> 落地差异：S7-4 的键名以实际实现为准（`settings.importPreview.*`、`settings.webdavSync.remoteAhead.*`、`settings.s3Sync.dirtySinceUpload`、`onepassword.unlinkedPending`、`onepassword.endpointAudit*`、`onepassword.endpointVaultPending` 等），四语键集一致性校验通过（1666 键零差异）；§8.2 增补的 vault id 有效性校验随 S7-2 一并落地（对账前 `op vault list` 预检）。
 
 - **S7-1 S3 一致性（P2-4）**：补降级检查、Legacy 回退、有效 `dbCompatVersion`、`sourceLayout`；恢复被注释掉的 S3 测试（改用本地 mock，不依赖网络）。可以单独成一个提交，优先级最低。
 - **S7-2 端点回填待办（P2-5）**：`secrets_backfill_endpoints` 遇到带凭据的 URL 时，把 `app/id` 记入 `settings.json: endpoint_backfill_sensitive`，`list_endpoint_backfill_pending` 排除这些项。
