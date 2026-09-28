@@ -2,6 +2,20 @@ import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useImportExport } from "@/hooks/useImportExport";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// S6-3：hook 内部用 useQueryClient 失效 settings 缓存，测试需要 Provider 包裹。
+const renderHookWithClient = (
+  callback: () => ReturnType<typeof useImportExport>,
+) => {
+  const queryClient = new QueryClient();
+  return renderHook(callback, {
+    wrapper: ({ children }: { children?: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+};
+
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
 const toastWarningMock = vi.fn();
@@ -47,7 +61,7 @@ describe("useImportExport Hook (edge cases)", () => {
       success: false,
       message: "broken",
     });
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();
@@ -68,7 +82,9 @@ describe("useImportExport Hook (edge cases)", () => {
       message: "invalid",
     });
     const onImportSuccess = vi.fn();
-    const { result } = renderHook(() => useImportExport({ onImportSuccess }));
+    const { result } = renderHookWithClient(() =>
+      useImportExport({ onImportSuccess }),
+    );
 
     await act(async () => {
       await result.current.importConfig();
@@ -83,7 +99,7 @@ describe("useImportExport Hook (edge cases)", () => {
       success: true,
       filePath: "/final/config.json",
     });
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.exportConfig();
@@ -98,7 +114,7 @@ describe("useImportExport Hook (edge cases)", () => {
   it("marks partial success when live sync fails after a successful import", async () => {
     importViaDialogMock.mockResolvedValue({ success: true, backupId: "b-1" });
     syncCurrentProvidersLiveMock.mockRejectedValue(new Error("sync down"));
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();

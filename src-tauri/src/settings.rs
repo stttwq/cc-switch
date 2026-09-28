@@ -1287,9 +1287,8 @@ pub fn onepassword_verify_signature() -> bool {
 
 // ===== 明文导入待重试（F1-5，本机设置） =====
 
-/// F1-5：读取「明文导入待重试」清单（`<app>/<id>`，只记 id 不记值）。
-/// F5-5 前端「解锁后重试导入」提示接入前仅测试使用。
-#[allow(dead_code)]
+/// F1-5 / S6-3（P1-8）：读取「明文导入待重试」清单（`<app>/<id>`，只记 id 不记值）。
+/// S6-3 起为正式接口：导入/恢复前置闸门与横幅「重试导入」都消费它。
 pub fn get_secrets_import_pending() -> Vec<String> {
     get_settings().secrets_import_pending.unwrap_or_default()
 }

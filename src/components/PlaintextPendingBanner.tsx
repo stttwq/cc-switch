@@ -1,12 +1,11 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { useTranslation } from "react-i18next";
 import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { settingsApi } from "@/lib/api/settings";
-import type { Settings } from "@/types";
+import { useSettingsQuery } from "@/lib/query";
 import { toastVaultError } from "@/utils/errorUtils";
 
 /**
@@ -19,32 +18,32 @@ import { toastVaultError } from "@/utils/errorUtils";
  * - `livePlaintextPending`：live 文件里的明文钥匙（F1-8），点「导入」收进
  *   vault 并就地剥离；
  * - `secretsImportPending`：导入/恢复时写 vault 失败、明文暂留 DB 的行
- *   （F1-5），需要解锁 1Password 后重新执行一次导入；
+ *   （F1-5），点「重试导入」走 `retry_secrets_import_pending`（S6-3），无需
+ *   重新执行整个导入；同时后端在明文暂留未处理前会拒绝手动导入/恢复；
  * - `onepasswordUnlinked`：导入后仍没有 1P 引用行的供应商（S4-3，D-S3）。它们
  *   在 1P 里本来就有钥匙，只是本机没关联上——点「从 1Password 关联」走
  *   `onepassword_rebuild_refs`（只针对这批），**不要**让用户重新输入密钥。
  *
  * 状态读取是纯本机查询（0 次 op）；「导入」「关联」按钮会触发 op（可能弹解锁）。
+ * S6-3：改用 useSettingsQuery——手动导入 / `.db` 恢复 / 云同步下载成功后前端
+ * 都会失效 ["settings"] 缓存，横幅随之刷新，不再只在挂载时读取一次。
  */
 export function PlaintextPendingBanner() {
   const { t } = useTranslation();
   const queryClient = useQueryClient();
-  const [settings, setSettings] = useState<Settings | null>(null);
+  const { data: settings, refetch } = useSettingsQuery();
   const [importing, setImporting] = useState(false);
   const [writing, setWriting] = useState(false);
   const [linking, setLinking] = useState(false);
+  const [retrying, setRetrying] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
-      setSettings(await settingsApi.get());
+      await refetch();
     } catch {
       // 设置读取失败不打扰用户（导入动作本身会报错）
     }
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  }, [refetch]);
 
   const importAll = async () => {
     setImporting(true);
@@ -87,6 +86,30 @@ export function PlaintextPendingBanner() {
       toast.error(String(error));
     } finally {
       setWriting(false);
+    }
+  };
+
+  // S6-3：重试导入「明文暂留 DB」的行（解锁 1Password 后无需重跑整个导入）。
+  // 整表重跑后端 scrub：已干净的行零 op，只有 pending 的行真正写 vault。
+  const retryPendingImports = async () => {
+    setRetrying(true);
+    try {
+      const remaining = await invoke<string[]>("retry_secrets_import_pending");
+      if (remaining.length === 0) {
+        toast.success(t("onepassword.retryImportDone"));
+      } else {
+        toast.warning(
+          t("onepassword.retryImportPartial", { count: remaining.length }),
+        );
+      }
+      await refresh();
+      // 剥离过的行 settings_config 变了，供应商列表的钥匙状态要跟着刷新。
+      await queryClient.invalidateQueries({ queryKey: ["providers"] });
+    } catch (error) {
+      if (toastVaultError(error, () => void retryPendingImports())) return;
+      toast.error(String(error));
+    } finally {
+      setRetrying(false);
     }
   };
 
@@ -143,14 +166,26 @@ export function PlaintextPendingBanner() {
                 })}
           </span>
           <div className="flex shrink-0 items-center gap-2">
-            {importing ? (
+            {importing || retrying ? (
               <Loader2 className="h-4 w-4 animate-spin" />
             ) : (
-              (piCount > 0 || liveCount > 0) && (
-                <Button size="sm" variant="outline" onClick={importAll}>
-                  {t("onepassword.plaintextImportAction")}
-                </Button>
-              )
+              <>
+                {/* S6-3：明文暂留行单独重试，无需重新执行整个导入。 */}
+                {importPendingCount > 0 && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={retryPendingImports}
+                  >
+                    {t("onepassword.retryImportAction")}
+                  </Button>
+                )}
+                {(piCount > 0 || liveCount > 0) && (
+                  <Button size="sm" variant="outline" onClick={importAll}>
+                    {t("onepassword.plaintextImportAction")}
+                  </Button>
+                )}
+              </>
             )}
           </div>
         </div>

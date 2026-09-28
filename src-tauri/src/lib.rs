@@ -1192,6 +1192,7 @@ pub fn run() {
             commands::onepassword_cleanup_credential_residue,
             commands::onepassword_rebuild_refs,
             commands::onepassword_unlinked_status,
+            commands::retry_secrets_import_pending,
             commands::onepassword_endpoint_audit,
             commands::onepassword_endpoint_reconcile,
             commands::secret_backend_name,

@@ -25,6 +25,26 @@ pub async fn import_live_plaintext_to_onepassword(
     .map_err(|e| e.to_string())
 }
 
+/// S6-3（P1-8）：重试导入「明文导入待重试」清单里的供应商钥匙（1P 模式）。
+///
+/// 整表重跑 `scrub_imported_plaintext_via_vault`：该函数幂等——已干净的行
+/// 提取后与原样一致，不写 vault 也不 UPDATE，只有 pending 的行会真正产生
+/// op 往返；比按清单逐行重跑更简单且不会漏掉清单外的漏网行。会触发 op
+/// （可能弹解锁），故 async + spawn_blocking。返回重试后仍待处理的清单
+/// （空 = 全部成功，前端据此刷新横幅）。
+#[tauri::command]
+pub async fn retry_secrets_import_pending(
+    state: State<'_, AppState>,
+) -> Result<Vec<String>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::services::provider::scrub_imported_plaintext_via_vault(&state)
+    })
+    .await
+    .map_err(|e| format!("重试导入明文任务失败: {e}"))?
+    .map_err(|e| e.to_string())
+}
+
 /// 状态探测（不需解锁）：是否安装、op 版本、路径、是否已登录、签名校验结果，
 /// 外加当前后端与已配置的 account/vault。
 #[tauri::command]

@@ -1,5 +1,6 @@
 import { useCallback, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { settingsApi } from "@/lib/api";
 import { syncCurrentProvidersLiveSafe } from "@/utils/postChangeSync";
@@ -30,6 +31,7 @@ export function useImportExport(
 ): UseImportExportResult {
   const { t } = useTranslation();
   const { onImportSuccess } = options;
+  const queryClient = useQueryClient();
 
   const [status, setStatus] = useState<ImportStatus>("idle");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -69,6 +71,9 @@ export function useImportExport(
       // - 避免 sync 失败时 UI 不刷新
       // - 避免依赖 setTimeout（组件卸载会取消）
       void onImportSuccess?.();
+      // S6-3：失效 settings 缓存，明文暂留横幅随之刷新（后处理的 scrub 结果
+      // 会改 secrets_import_pending / onepassword_unlinked 清单）。
+      void queryClient.invalidateQueries({ queryKey: ["settings"] });
 
       const syncResult = await syncCurrentProvidersLiveSafe();
       if (syncResult.ok) {
@@ -107,7 +112,7 @@ export function useImportExport(
     } finally {
       setIsImporting(false);
     }
-  }, [isImporting, onImportSuccess, t]);
+  }, [isImporting, onImportSuccess, queryClient, t]);
 
   const exportConfig = useCallback(async () => {
     try {

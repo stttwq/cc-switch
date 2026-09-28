@@ -2,6 +2,20 @@ import { renderHook, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { useImportExport } from "@/hooks/useImportExport";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+
+// S6-3：hook 内部用 useQueryClient 失效 settings 缓存，测试需要 Provider 包裹。
+const renderHookWithClient = (
+  callback: () => ReturnType<typeof useImportExport>,
+) => {
+  const queryClient = new QueryClient();
+  return renderHook(callback, {
+    wrapper: ({ children }: { children?: React.ReactNode }) => (
+      <QueryClientProvider client={queryClient}>{children}</QueryClientProvider>
+    ),
+  });
+};
+
 const toastSuccessMock = vi.fn();
 const toastErrorMock = vi.fn();
 const toastWarningMock = vi.fn();
@@ -49,7 +63,9 @@ describe("useImportExport Hook", () => {
     });
     const onImportSuccess = vi.fn();
 
-    const { result } = renderHook(() => useImportExport({ onImportSuccess }));
+    const { result } = renderHookWithClient(() =>
+      useImportExport({ onImportSuccess }),
+    );
 
     await act(async () => {
       await result.current.importConfig();
@@ -66,7 +82,7 @@ describe("useImportExport Hook", () => {
   it("should stay idle and silent when the user cancels the import dialog", async () => {
     importViaDialogMock.mockResolvedValue(null);
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();
@@ -83,7 +99,7 @@ describe("useImportExport Hook", () => {
       message: "Config corrupted",
     });
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();
@@ -97,7 +113,7 @@ describe("useImportExport Hook", () => {
   it("should catch and display error when import process throws exception", async () => {
     importViaDialogMock.mockRejectedValue(new Error("Import failed"));
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();
@@ -116,15 +132,16 @@ describe("useImportExport Hook", () => {
       filePath: "/backup/export.json",
     });
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.exportConfig();
     });
 
     expect(exportViaDialogMock).toHaveBeenCalledTimes(1);
+    // S6-1：默认文件名体现「配置导出」语义，只到日期粒度。
     expect(exportViaDialogMock.mock.calls[0][0]).toMatch(
-      /^cc-switch-export-\d{8}_\d{6}\.sql$/,
+      /^cc-switch-config-\d{8}\.sql$/,
     );
     expect(toastSuccessMock).toHaveBeenCalledWith(
       expect.stringContaining("/backup/export.json"),
@@ -138,7 +155,7 @@ describe("useImportExport Hook", () => {
       message: "Write failed",
     });
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.exportConfig();
@@ -152,7 +169,7 @@ describe("useImportExport Hook", () => {
   it("should catch and show error when export throws exception", async () => {
     exportViaDialogMock.mockRejectedValue(new Error("Disk read-only"));
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.exportConfig();
@@ -166,7 +183,7 @@ describe("useImportExport Hook", () => {
   it("should stay silent when the user cancels the save dialog during export", async () => {
     exportViaDialogMock.mockResolvedValue(null);
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.exportConfig();
@@ -182,7 +199,7 @@ describe("useImportExport Hook", () => {
       message: "Config corrupted",
     });
 
-    const { result } = renderHook(() => useImportExport());
+    const { result } = renderHookWithClient(() => useImportExport());
 
     await act(async () => {
       await result.current.importConfig();

@@ -127,6 +127,27 @@ where
     start_operation().await
 }
 
+/// S6-3（P1-8）：1P 模式下还有「明文导入待重试」的供应商时，拒绝手动 SQL 导入
+/// 与 `.db` 恢复。
+///
+/// 为什么提前拦：导入/恢复会产生含明文行的安全备份，`assert_no_secret_patterns`
+/// 扫描失败时报错晦涩，且备份本身已经写了一半。fail-fast 让用户先在横幅里重试
+/// 导入（`retry_secrets_import_pending`）。凭据管理器模式明文落 DB 是合法状态，
+/// 不拦。错误消息以 `import.plaintext_pending` 前缀作为错误码。
+pub(crate) fn ensure_no_secrets_import_pending() -> Result<(), AppError> {
+    if !crate::settings::is_onepassword_backend() {
+        return Ok(());
+    }
+    let pending = crate::settings::get_secrets_import_pending();
+    if pending.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::Message(format!(
+        "import.plaintext_pending: 有 {} 个供应商的明文钥匙尚未导入 1Password，请先在横幅中重试导入",
+        pending.len()
+    )))
+}
+
 // ─── File import/export ──────────────────────────────────────
 
 /// 选择 SQL 备份并导出（计划 4.2.1 S-2）。
@@ -172,6 +193,9 @@ pub async fn import_config_via_dialog<R: tauri::Runtime>(
     app: tauri::AppHandle<R>,
     state: State<'_, AppState>,
 ) -> Result<Option<Value>, String> {
+    // S6-3（P1-8）：明文暂留未处理时 fail-fast，连文件选择对话框都不弹。
+    ensure_no_secrets_import_pending().map_err(|e| e.to_string())?;
+
     let Some(source) = app
         .dialog()
         .file()
@@ -318,6 +342,10 @@ pub async fn restore_db_backup(
     state: State<'_, AppState>,
     filename: String,
 ) -> Result<String, String> {
+    // S6-3（P1-8）：同手动导入——恢复会在替换主库前生成安全备份，明文暂留
+    // 未处理时提前拒绝。
+    ensure_no_secrets_import_pending().map_err(|e| e.to_string())?;
+
     let app_state_for_sync = state.inner().clone();
     let db = app_state_for_sync.db.clone();
     run_with_database_restore_lock(move || {
@@ -370,9 +398,48 @@ pub fn delete_db_backup(filename: String) -> Result<(), String> {
 mod tests {
     use super::run_with_database_restore_lock;
     use crate::services::sync_protocol::sync_mutex;
+    use serial_test::serial;
     use std::sync::atomic::{AtomicBool, Ordering};
     use std::sync::Arc;
     use std::time::Duration;
+
+    // S6-3（P1-8）：明文暂留未处理时，手动导入 / `.db` 恢复的前置闸门必须拦截。
+    #[test]
+    #[serial]
+    fn import_gate_blocks_when_secrets_import_pending_in_onepassword_mode() {
+        let _home = crate::test_support::TestHomeGuard::new();
+        let _onepassword = crate::test_support::OnePasswordBackendGuard::new();
+        crate::settings::set_secrets_import_pending(vec!["claude/p1".to_string()])
+            .expect("set pending");
+
+        let err = super::ensure_no_secrets_import_pending().expect_err("必须拦截");
+        let message = err.to_string();
+        assert!(
+            message.starts_with("import.plaintext_pending"),
+            "错误码前缀缺失: {message}"
+        );
+        assert!(message.contains('1'), "错误消息应含待处理数量: {message}");
+
+        // 重试成功（清单清空）后放行。
+        crate::settings::set_secrets_import_pending(vec![]).expect("clear pending");
+        super::ensure_no_secrets_import_pending().expect("清单清空后必须放行");
+    }
+
+    #[test]
+    #[serial]
+    fn import_gate_ignores_pending_list_outside_onepassword_mode() {
+        let _home = crate::test_support::TestHomeGuard::new();
+        // 显式切回非 1P 后端（不依赖前序测试的环境残留），再塞 pending 清单：
+        // 凭据管理器模式下明文落 DB 是合法状态，不能拦。
+        crate::settings::mutate_settings(|s| s.secret_backend = Some("windows".to_string()))
+            .expect("set backend");
+        crate::settings::set_secrets_import_pending(vec!["claude/p1".to_string()])
+            .expect("set pending");
+
+        super::ensure_no_secrets_import_pending().expect("凭据管理器模式必须放行");
+
+        crate::settings::set_secrets_import_pending(vec![]).expect("cleanup pending");
+    }
 
     #[tokio::test]
     async fn manual_restore_starts_blocking_work_after_global_lock_acquisition() {
