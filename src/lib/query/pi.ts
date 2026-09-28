@@ -27,6 +27,9 @@ export function usePiCurrentState(enabled = true) {
   return useQuery({
     queryKey: piKeys.currentState,
     queryFn: () => piApi.getCurrentState(),
+    // S1-6（施工方案 §4.2）：与 useProvidersQuery 一致的 5 秒去重；
+    // refetchOnWindowFocus 保留，外部改 models.json 后切回窗口即可看到。
+    staleTime: 5_000,
     enabled,
   });
 }

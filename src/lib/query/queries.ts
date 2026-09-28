@@ -35,6 +35,12 @@ export const useProvidersQuery = (
 ): UseQueryResult<ProvidersQueryData> => {
   return useQuery({
     queryKey: ["providers", appId],
+    // S1-6（施工方案 §4.2）：切页与窗口聚焦的突发请求在 5 秒内去重——
+    // 后端已修好（列表 0 次 op），这一步把「一次聚焦 = 2~3 次全量同步」
+    // 降到 1 次。保留 refetchOnWindowFocus（默认），「在外部改了配置，
+    // 切回窗口即可看到」的契约不受影响；mutation 的 invalidateQueries
+    // 不受 staleTime 影响。
+    staleTime: 5_000,
     queryFn: async () => {
       let providers: Record<string, Provider> = {};
       let currentProviderId = "";
