@@ -44,10 +44,18 @@ fn patterns() -> &'static [Regex] {
     RE.get_or_init(|| {
         vec![
             Regex::new(r"sk-ant-[A-Za-z0-9_-]{8,}").expect("regex"),
-            Regex::new(r"sk-[A-Za-z0-9]{16,}").expect("regex"),
+            // S3-4（P2-1）：`sk-` 家族的中划线变体（`sk-proj-…`、`sk-or-v1-…`）
+            // 原规则 `[A-Za-z0-9]{16,}` 不允许中划线，全部漏检。门槛提到 20
+            // 位以降低误伤模型名的可能。
+            Regex::new(r"sk-[A-Za-z0-9_-]{20,}").expect("regex"),
             Regex::new(r"xai-[A-Za-z0-9]{16,}").expect("regex"),
             Regex::new(r"AKIA[0-9A-Z]{16}").expect("regex"),
             Regex::new(r"Bearer [A-Za-z0-9._-]{20,}").expect("regex"),
+            // S3-4（P2-1）：补齐 Google / GitHub / GitLab 的常见格式。
+            Regex::new(r"AIza[0-9A-Za-z_-]{35}").expect("regex"),
+            Regex::new(r"gh[pousr]_[A-Za-z0-9]{36,}").expect("regex"),
+            Regex::new(r"github_pat_[A-Za-z0-9_]{22,}").expect("regex"),
+            Regex::new(r"glpat-[A-Za-z0-9_-]{20,}").expect("regex"),
         ]
     })
 }
@@ -105,6 +113,29 @@ mod tests {
     #[test]
     fn rejects_sk_ant() {
         assert!(assert_no_secret_patterns("sk-ant-abcdefghijk").is_err());
+    }
+
+    /// S3-4（P2-1）：`sk-` 家族的中划线变体原规则漏检。
+    #[test]
+    fn rejects_dashed_sk_family() {
+        assert!(assert_no_secret_patterns("sk-proj-abcdefghij1234567890abcd").is_err());
+        assert!(assert_no_secret_patterns("sk-or-v1-abcdef0123456789abcdef0123").is_err());
+    }
+
+    /// S3-4（P2-1）：补齐 Google / GitHub / GitLab 常见格式。
+    #[test]
+    fn rejects_google_github_gitlab_keys() {
+        assert!(assert_no_secret_patterns("AIzaSyA0123456789abcdefghijklmnopqrstuv").is_err());
+        assert!(assert_no_secret_patterns(&format!("ghp_{}", "a".repeat(36))).is_err());
+        assert!(assert_no_secret_patterns(&format!("github_pat_{}", "b".repeat(22))).is_err());
+        assert!(assert_no_secret_patterns(&format!("glpat-{}", "c".repeat(20))).is_err());
+    }
+
+    /// S3-4：门槛提高后不能误伤正常配置文本。
+    #[test]
+    fn accepts_short_dashed_sk_lookalikes() {
+        assert!(assert_no_secret_patterns("\"model\":\"sk-preview\"").is_ok());
+        assert!(assert_no_secret_patterns("sk-abc").is_ok());
     }
 
     #[test]

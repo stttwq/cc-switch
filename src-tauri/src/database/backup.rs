@@ -2,6 +2,9 @@
 //!
 //! 提供 SQL 导出/导入和二进制快照备份功能。
 
+use super::snapshot_policy::{
+    prune_for_export, ExportMeta, ExportPurpose, LocalBackend, DEVICE_LOCAL_SETTING_KEYS,
+};
 use super::{lock_conn, Database};
 use crate::config::get_app_config_dir;
 use crate::error::AppError;
@@ -82,10 +85,69 @@ fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hoo
     }
 }
 
+/// S3-2：把 `-- cc-switch-meta:` 行追加到 dump 的头部注释之后。
+///
+/// 放在 SQL 注释里：不需要改同步协议与 manifest，旧客户端会直接忽略。
+/// meta 只用于导入确认框的提示与统计，**不参与任何保留/采纳决策**（§2.2-4）。
+fn with_export_meta_header(dump: String, meta: &ExportMeta) -> String {
+    let json = serde_json::to_string(meta).unwrap_or_else(|_| "{}".to_string());
+    let line = format!("-- cc-switch-meta: {json}");
+    match dump.lines().next() {
+        // 头部是 `-- CC Switch 数据库导出` 之类注释，插在第一行之后。
+        Some(first) if first.trim_start().starts_with("--") => {
+            let rest = dump
+                .strip_prefix(first)
+                .unwrap_or_default()
+                .trim_start_matches('\n');
+            format!("{first}\n{line}\n{rest}")
+        }
+        _ => format!("{line}\n{dump}"),
+    }
+}
+
+/// S3-2：解析 SQL 头部的 meta 行（旧文件没有这一行时返回 `None`）。
+///
+/// **只用于 UI 提示**：调用方不得据此决定保留/采纳什么（§2.2-4、§9-4）。
+/// 只扫描前 10 行，避免为了一个注释去扫整个文件。
+// S6-2（手动导入确认框）消费本函数；此前由导出侧自身的测试覆盖。
+#[allow(dead_code)]
+pub(crate) fn parse_export_meta(sql: &str) -> Option<ExportMeta> {
+    const PREFIX: &str = "-- cc-switch-meta:";
+    for line in sql.lines().take(10) {
+        if let Some(rest) = line.trim().strip_prefix(PREFIX) {
+            return serde_json::from_str(rest.trim()).ok();
+        }
+    }
+    None
+}
+
+/// S3-4：结构护栏——1P 模式下 dump 文本里不得出现端点缓存的 INSERT，
+/// 防止以后有人把裁剪改回去（P0-2 的回归防线）。
+fn assert_export_omits_local_only_data(dump: &str, meta: &ExportMeta) -> Result<(), AppError> {
+    if !meta.endpoints && dump.contains("INSERT INTO \"provider_endpoints\"") {
+        return Err(AppError::Database(
+            "1Password 模式的导出不得包含端点缓存（D3-B 之后端点真源在 1Password）".to_string(),
+        ));
+    }
+    for key in DEVICE_LOCAL_SETTING_KEYS {
+        if dump.contains(&format!("'{key}'")) {
+            return Err(AppError::Database(format!(
+                "导出的 SQL 不得包含设备本地设置键：{key}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Tables whose data rows are skipped when exporting for WebDAV sync.
 /// F4-5（D14）：`secret_refs` 的语义依赖本机后端与 vault——换设备后引用指向的
 /// item id 在新设备的 vault 里未必成立。导出不带（避免把本机引用灌给别的设备），
 /// 导入时保留本机行；新设备用「从 1Password 重建引用」动作补齐。
+///
+/// S3-1（D-S3）：该规则已由 `snapshot_policy::prune_for_export` 取代——导出侧
+/// 统一在内存副本上按数据分级裁剪，**不再依赖本常量的表级跳过**。本常量仅
+/// 作为兼容别名保留到下个版本，并从 S3-1 起不再被导出路径引用。
+#[allow(dead_code)]
 const SYNC_SKIP_TABLES: &[&str] = &["secret_refs"];
 
 /// Tables whose local data is preserved from the live database during WebDAV import.
@@ -101,20 +163,47 @@ pub struct BackupEntry {
 }
 
 impl Database {
-    /// 导出为 SQLite 兼容的 SQL 文本（内存字符串，完整导出）
+    /// 导出为 SQLite 兼容的 SQL 文本（配置导出，内存字符串）。
+    ///
+    /// S3-1/S3-2：按 `snapshot_policy` 的数据分级在**内存副本**上裁剪后 dump，
+    /// 并在头部追加 `-- cc-switch-meta:` 行。手动导出的语义从此是「可跨设备的
+    /// 配置」而非「本机完整快照」——本机完整状态交给 `.db` 备份（D-S4）。
     pub fn export_sql_string(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
+        let meta = self.prune_snapshot_for_export(&snapshot, ExportPurpose::ConfigFile)?;
         let dump = Self::dump_sql(&snapshot, &[])?;
+        let dump = with_export_meta_header(dump, &meta);
         crate::secrets::scan::assert_no_secret_patterns(&dump)?;
+        assert_export_omits_local_only_data(&dump, &meta)?;
         Ok(dump)
     }
 
-    /// Export SQL for sync (WebDAV), skipping local-only tables' data
+    /// Export SQL for sync (WebDAV / S3), pruned by the shared data-boundary policy.
+    ///
+    /// S3-1：与手动导出走同一个 `prune_for_export`——同步与导出的数据边界必须
+    /// 一致（§2.2-2：策略集中，不散落）。
     pub fn export_sql_string_for_sync(&self) -> Result<String, AppError> {
         let snapshot = self.snapshot_to_memory()?;
-        let dump = Self::dump_sql(&snapshot, SYNC_SKIP_TABLES)?;
+        let meta = self.prune_snapshot_for_export(&snapshot, ExportPurpose::Sync)?;
+        let dump = Self::dump_sql(&snapshot, &[])?;
+        let dump = with_export_meta_header(dump, &meta);
         crate::secrets::scan::assert_no_secret_patterns(&dump)?;
+        assert_export_omits_local_only_data(&dump, &meta)?;
         Ok(dump)
+    }
+
+    /// S3-1：按本机后端模式裁剪内存副本，返回元信息。
+    fn prune_snapshot_for_export(
+        &self,
+        snapshot: &Connection,
+        purpose: ExportPurpose,
+    ) -> Result<ExportMeta, AppError> {
+        let local_backend = if crate::settings::is_onepassword_backend() {
+            LocalBackend::OnePassword
+        } else {
+            LocalBackend::CredentialManager
+        };
+        prune_for_export(snapshot, purpose, local_backend)
     }
 
     /// 导出为 SQLite 兼容的 SQL 文本
@@ -2374,14 +2463,24 @@ mod tests {
     /// 导入后本机的引用行原样保留（引用语义依赖本机后端与 vault）。
     #[test]
     #[serial]
-    fn sync_skips_secret_refs_on_export_and_preserves_local_rows_on_import() -> Result<(), AppError>
-    {
+    fn sync_carries_1p_refs_but_not_placeholders_and_preserves_local_rows_on_import(
+    ) -> Result<(), AppError> {
+        // S3-1 / D-S3 改写（施工方案 §9-11：行为改变时改写测试并注明新规则，
+        // 不能直接删掉）。旧规则（F4-5/D14）：同步导出一律不带 secret_refs。
+        // 新规则：带 `vault_id != ''` 的 1P 引用（同一保险箱的 item id 在各设备
+        // 上一致，S4 导入时可据此零 op 采纳），丢掉占位引用（凭据管理器模式
+        // 写下的空 vault_id 行对别的设备没有意义）。导入侧仍保留本机行，
+        // 「vault 相同时才采纳远端引用」由 S4-1 落地。
         let _test_home = TestHomeGuard::new();
-        let insert_ref = |conn: &Connection, item_id: &str| -> Result<(), AppError> {
+        let insert_ref = |conn: &Connection,
+                          provider_id: &str,
+                          item_id: &str,
+                          vault_id: &str|
+         -> Result<(), AppError> {
             conn.execute(
                 "INSERT INTO secret_refs (app, provider_id, vault_id, item_id, fields, updated_at)
-                 VALUES ('claude', 'p1', 'vault-x', ?1, '[\"api_key\"]', 0)",
-                [item_id],
+                 VALUES ('claude', ?1, ?2, ?3, '[\"api_key\"]', 0)",
+                [provider_id, vault_id, item_id],
             )
             .map_err(|e| AppError::Database(e.to_string()))?;
             Ok(())
@@ -2390,12 +2489,17 @@ mod tests {
         let remote_db = Database::memory()?;
         {
             let conn = crate::database::lock_conn!(remote_db.conn);
-            insert_ref(&conn, "item-remote")?;
+            insert_ref(&conn, "p1", "item-remote", "vault-x")?;
+            insert_ref(&conn, "p2", "item-placeholder", "")?;
         }
         let remote_sql = remote_db.export_sql_string_for_sync()?;
         assert!(
-            !remote_sql.contains("item-remote"),
-            "同步导出不得携带 secret_refs 数据行"
+            remote_sql.contains("item-remote"),
+            "1P 引用（vault_id 非空）必须随同步带出（D-S3）"
+        );
+        assert!(
+            !remote_sql.contains("item-placeholder"),
+            "占位引用（vault_id 为空）对其他设备没有意义，不得带出"
         );
 
         let local_db = Database::init()?;
@@ -2403,7 +2507,7 @@ mod tests {
             let conn = crate::database::lock_conn!(local_db.conn);
             conn.execute("DELETE FROM secret_refs", [])
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            insert_ref(&conn, "item-local")?;
+            insert_ref(&conn, "p1", "item-local", "vault-x")?;
         }
         local_db.import_sql_string_for_sync(&remote_sql)?;
 
@@ -2420,7 +2524,7 @@ mod tests {
             let count: i64 = conn
                 .query_row("SELECT COUNT(*) FROM secret_refs", [], |row| row.get(0))
                 .map_err(|e| AppError::Database(e.to_string()))?;
-            assert_eq!(count, 1, "远端引用不得灌入本机");
+            assert_eq!(count, 1, "远端引用不得直接灌入本机（S4-1 前只保留本机行）");
         }
         Ok(())
     }
@@ -2867,13 +2971,83 @@ mod tests {
         Ok(())
     }
 
+    /// S3-1（§8.1-2 不回归）：凭据管理器模式下端点照旧随同步走（D-S1）——
+    /// 该模式没有自带同步的真源，删掉会让这类用户换设备后丢端点。
+    #[test]
+    #[serial]
+    fn sync_export_keeps_provider_endpoints_in_credential_manager_mode() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let db = Database::memory()?;
+        db.upsert_provider_endpoint("claude", "p1", "https://endpoint.example/v1")?;
+        let dump = db.export_sql_string_for_sync()?;
+        assert!(
+            dump.contains("INSERT INTO \"provider_endpoints\""),
+            "凭据管理器模式下端点必须照旧随同步导出（D-S1 不回归）"
+        );
+        Ok(())
+    }
+
+    /// S3-1（§9-1 / §8.1-2）：裁剪只发生在内存副本上——主库 update_hook
+    /// 计数必须为 0，否则会连带触发一次残缺快照的自动上传。
+    #[test]
+    fn prune_on_memory_snapshot_does_not_touch_main_db_hook() -> Result<(), AppError> {
+        let db = Database::memory()?;
+        db.set_setting("managed_env_vars", r#"{"local":true}"#)?;
+        db.upsert_provider_endpoint("pi", "p1", "https://x.example/v1")?;
+        let counts = crate::test_support::HookCounts::install(&db);
+        counts.reset();
+
+        let snapshot = db.snapshot_to_memory()?;
+        crate::database::snapshot_policy::prune_for_export(
+            &snapshot,
+            crate::database::snapshot_policy::ExportPurpose::Sync,
+            crate::database::snapshot_policy::LocalBackend::OnePassword,
+        )?;
+        // 在副本上裁剪不产生任何主库写入事件。
+        assert_eq!(
+            counts.total(),
+            0,
+            "内存副本上的 DELETE 绝不能触发主库 update_hook（否则连带上传残缺快照）"
+        );
+        Ok(())
+    }
+
+    /// S3-2（§8.1-2）：meta 行可解析，且只含用途/后端/端点/引用数/设备/时间。
+    #[test]
+    #[serial]
+    fn export_meta_header_is_parsable_and_describes_the_export() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let _backend = crate::test_support::OnePasswordBackendGuard::new();
+        let db = Database::memory()?;
+        db.upsert_secret_ref(
+            "claude",
+            "p1",
+            "vault-x",
+            "item-1",
+            &["api_key".to_string()],
+        )?;
+        let dump = db.export_sql_string_for_sync()?;
+
+        let meta = super::parse_export_meta(&dump).expect("导出必须带 meta 行");
+        assert_eq!(meta.purpose, "sync");
+        assert_eq!(meta.backend, "onepassword");
+        assert!(!meta.endpoints, "1P 模式不携带端点（D-S1）");
+        assert_eq!(meta.refs, 1, "1P 引用照常带出（D-S3）");
+        assert!(!meta.device.is_empty());
+        assert!(super::parse_export_meta(
+            "-- 普通旧文件
+SELECT 1;"
+        )
+        .is_none());
+        Ok(())
+    }
+
     // ─── S0：P0 失败复现测试（施工方案 §6 S0）──────────────────────────
     // 全部标 `#[ignore]`，对应阶段（S3 / S4）修复时去掉标记转绿。
 
     /// P0-2 / S3-1：1P 模式下端点缓存是 1P 真值的本机缓存，不得随同步快照出本机。
     #[test]
     #[serial]
-    #[ignore = "S3 待修（P0-2）：端点缓存仍随同步导出明文出本机"]
     fn sync_export_omits_provider_endpoints_in_1p_mode() -> Result<(), AppError> {
         let _test_home = TestHomeGuard::new();
         let _backend = crate::test_support::OnePasswordBackendGuard::new();
@@ -2889,7 +3063,6 @@ mod tests {
 
     /// P0-5 / S3-1：设备本地 settings 行（如本机 HKCU 投递登记）不得随同步出本机。
     #[test]
-    #[ignore = "S3 待修（P0-5）：设备本地 settings 键仍随同步导出"]
     fn sync_export_omits_device_local_settings() -> Result<(), AppError> {
         let db = Database::memory()?;
         db.set_setting("managed_env_vars", r#"{"local-only":true}"#)?;

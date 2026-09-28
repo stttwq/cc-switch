@@ -71,7 +71,10 @@ pub(crate) fn should_trigger_auto_sync_for_table(table: &str) -> bool {
             | "skill_repos"
             | "profiles"
             | "settings"
-            // F1-2（D3-A）：非敏感 base_url 端点表，属共享配置（非秘密，换设备也需要）
+            // S3-3（D-S1）：端点表仍触发自动同步，是为**凭据管理器模式**——该
+            // 模式没有自带同步的真源，端点随同步走是 D3-A 给这类用户的便利。
+            // 1P 模式下自动同步整体跳过（`webdav_auto_sync` 判定后端），且导出
+            // 侧已由 `snapshot_policy::prune_for_export` 删除端点表，不会出本机。
             | "provider_endpoints"
     )
 }
