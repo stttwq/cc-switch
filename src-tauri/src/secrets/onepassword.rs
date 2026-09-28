@@ -271,6 +271,43 @@ impl OnePasswordVault {
         }
     }
 
+    /// S2（P0-1 / 施工方案 §5.2）：标题命中的条目是否真的属于目标组。
+    /// 只用已拿到的 `raw` 判断，不增加 op 调用（§9-5）。
+    ///
+    /// - 条目带 `cc-switch-group` 字段：值相等才接受——方案 B 后显示名跨 app
+    ///   撞名很常见（Claude、Pi 都叫「OpenRouter」），字段不符 = 别人的条目；
+    /// - 没有 group 字段（D3 之前旧格式条目）：只有标题本身是旧格式结构化标题
+    ///   （`cc-switch/<app>/<id>`）且解析出的归属恰为目标组时才接受；
+    ///   显示名标题 + 无 group 字段无法证明归属，一律拒绝。
+    ///
+    /// 拒绝时日志只记结构定位信息，不含任何值（§9-13）。
+    fn title_ownership_matches(&self, raw: &[u8], title: &str, group: &SecretGroup) -> bool {
+        match parse_item_group_field(raw) {
+            Some(field) => {
+                if parse_group_from_group_value(&field).is_some_and(|g| &g == group) {
+                    true
+                } else {
+                    log::warn!(
+                        "1P 条目标题撞名但 cc-switch-group 归属不符，视为不存在并继续候选标题\
+                         （仅结构定位，不含值；目标组 {group:?}）"
+                    );
+                    false
+                }
+            }
+            None => {
+                if parse_group_from_title(title).is_some_and(|g| &g == group) {
+                    true
+                } else {
+                    log::warn!(
+                        "1P 条目标题命中但缺少 cc-switch-group 字段且非结构化标题，视为不存在\
+                         并继续候选标题（仅结构定位，不含值；目标组 {group:?}）"
+                    );
+                    false
+                }
+            }
+        }
+    }
+
     /// F3-8：列出 vault 中带 `cc-switch` 标签的全部条目（`op item list`，不带
     /// `--reveal`，不弹解锁、不含值）。孤儿清理的候选来源。
     pub(crate) fn list_tagged_items(&self) -> Result<Vec<OpItemListEntry>, VaultError> {
@@ -399,6 +436,14 @@ impl OnePasswordVault {
         for title in self.candidate_titles(group) {
             match self.run_op(&self.base_read_args(&title), None) {
                 Ok(raw) => {
+                    // S2（P0-1）：唯一命中也要核对归属——方案 B 后显示名跨 app 撞名
+                    // 很常见（Claude、Pi 都叫「OpenRouter」），同步 / 导入后「没有引用
+                    // 行」的供应商会频繁走标题兜底，不核对就会读到别的 app 的条目，
+                    // repair_ref 还会把错误 id 写进引用。核对只用已拿到的 `raw`，
+                    // 不增加 op 调用（§9-5）。归属不符视同 NotFound，继续下一候选。
+                    if !self.title_ownership_matches(&raw, &title, group) {
+                        continue;
+                    }
                     let bundle = parse_item_bundle(&raw)?;
                     return Ok(Some(FetchedItem {
                         bundle,
@@ -2574,7 +2619,6 @@ mod tests {
     /// 别人的钥匙）；S2 修复后必须视为 NotFound 继续尝试下一个候选标题，
     /// 最终返回 None，且不得把错误 id 写进 `secret_refs`。
     #[test]
-    #[ignore = "S2 待修（P0-1）：标题兜底命中时不核对归属，跨 app 撞名会串条目"]
     fn title_fallback_rejects_item_of_other_group() {
         let db = Arc::new(crate::database::Database::memory().expect("memory db"));
         let provider = crate::provider::Provider::from_parts(
@@ -2604,6 +2648,83 @@ mod tests {
         assert!(
             fetched.is_none(),
             "标题命中但归属不符，必须视为 NotFound（P0-1 / S2）"
+        );
+    }
+
+    /// S2：归属不符（或显示名标题 + 无 group 字段）时继续尝试下一个候选标题，
+    /// 命中旧格式结构化标题的条目。
+    #[test]
+    fn title_fallback_falls_through_to_legacy_structured_title() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let provider = crate::provider::Provider::from_parts(
+            "p1".to_string(),
+            "OpenRouter".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("pi", &provider).expect("save provider");
+        // 第 1 次：显示名「OpenRouter」命中 claude 的条目（归属不符）；
+        // 第 2 次：旧格式标题 cc-switch/pi/p1 命中正确条目（无 group 字段，
+        // 但结构化标题的归属可证明）。
+        let claude_item = item_json_with_title(
+            "item-of-claude",
+            "OpenRouter",
+            &[
+                (FIELD_API_KEY, "CONCEALED", "sk-claude"),
+                ("cc-switch-group", "STRING", "claude/other"),
+            ],
+        );
+        let pi_item = item_json_with_title(
+            "item-of-pi",
+            "cc-switch/pi/p1",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-pi")],
+        );
+        let runner = Arc::new(FakeOpRunner::new(vec![
+            Ok(claude_item.into_bytes()),
+            Ok(pi_item.into_bytes()),
+        ]));
+        let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);
+        let group = SecretGroup::provider(AppType::Pi, "p1");
+        let bundle = vault
+            .fetch(&group)
+            .expect("fetch")
+            .expect("应命中旧格式条目");
+        assert_eq!(
+            bundle.get(FIELD_API_KEY).map(|s| s.to_string()),
+            Some("sk-pi".to_string()),
+            "必须命中归属相符的旧格式条目，而不是撞名的显示名条目"
+        );
+    }
+
+    /// S2：显示名标题命中、但条目没有 group 字段（无法证明归属）→ 拒绝，
+    /// 不得把别人手工创建的同名条目当成自己的。
+    #[test]
+    fn display_name_hit_without_group_field_is_rejected() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let provider = crate::provider::Provider::from_parts(
+            "p1".to_string(),
+            "OpenRouter".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("pi", &provider).expect("save provider");
+        // 第 1 次：显示名命中一个没有 group 字段的条目（无法证明归属）；
+        // 第 2 次：旧格式标题 NotFound。
+        let stranger = item_json_with_title(
+            "item-stranger",
+            "OpenRouter",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-stranger")],
+        );
+        let runner = Arc::new(FakeOpRunner::new(vec![
+            Ok(stranger.into_bytes()),
+            Err(RunErr::NotFound),
+        ]));
+        let vault = OnePasswordVault::with_runner(runner, "acct", "vault-x", db);
+        let group = SecretGroup::provider(AppType::Pi, "p1");
+        let fetched = vault.fetch(&group).expect("fetch");
+        assert!(
+            fetched.is_none(),
+            "显示名命中 + 无 group 字段 = 归属不可证明，必须拒绝（S2）"
         );
     }
 }
