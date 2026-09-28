@@ -45,9 +45,18 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
   const [userEdited, setUserEdited] = useState(false);
   const [revealing, setRevealing] = useState(false);
   const [revealError, setRevealError] = useState<string | null>(null);
+  // P3（安全方案 §7.1-2 / §9.1）：reveal 只影响展示——读到的明文只进本地
+  // 展示状态，绝不进 onChange/受控表单值。否则「显示后不改就保存」会被当成
+  // 显式 set 同值提交，后端被迫取一次整包判等（§9.3 预算外多一次 get）。
+  const [revealedValue, setRevealedValue] = useState<string | null>(null);
   const configured = configuredStatus?.present === true;
   const pendingReveal = configured && !userEdited;
-  const displayValue = pendingReveal ? "" : value;
+  const displayValue =
+    pendingReveal && showKey
+      ? (revealedValue ?? "")
+      : pendingReveal
+        ? ""
+        : value;
 
   // 决策 A4：显示态自动重新遮罩。
   useEffect(() => {
@@ -57,9 +66,10 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
   }, [showKey]);
 
   /**
-   * §1.4.4：眼睛按钮在「已配置但未回显」时按需读一次真实值，读到的值灌进现有受控
-   * 状态后，行为与「用户自己输入了这个值」完全一致——再点即切换遮罩，不改就保存
-   * 等于同值覆盖。
+   * §1.4.4 + P3（§7.1-2）：眼睛按钮在「已配置但未回显」时按需读一次真实值，
+   * 但只进本地展示状态（展示与修改意图分离）。用户在显示值基础上继续编辑时，
+   * input 的 onChange 才把（编辑后的）值作为显式 set 意图交给表单；不改就保存
+   * 等于 keep，后端全程零 vault 往返。
    */
   const handleRevealClick = useCallback(async () => {
     if (showKey) {
@@ -84,8 +94,7 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
         return;
       }
       setRevealError(null);
-      setUserEdited(true);
-      onChange(revealed);
+      setRevealedValue(revealed);
       setShowKey(true);
     } catch (error) {
       // F5-3：vault_* 错误显示具体原因（如 1Password 锁定），重试即再点眼睛按钮；
@@ -98,7 +107,7 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
     } finally {
       setRevealing(false);
     }
-  }, [showKey, pendingReveal, revealTarget, onChange, t]);
+  }, [showKey, pendingReveal, revealTarget, t]);
 
   const toggleShowKey = () => {
     void handleRevealClick();

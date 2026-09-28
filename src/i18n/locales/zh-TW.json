@@ -1826,6 +1826,8 @@
     "cleanupOrphansHint1P": "封存 1Password 中已無對應供應商的條目；候選條目會先列出供確認。",
     "cleanupOrphansConfirmTitle": "發現 {count} 條孤兒條目",
     "cleanupOrphansConfirmMessage": "以下 1Password 條目在資料庫中已無對應供應商，確認封存？",
+    "orphanNeedsReview": "待核驗，不隨本次清理封存（可能屬於其他裝置或引用尚未同步）",
+    "orphanNeedsReviewOnly": "沒有可自動封存的孤兒條目。以下條目歸屬不確定，請核對後再在 1Password 中手動處理：",
     "cleanupOrphansDone": "已清理 {count} 條殘留憑證",
     "retitleItems": "對帳條目標題",
     "retitleItemsDone": "已把 {renamed}/{total} 個條目標題更新為「應用/供應商名」",

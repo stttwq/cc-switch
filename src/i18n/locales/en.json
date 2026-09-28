@@ -1826,6 +1826,8 @@
     "cleanupOrphansHint1P": "Archives 1Password items whose provider no longer exists; candidates are listed for confirmation first.",
     "cleanupOrphansConfirmTitle": "Found {count} orphan items",
     "cleanupOrphansConfirmMessage": "The following 1Password items have no matching provider in the database. Archive them?",
+    "orphanNeedsReview": "Needs review; not archived by this cleanup (may belong to another device or the reference has not synced yet)",
+    "orphanNeedsReviewOnly": "No orphan items can be archived automatically. Ownership of the items below is uncertain; verify them and handle manually in 1Password:",
     "cleanupOrphansDone": "Removed {count} orphan credential(s)",
     "retitleItems": "Reconcile item titles",
     "retitleItemsDone": "Updated {renamed}/{total} item titles to \"app/provider name\"",

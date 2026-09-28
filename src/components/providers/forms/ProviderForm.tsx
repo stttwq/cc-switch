@@ -552,6 +552,10 @@ function ProviderFormFull({
 
     // 非官方供应商端点 / API Key 空：A 类
     // cloud_provider（如 Bedrock）通过模板变量处理认证，跳过通用校验
+    // P3（安全方案 §9.1 界面补点）：已配置（后端已存钥、输入框留空 = keep）时
+    // 不得强迫用户在普通编辑里重新输入钥匙。
+    const apiKeyConfigured =
+      initialData?.secretStatus?.apiKey?.present === true;
     if (category !== "official" && category !== "cloud_provider") {
       if (appId === "claude") {
         if (!baseUrl.trim()) {
@@ -561,7 +565,7 @@ function ProviderFormFull({
             }),
           );
         }
-        if (!apiKey.trim()) {
+        if (!apiKey.trim() && !apiKeyConfigured) {
           issues.push(
             t("providerForm.apiKeyRequired", {
               defaultValue: "非官方供应商请填写 API Key",
@@ -576,7 +580,7 @@ function ProviderFormFull({
             }),
           );
         }
-        if (!codexApiKey.trim()) {
+        if (!codexApiKey.trim() && !apiKeyConfigured) {
           issues.push(
             t("providerForm.apiKeyRequired", {
               defaultValue: "非官方供应商请填写 API Key",

@@ -1826,6 +1826,8 @@
     "cleanupOrphansHint1P": "归档 1Password 中已无对应供应商的条目；候选条目会先列出供确认。",
     "cleanupOrphansConfirmTitle": "发现 {count} 条孤儿条目",
     "cleanupOrphansConfirmMessage": "以下 1Password 条目在数据库中已无对应供应商，确认归档？",
+    "orphanNeedsReview": "待核验，不随本次清理归档（可能属于其他设备或引用尚未同步）",
+    "orphanNeedsReviewOnly": "没有可自动归档的孤儿条目。以下条目归属不确定，请核对后再在 1Password 中手动处理：",
     "cleanupOrphansDone": "已清理 {count} 条残留凭据",
     "retitleItems": "对账条目标题",
     "retitleItemsDone": "已把 {renamed}/{total} 个条目标题更新为「应用/供应商名」",

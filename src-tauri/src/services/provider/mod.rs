@@ -333,37 +333,130 @@ fn cleanup_windows_orphan_secrets(state: &AppState) -> Result<usize, AppError> {
 }
 
 /// F3-8：1Password 孤儿条目候选（给 UI 确认用；只有条目结构信息，不含值）。
+///
+/// SEC-03：`confidence` 区分两类候选——
+/// - `confirmed`：组在「显式删除供应商后待重试」清单里，有本机删除记录背书；
+/// - `needs_review`：结构列表不足以证明孤儿（新设备、引用丢失、另一设备尚未
+///   同步到本机等），**默认不清理**，仅作人工核对候选。
 #[derive(Debug, serde::Serialize)]
 pub struct OnePasswordOrphan {
     pub item_id: String,
     pub title: String,
     pub updated_at: String,
+    pub confidence: &'static str,
+    pub reason: String,
 }
 
-/// F3-8（P1-10）：`op item list --tags cc-switch`（不带 `--reveal`，不弹解锁）与 DB
-/// 对比，列出 vault 里有、DB 里已无对应供应商的孤儿条目候选。用户在 UI 确认后由
-/// [`cleanup_onepassword_orphans`] 归档。`cc-switch/app/sync`（AppSync）始终视为在用。
+/// SEC-03：孤儿候选判定核心（纯函数，与显示标题解耦——在用判定只看本机
+/// `secret_refs` 登记的真实 item id，不再按标题字符串匹配；新格式
+/// `<app>/<显示名>` 标题的在用条目因此不会被误列为孤儿）。
+///
+/// - `items`：vault 中带 cc-switch 标签的全部条目（不含值）；
+/// - `in_use_item_ids`：本机当前 vault 的全部真实 item id（`secret_refs` 行 +
+///   待重试清单解析出的组也经它确认）；
+/// - `pending_group_keys`：显式删除后待重试的组键（`<app>/<id>` / `app/sync`）；
+/// - `provider_exists`：该组键对应的供应商当前是否存在于本机 DB。
+fn orphan_candidates(
+    items: &[crate::secrets::OpItemListEntry],
+    in_use_item_ids: &std::collections::HashSet<String>,
+    pending_group_keys: &[String],
+    provider_exists: impl Fn(&crate::secrets::SecretGroup) -> bool,
+) -> Vec<OnePasswordOrphan> {
+    use crate::secrets::parse_group_from_title;
+    let mut out = Vec::new();
+    for item in items {
+        let id = item.id.as_str();
+        // 在用判定只看 item id：任何被本机引用登记的条目绝不是孤儿。
+        if id.is_empty() || in_use_item_ids.contains(id) {
+            continue;
+        }
+        // AppSync 组始终视为在用（应用级同步秘密，不受供应商增删影响）。
+        if parse_group_from_title(&item.title)
+            .is_some_and(|g| g == crate::secrets::SecretGroup::AppSync)
+        {
+            continue;
+        }
+        let group = parse_group_from_title(&item.title);
+        let pending = group.as_ref().is_some_and(|g| {
+            let crate::secrets::SecretGroup::Provider { app, provider_id } = g else {
+                return false;
+            };
+            pending_group_keys
+                .iter()
+                .any(|k| k == &format!("{}/{}", app.as_str(), provider_id))
+        });
+        let (confidence, reason) = if pending {
+            (
+                "confirmed",
+                "已删除供应商的待重试条目（本机有显式删除记录）".to_string(),
+            )
+        } else {
+            // 无本机删除记录：另一设备可能仍在用（引用尚未同步到本机、或该
+            // provider 在本机无引用行）。只列人工核对候选，不自动归档。
+            let exists = group.as_ref().map(&provider_exists).unwrap_or(false);
+            let reason = if exists {
+                "供应商仍存在但本机无该条目的引用：可能是引用丢失或尚未同步，请先尝试「从 1Password 重建引用」".to_string()
+            } else {
+                "本机没有该条目的归属或删除记录：可能属于其他设备，请核对后再手动处理".to_string()
+            };
+            ("needs_review", reason)
+        };
+        out.push(OnePasswordOrphan {
+            item_id: id.to_string(),
+            title: item.title.clone(),
+            updated_at: item.updated_at.clone(),
+            confidence,
+            reason,
+        });
+    }
+    out
+}
+
+/// F3-8（P1-10）：`op item list --tags cc-switch`（不带 `--reveal`，不弹解锁）与
+/// 本机引用对比，列出 vault 里有、本机没有在用引用的孤儿条目候选。用户在 UI
+/// 确认后由 [`cleanup_onepassword_orphans`] 归档。
+///
+/// SEC-03：在用判定以本机 `secret_refs` 的真实 item id 集合为准（新标题、旧标题
+/// 一视同仁）；无引用的条目默认按「待核验」列出，不称为可安全删除。
 pub fn list_onepassword_orphans(state: &AppState) -> Result<Vec<OnePasswordOrphan>, AppError> {
     let vault = crate::secrets::onepassword_from_settings(state.db.clone())?;
     let items = vault
         .list_tagged_items()
         .map_err(crate::error::AppError::from)?;
-    let mut expected: Vec<String> = Vec::new();
-    for app in [AppType::Claude, AppType::Codex, AppType::Pi] {
-        for id in state.db.get_all_providers(app.as_str())?.keys() {
-            expected.push(format!("cc-switch/{}/{}", app.as_str(), id));
-        }
+    let in_use = in_use_item_ids(state)?;
+    let pending = crate::settings::get_onepassword_orphans();
+    Ok(orphan_candidates(&items, &in_use, &pending, |group| {
+        let crate::secrets::SecretGroup::Provider { app, provider_id } = group else {
+            return false;
+        };
+        state
+            .db
+            .get_provider_by_id(provider_id, app.as_str())
+            .map(|p| p.is_some())
+            .unwrap_or(false)
+    }))
+}
+
+/// SEC-03：本机当前 vault 的「在用条目」item id 集合——`secret_refs` 中
+/// vault 匹配、item id 非占位的全部行。不依赖标题字符串。
+fn in_use_item_ids(state: &AppState) -> Result<std::collections::HashSet<String>, AppError> {
+    let configured_vault = crate::settings::get_onepassword_vault().unwrap_or_default();
+    let mut ids = std::collections::HashSet::new();
+    if !crate::settings::is_onepassword_backend() {
+        return Ok(ids);
     }
-    expected.push("cc-switch/app/sync".to_string());
-    Ok(items
-        .into_iter()
-        .filter(|i| !i.id.is_empty() && !expected.iter().any(|t| t == &i.title))
-        .map(|i| OnePasswordOrphan {
-            item_id: i.id,
-            title: i.title,
-            updated_at: i.updated_at,
-        })
-        .collect())
+    for (app_str, provider_id, vault_id, item_id) in state.db.list_secret_ref_identities()? {
+        if vault_id.is_empty() || vault_id != configured_vault {
+            continue;
+        }
+        if item_id.is_empty() {
+            continue;
+        }
+        let _ = app_str;
+        let _ = provider_id;
+        ids.insert(item_id);
+    }
+    Ok(ids)
 }
 
 /// F3-8：1P 模式孤儿清理。两部分：
@@ -371,6 +464,12 @@ pub fn list_onepassword_orphans(state: &AppState) -> Result<Vec<OnePasswordOrpha
 ///    成功即出队（删除供应商本身已是用户的确认动作，无需再问）；
 /// ② [`list_onepassword_orphans`] 列出、用户在 UI 确认过的条目按 item id 归档。
 /// 返回本次归档的条目数。
+///
+/// SEC-03：①② 归档前都必须复检——前端确认列表不是后端永久授权凭证。
+/// ① 检查该 provider 是否已被重新创建且引用恢复（恢复即出队、不再归档）；
+/// ② 重新计算在用 item id 与当前合法候选集合，拒绝已变成在用、归属变化或
+///    不在候选范围的 id；归档动作本身只按核验过的 id 走
+///    [`OnePasswordVault::archive_item_by_id`]（保持归档而非永久删除）。
 pub fn cleanup_onepassword_orphans(
     state: &AppState,
     confirmed_item_ids: &[String],
@@ -390,6 +489,21 @@ pub fn cleanup_onepassword_orphans(
             kept.push(key);
             continue;
         };
+        // SEC-03 复检：provider 已重新创建且引用已恢复 = 该组重新在用，不得归档。
+        let provider_back = state
+            .db
+            .get_provider_by_id(id, app.as_str())
+            .map(|p| p.is_some())
+            .unwrap_or(false);
+        let ref_restored = state
+            .db
+            .get_secret_ref_identity(app.as_str(), id)
+            .map(|r| r.is_some())
+            .unwrap_or(false);
+        if provider_back && ref_restored {
+            log::info!("1Password 孤儿组 {key} 的供应商已重建且引用恢复，出队不再归档");
+            continue;
+        }
         let group = crate::secrets::SecretGroup::provider(app, id);
         match state.vault.delete(&group) {
             Ok(()) => removed += 1,
@@ -403,11 +517,31 @@ pub fn cleanup_onepassword_orphans(
         crate::settings::set_onepassword_orphans(kept)?;
     }
 
-    // ② 用户确认过的候选条目（含与 ① 重叠的：幂等，NotFound 视为成功）。
+    // ② 用户确认过的候选条目。SEC-03：先重新取当前在用集合与候选集合——
+    //    预览之后引用可能已恢复（重建、重新关联），这些 id 一律拒绝归档。
     if !confirmed_item_ids.is_empty() {
         let vault = crate::secrets::onepassword_from_settings(state.db.clone())?;
-        for item_id in confirmed_item_ids {
-            match vault.archive_item_by_id(item_id) {
+        let in_use = in_use_item_ids(state)?;
+        let items = vault
+            .list_tagged_items()
+            .map_err(crate::error::AppError::from)?;
+        let pending = crate::settings::get_onepassword_orphans();
+        let legal: std::collections::HashSet<String> =
+            orphan_candidates(&items, &in_use, &pending, |group| {
+                let crate::secrets::SecretGroup::Provider { app, provider_id } = group else {
+                    return false;
+                };
+                state
+                    .db
+                    .get_provider_by_id(provider_id, app.as_str())
+                    .map(|p| p.is_some())
+                    .unwrap_or(false)
+            })
+            .into_iter()
+            .map(|o| o.item_id)
+            .collect();
+        for item_id in filter_archivable(confirmed_item_ids, &in_use, &legal) {
+            match vault.archive_item_by_id(&item_id) {
                 Ok(()) => removed += 1,
                 Err(e) => log::warn!("归档 1Password 孤儿条目 {item_id} 失败: {e}"),
             }
@@ -416,12 +550,40 @@ pub fn cleanup_onepassword_orphans(
     Ok(removed)
 }
 
+/// SEC-03：提交复检的过滤核心（纯函数）——从用户确认的 id 里剔除
+/// 「已重新关联（在用）」与「不在当前合法候选范围（归属/状态已变化）」的 id。
+/// 前端的确认列表不是后端的永久授权凭证。
+fn filter_archivable(
+    confirmed: &[String],
+    in_use: &std::collections::HashSet<String>,
+    legal: &std::collections::HashSet<String>,
+) -> Vec<String> {
+    confirmed
+        .iter()
+        .filter(|id| {
+            if in_use.contains(id.as_str()) {
+                log::warn!("拒绝归档 {}：该条目已被本机引用重新关联（在用）", id);
+                return false;
+            }
+            if !legal.contains(id.as_str()) {
+                log::warn!(
+                    "拒绝归档 {}：不在当前合法候选范围内（归属或状态已变化）",
+                    id
+                );
+                return false;
+            }
+            true
+        })
+        .cloned()
+        .collect()
+}
+
 // Internal re-exports (pub(crate))
 pub(crate) use live::sanitize_claude_settings_for_live;
 pub(crate) use live::{
     normalize_provider_common_config_for_storage, provider_exists_in_live_config,
     strip_common_config_from_live_settings, sync_current_provider_for_app_to_live,
-    write_live_with_common_config_for_state,
+    write_live_with_common_config_for_state, write_live_with_common_config_for_state_no_vault,
 };
 pub(crate) use pi::apply_imported_configs_to_native;
 pub(crate) use pi::flush_endpoint_vault_pending;
@@ -675,12 +837,62 @@ impl ProviderService {
             crate::settings::get_effective_current_provider(&state.db, &app_type)?;
         let is_current = effective_current.as_deref() == Some(provider.id.as_str());
 
-        strip_and_store_provider_secrets(state, &app_type, &mut provider, true)?;
+        // P3（安全方案 §7.2）：纯提取 → 分类 → 零调用配置分支 / 显式凭据分支。
+        // 提取与持久化解耦：先剥离所有已知秘密得到 sanitized config，再由后端
+        // 依据已保存状态（而非前端 dirty 提示）决定是否进入 vault 流程。
+        let edit_field = provider
+            .meta
+            .as_ref()
+            .and_then(|m| m.api_key_field.as_deref());
+        let extracted = SecretExtractor::extract_with_meta(
+            &provider.id,
+            &app_type,
+            &provider.settings_config,
+            edit_field,
+        )?;
+        provider.settings_config = extracted.stripped;
+
+        let credentials_changed =
+            match classify_edit_secrets(state, &app_type, &provider.id, &extracted.secrets)? {
+                EditSecretClassification::ConfigOnly => {
+                    // §7.2-5：无凭据差异 → 只写 sanitized config；vault 的
+                    // fetch/put/delete/status 全为 0，不改引用和端点缓存。
+                    // 钥匙未变，也不重投环境变量（D-1 只针对密钥变化）。
+                    state.db.save_provider(app_type.as_str(), &provider)?;
+                    if is_current {
+                        // §7.4：投影上下文显式禁取凭据，缓存 miss 不偷偷 fetch。
+                        write_live_with_common_config_for_state_no_vault(
+                            state, &app_type, &provider,
+                        )?;
+                        if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
+                            log::warn!(
+                            "保存供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}"
+                        );
+                        }
+                    }
+                    return Ok(true);
+                }
+                EditSecretClassification::VaultRequired(secrets) => {
+                    store_provider_bundle(
+                        state,
+                        &app_type,
+                        &provider.id,
+                        &secrets,
+                        true,
+                        Some(&provider.name),
+                    )?;
+                    true
+                }
+            };
 
         // 缺陷 D-1：编辑当前供应商的密钥后必须按新值重投环境变量，否则 live 里的
         // `$VAR` 引用与 Codex 的 env_key 仍解析到旧密钥。放在写 DB 之前：投递失败时
         // DB 与 live 都未改动，用户看到的「保存失败」与实际状态一致。
-        if is_current && Self::provider_has_stored_key(state, &app_type, &provider.id)? {
+        // 零调用分支已在上方提前返回，只有凭据分支才会重投。
+        if credentials_changed
+            && is_current
+            && Self::provider_has_stored_key(state, &app_type, &provider.id)?
+        {
             let mut delivered = SwitchResult::default();
             Self::deliver_env_credentials(state, &app_type, &provider, &mut delivered)?;
             for warning in &delivered.warnings {
@@ -2300,6 +2512,47 @@ fn strip_and_store_provider_secrets(
     Ok(())
 }
 
+/// P3（安全方案 §7.2）：编辑提交里抽出的秘密的分类结果。
+enum EditSecretClassification {
+    /// 抽取结果为空，或只有与本地已知状态一致的端点：零 vault 调用，只写配置。
+    ConfigOnly,
+    /// 需要进入既有 vault 流程（显式新钥匙、extra_env/敏感头、无法本地判等的端点）。
+    VaultRequired(crate::secrets::ProviderSecrets),
+}
+
+/// 编辑路径的秘密分类（§7.2-3/5）。后端以规范化的抽取结果 + 已保存状态决定
+/// 差异，不信任前端 dirty 提示（§2-2）；所有写入入口共享本规则。
+///
+/// 规则（按 §6.2 行为矩阵的默认值）：
+/// - 出现 api_key 或任何 extra_env/敏感头 → 显式凭据分支（旧入口的真实秘密
+///   仍剥离并持久化，不会悄悄清空，§7.2-4）。
+/// - 只有 base_url：敏感（带凭据）URL 不落缓存、本地无法判等 → 凭据分支；
+///   与端点缓存同值 → keep（保留 1P 当前端点，不把缓存值回写成“真值”）；
+///   缓存未知/miss 不当作空值或无变化 → 保守进入凭据分支。
+fn classify_edit_secrets(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    secrets: &crate::secrets::ProviderSecrets,
+) -> Result<EditSecretClassification, AppError> {
+    if secrets.api_key.is_some() || !secrets.extra_env.is_empty() {
+        return Ok(EditSecretClassification::VaultRequired(secrets.clone()));
+    }
+    let Some(url) = secrets.base_url.as_ref() else {
+        return Ok(EditSecretClassification::ConfigOnly);
+    };
+    if crate::secrets::is_credential_bearing_url(url.as_str()) {
+        return Ok(EditSecretClassification::VaultRequired(secrets.clone()));
+    }
+    let cached = state
+        .db
+        .get_provider_endpoint(app_type.as_str(), provider_id)?;
+    if cached.as_deref() == Some(url.as_str()) {
+        return Ok(EditSecretClassification::ConfigOnly);
+    }
+    Ok(EditSecretClassification::VaultRequired(secrets.clone()))
+}
+
 /// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
 ///
 /// 2026-09-27（用户决策，D3-A → D3-B 演进）：`base_url` **保留在 vault 整包里**
@@ -2374,10 +2627,35 @@ pub(crate) fn store_provider_bundle(
 /// 缓存（1P 模式整表忽略文件值），`fetch_provider_secrets` 又在每次真正取整包时按
 /// 1P 真值校正缓存，所以「别的设备改了 URL」的分歧窗口被收窄到「本机下一次 fetch
 /// 之前」，而 fetch 一定发生在真正要用钥匙的时候。
+/// P3/P5（安全方案 §7.4）：live 投影的凭据访问策略。用显式参数而非全局开关，
+/// 避免改变所有 resolve 行为。
+///
+/// - `Allowed`：切换、显式应用等动作；端点缓存 miss 可 fetch（含懒迁移）。
+/// - `NoVaultAccess`：纯配置编辑的投影上下文；绝不触碰 vault。缓存 miss 时
+///   由调用方「安全保留既有投影」或显式报错，不得偷偷 fetch、也不得删掉
+///   endpoint 让 CLI 落回默认主机。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum VaultAccessPolicy {
+    Allowed,
+    NoVaultAccess,
+}
+
 pub(crate) fn resolve_base_url(
     state: &AppState,
     app_type: &AppType,
     provider_id: &str,
+) -> Result<Option<Zeroizing<String>>, AppError> {
+    resolve_base_url_with_policy(state, app_type, provider_id, VaultAccessPolicy::Allowed)
+}
+
+/// P3/P5（安全方案 §7.4）：带凭据访问策略的端点解析。`NoVaultAccess` 供纯配置
+/// 编辑的 live 投影使用：端点缓存命中即返回，miss 时不 fetch、不做懒迁移——
+/// 由调用方决定「安全保留既有投影」还是显式报错。
+pub(crate) fn resolve_base_url_with_policy(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    policy: VaultAccessPolicy,
 ) -> Result<Option<Zeroizing<String>>, AppError> {
     if let Some(url) = state
         .db
@@ -2390,6 +2668,9 @@ pub(crate) fn resolve_base_url(
         .get_secret_ref_fields(app_type.as_str(), provider_id)?
         .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
     if !registered {
+        return Ok(None);
+    }
+    if policy == VaultAccessPolicy::NoVaultAccess {
         return Ok(None);
     }
     let group = crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
@@ -4134,5 +4415,116 @@ mod s0_p0_3_repro_tests {
             0,
             "缓存与真值一致时不得写库"
         );
+    }
+}
+
+// ─── SEC-03：孤儿判定与提交复检（安全方案 §5 SEC-03） ─────────────────
+
+#[cfg(test)]
+mod orphan_tests {
+    use super::{filter_archivable, orphan_candidates, OnePasswordOrphan};
+    use crate::app_config::AppType;
+    use crate::secrets::OpItemListEntry;
+    use crate::secrets::SecretGroup;
+    use std::collections::HashSet;
+
+    fn entry(id: &str, title: &str) -> OpItemListEntry {
+        OpItemListEntry {
+            id: id.to_string(),
+            title: title.to_string(),
+            updated_at: "2026-09-28T00:00:00Z".to_string(),
+        }
+    }
+
+    fn ids(out: &[OnePasswordOrphan]) -> Vec<&str> {
+        out.iter().map(|o| o.item_id.as_str()).collect()
+    }
+
+    /// 在用判定只看 item id：新格式标题（<app>/<显示名>）的在用条目不得被列为
+    /// 孤儿（SEC-03 的核心缺陷——旧实现按旧标题字符串匹配，会把它们全列出来）。
+    #[test]
+    fn in_use_items_with_new_title_are_not_orphans() {
+        let items = vec![
+            entry("item-new-title", "claude/OpenRouter"),
+            entry("item-legacy-title", "cc-switch/claude/p1"),
+        ];
+        let in_use: HashSet<String> = ["item-new-title", "item-legacy-title"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = orphan_candidates(&items, &in_use, &[], |_| false);
+        assert!(
+            ids(&out).is_empty(),
+            "在用条目（新旧标题）都不得被列为孤儿，实际: {out:?}"
+        );
+    }
+
+    /// AppSync 条目始终在用；重复标题下只要任一条目在用，另一条也按候选处理但
+    /// 不得归档在用那条（在用条目被排除，孤儿判定不按标题整组排除）。
+    #[test]
+    fn appsync_and_empty_ids_are_excluded() {
+        let items = vec![
+            entry("item-sync", "cc-switch/app/sync"),
+            entry("", "claude/Ghost"),
+            entry("item-dup-in-use", "claude/OpenRouter"),
+            entry("item-dup-orphan", "claude/OpenRouter"),
+        ];
+        let in_use: HashSet<String> = ["item-sync", "item-dup-in-use"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        let out = orphan_candidates(&items, &in_use, &[], |_| false);
+        assert_eq!(ids(&out), vec!["item-dup-orphan"]);
+    }
+
+    /// 有本机显式删除记录（待重试组键）→ confirmed；其余一律 needs_review，
+    /// 且 reason 必须说明不确定原因（不得宣称「安全可删除」）。
+    #[test]
+    fn confidence_and_reason_reflect_evidence() {
+        let items = vec![
+            entry("item-pending", "cc-switch/claude/gone"),
+            entry("item-exists", "cc-switch/claude/Live"),
+            entry("item-stray", "claude/Ghost"),
+            entry("item-unparsed", "user-made-entry"),
+        ];
+        let in_use: HashSet<String> = HashSet::new();
+        let pending = vec!["claude/gone".to_string()];
+        let out = orphan_candidates(&items, &in_use, &pending, |group| {
+            matches!(group, SecretGroup::Provider{ app, provider_id }
+                if app == &AppType::Claude && provider_id == "Live")
+        });
+
+        let by_id = |id: &str| out.iter().find(|o| o.item_id == id).unwrap();
+        let pending_row = by_id("item-pending");
+        assert_eq!(pending_row.confidence, "confirmed");
+        let exists_row = by_id("item-exists");
+        assert_eq!(exists_row.confidence, "needs_review");
+        assert!(exists_row.reason.contains("重建引用"));
+        let stray_row = by_id("item-stray");
+        assert_eq!(stray_row.confidence, "needs_review");
+        let unparsed_row = by_id("item-unparsed");
+        assert_eq!(unparsed_row.confidence, "needs_review");
+        for row in &out {
+            assert!(
+                !row.reason.contains("安全"),
+                "候选 reason 不得宣称「安全可删除」: {row:?}"
+            );
+        }
+    }
+
+    /// 提交复检：已恢复引用（在用）与不在合法候选范围的 id 一律拒绝。
+    #[test]
+    fn filter_archivable_rejects_relinked_and_out_of_scope_ids() {
+        let in_use: HashSet<String> = ["item-relabeled".to_string()].into_iter().collect();
+        let legal: HashSet<String> = ["item-still-orphan".to_string(), "item-pending".to_string()]
+            .into_iter()
+            .collect();
+        let confirmed = vec![
+            "item-still-orphan".to_string(),
+            "item-relabeled".to_string(),
+            "item-out-of-scope".to_string(),
+        ];
+        let archivable = filter_archivable(&confirmed, &in_use, &legal);
+        assert_eq!(archivable, vec!["item-still-orphan".to_string()]);
     }
 }

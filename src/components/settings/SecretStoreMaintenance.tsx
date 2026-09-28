@@ -12,6 +12,12 @@ interface OnePasswordOrphan {
   item_id: string;
   title: string;
   updated_at: string;
+  /**
+   * SEC-03：confirmed = 有本机显式删除记录背书；needs_review = 结构列表
+   * 不足以证明孤儿（可能属于其他设备/引用尚未同步），默认不归档。
+   */
+  confidence: "confirmed" | "needs_review";
+  reason: string;
 }
 
 /**
@@ -92,8 +98,17 @@ export function SecretStoreMaintenance() {
     }
   };
 
+  // SEC-03：只有 confirmed 候选随本次确认归档；needs_review 仅展示供人工核对，
+  // 默认不提交（前端确认列表不是授权凭证，后端仍会复检在用与候选范围）。
+  const confirmedCandidates = (orphans ?? []).filter(
+    (o) => o.confidence === "confirmed",
+  );
   const orphanMessage = (orphans ?? [])
-    .map((o) => `${o.title} (${o.updated_at})`)
+    .map((o) =>
+      o.confidence === "confirmed"
+        ? `${o.title} (${o.updated_at})`
+        : `${o.title} (${o.updated_at}) — ${t("secretsMigration.orphanNeedsReview")}`,
+    )
     .join("\n");
 
   return (
@@ -119,26 +134,42 @@ export function SecretStoreMaintenance() {
           variant="outline"
           size="sm"
           disabled={busy || retitling}
-          onClick={() => (isOnePassword ? cleanupOrphans1P() : cleanupOrphans())}
+          onClick={() =>
+            isOnePassword ? cleanupOrphans1P() : cleanupOrphans()
+          }
         >
           {busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
           {t("secretsMigration.cleanupOrphans")}
         </Button>
       </div>
 
-      {orphans !== null && (
+      {orphans !== null && confirmedCandidates.length > 0 && (
         <ConfirmDialog
           isOpen
           title={t("secretsMigration.cleanupOrphansConfirmTitle", {
-            count: orphans.length,
+            count: confirmedCandidates.length,
           })}
           message={`${t("secretsMigration.cleanupOrphansConfirmMessage")}\n${orphanMessage}`}
           confirmText={t("secretsMigration.cleanupOrphans")}
           pending={busy}
           onConfirm={() => {
-            cleanupOrphans(orphans.map((o) => o.item_id))
-              .finally(() => setOrphans(null));
+            cleanupOrphans(confirmedCandidates.map((o) => o.item_id)).finally(
+              () => setOrphans(null),
+            );
           }}
+          onCancel={() => setOrphans(null)}
+        />
+      )}
+      {orphans !== null && confirmedCandidates.length === 0 && (
+        <ConfirmDialog
+          isOpen
+          title={t("secretsMigration.cleanupOrphansConfirmTitle", {
+            count: 0,
+          })}
+          message={`${t("secretsMigration.orphanNeedsReviewOnly")}\n${orphanMessage}`}
+          confirmText={t("common.close")}
+          pending={false}
+          onConfirm={() => setOrphans(null)}
           onCancel={() => setOrphans(null)}
         />
       )}

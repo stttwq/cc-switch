@@ -203,12 +203,32 @@ pub(super) fn update(
     ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
 
     let live_config = provider.settings_config.clone();
-    strip_and_store_pi_secrets(state, &mut provider, true)?;
+    // P3（安全方案 §7.2）：Pi 编辑同样先纯提取再分类——普通配置编辑（模型、
+    // 备注等）零 vault 调用，且钥匙未变时不重投环境变量。
+    let extracted =
+        SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
+    provider.settings_config = extracted.stripped;
+    let credentials_changed =
+        match super::classify_edit_secrets(state, &app_type, &provider.id, &extracted.secrets)? {
+            super::EditSecretClassification::ConfigOnly => false,
+            super::EditSecretClassification::VaultRequired(secrets) => {
+                super::store_provider_bundle(
+                    state,
+                    &app_type,
+                    &provider.id,
+                    &secrets,
+                    true,
+                    Some(&provider.name),
+                )?;
+                true
+            }
+        };
 
     // 缺陷 D-1：live 节点只留 `$CC_SWITCH_PI_<ID>_API_KEY` 引用，编辑密钥后不重投该变量
     // 就会继续解析到旧 key。次序沿用 enable：②投变量 → ③写节点；节点本就不在 models.json
-    // （未启用）时不投，免得留下无人引用的变量。
-    if crate::pi_config::pi_provider_exists(&original_id)?
+    // （未启用）时不投，免得留下无人引用的变量。零调用分支钥匙未变，跳过重投。
+    if credentials_changed
+        && crate::pi_config::pi_provider_exists(&original_id)?
         && ProviderService::provider_has_stored_key(state, &app_type, &provider.id)?
     {
         let mut delivered = SwitchResult::default();

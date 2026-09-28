@@ -15,6 +15,7 @@ use crate::store::AppState;
 
 use super::normalize_claude_models_in_value;
 use crate::codex_config::PlaintextStripOutcome;
+use zeroize::Zeroizing;
 
 const KIMI_FOR_CODING_CONTEXT_TOKENS: &str = "262144";
 
@@ -613,7 +614,22 @@ pub(crate) fn write_live_with_common_config_for_state(
     app_type: &AppType,
     provider: &Provider,
 ) -> Result<(), AppError> {
-    write_live_with_common_config(state, app_type, provider)
+    write_live_with_common_config(state, app_type, provider, super::VaultAccessPolicy::Allowed)
+}
+
+/// P3（安全方案 §7.4）：配置专用投影——写 live 但禁止取凭据。供零调用编辑
+/// 分支使用；端点解析见 [`super::resolve_base_url_with_policy`]。
+pub(crate) fn write_live_with_common_config_for_state_no_vault(
+    state: &AppState,
+    app_type: &AppType,
+    provider: &Provider,
+) -> Result<(), AppError> {
+    write_live_with_common_config(
+        state,
+        app_type,
+        provider,
+        super::VaultAccessPolicy::NoVaultAccess,
+    )
 }
 
 /// Validate the target provider's Codex live projection without writing.
@@ -658,10 +674,11 @@ pub(crate) fn write_live_with_common_config(
     state: &AppState,
     app_type: &AppType,
     provider: &Provider,
+    policy: super::VaultAccessPolicy,
 ) -> Result<(), AppError> {
     let effective_provider =
         build_effective_provider_for_live(state.db.as_ref(), app_type, provider)?;
-    write_live_snapshot(state, app_type, &effective_provider)
+    write_live_snapshot(state, app_type, &effective_provider, policy)
 }
 
 pub(crate) fn build_effective_provider_for_live(
@@ -854,6 +871,7 @@ pub(crate) fn write_live_snapshot(
     state: &AppState,
     app_type: &AppType,
     provider: &Provider,
+    policy: super::VaultAccessPolicy,
 ) -> Result<(), AppError> {
     match app_type {
         AppType::Claude => {
@@ -882,13 +900,29 @@ pub(crate) fn write_live_snapshot(
                 obj.remove("OPENAI_API_KEY");
             }
             // F1-2（D3-A）：base_url 从端点表 / vault 懒迁移读取，不再走旧凭据存储。
-            let base_url = super::resolve_base_url(state, &AppType::Codex, &provider.id)?;
+            // P3（§7.4）：NoVaultAccess 投影下缓存 miss 不 fetch。
+            let mut base_url =
+                super::resolve_base_url_with_policy(state, &AppType::Codex, &provider.id, policy)?;
             // refs 表明该供应商有 base_url 却解析不到（1Password 未解锁 / 条目丢失）时
             // **切换失败**——绝不写出缺 base_url 的 config.toml（Codex 无法工作）。
             let refs_have_base_url = state
                 .db
                 .get_secret_ref_fields(AppType::Codex.as_str(), &provider.id)?
                 .is_some_and(|fields| fields.iter().any(|f| f == crate::secrets::FIELD_BASE_URL));
+            if base_url.is_none()
+                && refs_have_base_url
+                && policy == super::VaultAccessPolicy::NoVaultAccess
+            {
+                // §7.4「安全保留既有投影」：配置编辑不取 vault，端点缓存又没有
+                // （敏感 URL 不缓存 / 尚未懒迁移）。当前供应商的 live config.toml
+                // 在切换时已写入从 vault 校验过的 base_url，本地读回即 0 次 op，
+                // 也不得把缺端点的 config.toml 写出去。
+                base_url = crate::codex_config::read_codex_config_text()
+                    .ok()
+                    .as_deref()
+                    .and_then(crate::codex_config::extract_codex_base_url)
+                    .map(Zeroizing::new);
+            }
             if base_url.is_none() && refs_have_base_url {
                 return Err(AppError::localized(
                     "provider.base_url_unresolved",

@@ -54,9 +54,16 @@ const IMPORT_ALLOWED_PRAGMAS: &[&str] = &["foreign_keys", "user_version"];
 ///
 /// 为什么是「拒绝越界动作」而不是「只放行 dump_sql 的语句」：这段 SQL 跑在
 /// `NamedTempFile` 建的一次性库上，而那个库的全部内容本来就由这份 SQL 决定。
-/// 因此 `DELETE` / `DROP` / `UPDATE` 给不了攻击者任何新东西——**唯一有意义的边界
-/// 是那个临时文件本身**。按 dump_sql 的产物做严格白名单只会带来误伤风险（用户
-/// 库里出现一种没预料到的对象就恢复不了备份），却不多挡任何攻击。
+/// 因此 `DELETE` / `DROP` / `UPDATE` 给不了攻击者任何新东西——**唯一有意义的
+/// 边界曾经只是那个临时文件本身**。按 dump_sql 的产物做严格白名单只会带来
+/// 误伤风险（用户库里出现一种没预料到的对象就恢复不了备份），却不多挡任何攻击。
+///
+/// 但 S4-1 引入本机数据合并后，「只留在临时文件里」的前提不再成立（SEC-05）：
+/// 暂存库随后要在 `merge_for_import` 阶段接收**本机可信数据回填**，并把整库
+/// 复制为主库。触发器会在回填阶段对刚写入的可信数据执行任意改写，还会随
+/// 主库替换长期驻留；view 与虚拟表同属不可信 schema 逻辑。应用自身 schema
+/// 只含表和索引，因此导入内容中出现任何 trigger/view 都属于外来对象，一律
+/// 拒绝创建——不静默丢弃后继续。
 ///
 /// 越界动作是实测出来的，不是推断的：
 /// - `ATTACH DATABASE 'x'`、`VACUUM INTO 'x'`、裸 `VACUUM` **三者都**报
@@ -70,6 +77,10 @@ fn import_authorizer(context: rusqlite::hooks::AuthContext<'_>) -> rusqlite::hoo
     let escapes_temp_db = match context.action {
         AuthAction::Attach { .. } | AuthAction::Detach { .. } => true,
         AuthAction::CreateVtable { .. } | AuthAction::DropVtable { .. } => true,
+        AuthAction::CreateTrigger { .. }
+        | AuthAction::CreateTempTrigger { .. }
+        | AuthAction::CreateView { .. }
+        | AuthAction::CreateTempView { .. } => true,
         AuthAction::Unknown { .. } => true,
         AuthAction::Pragma { pragma_name, .. } => !IMPORT_ALLOWED_PRAGMAS
             .iter()
@@ -392,6 +403,10 @@ impl Database {
         // Validate the schema produced by the input itself before migrations
         // can create missing tables and accidentally make a truncated file look valid.
         Self::validate_imported_schema(&temp_conn)?;
+        // SEC-05：authorizer 已在 prepare 阶段拦下 trigger/view，这层 schema
+        // 审查是独立防线——迁移、本机回填、整库复制前都必须保证暂存 schema
+        // 里没有可执行对象。
+        Self::reject_unsupported_schema_objects(&temp_conn)?;
 
         // 补齐缺失表/索引并执行迁移
         Self::create_tables_on_conn(&temp_conn)?;
@@ -768,6 +783,60 @@ impl Database {
         Ok(())
     }
 
+    /// SEC-05：在任何迁移、本机回填或整库复制前审查暂存 schema，拒绝可执行对象。
+    ///
+    /// SQL 导入路径虽有 `import_authorizer` 在 prepare 阶段拦截，但这是一层独立
+    /// 防线，也是二进制 `.db` 恢复（不经过 SQL 文本 authorizer）的唯一边界：
+    /// 触发器一旦随暂存 schema 进入回填阶段，就能在 `merge_for_import` 写入本机
+    /// 可信数据（B 级设置键、D 级引用）时改写它，并随后被整库复制进主库长期
+    /// 驻留。应用自身 schema 只含表和索引，导入内容中出现任何 trigger/view/
+    /// 虚拟表都属于不可信对象——报错拒绝，不静默丢弃后继续成功。
+    fn reject_unsupported_schema_objects(conn: &Connection) -> Result<(), AppError> {
+        const OFFENDING_QUERY: &str = "SELECT type, name FROM sqlite_master \
+             WHERE type IN ('trigger','view') \
+                OR (type = 'table' AND sql LIKE 'CREATE VIRTUAL TABLE%') \
+             ORDER BY name";
+        let mut stmt = conn
+            .prepare(OFFENDING_QUERY)
+            .map_err(|e| AppError::Database(format!("审查导入 schema 失败: {e}")))?;
+        let mut rows = stmt
+            .query([])
+            .map_err(|e| AppError::Database(format!("审查导入 schema 失败: {e}")))?;
+        let mut offending: Vec<String> = Vec::new();
+        while let Some(row) = rows
+            .next()
+            .map_err(|e| AppError::Database(format!("审查导入 schema 失败: {e}")))?
+        {
+            let obj_type: String = row
+                .get(0)
+                .map_err(|e| AppError::Database(format!("审查导入 schema 失败: {e}")))?;
+            let name: String = row
+                .get(1)
+                .map_err(|e| AppError::Database(format!("审查导入 schema 失败: {e}")))?;
+            let label = match obj_type.as_str() {
+                "trigger" => "触发器",
+                "view" => "视图",
+                _ => "虚拟表",
+            };
+            offending.push(format!("{label} {name}"));
+        }
+
+        if offending.is_empty() {
+            return Ok(());
+        }
+        Err(AppError::localized(
+            "backup.schema.executable_objects",
+            format!(
+                "导入内容包含不受支持的可执行 schema 对象（{}）。已拒绝导入，当前数据库保持不变；请从不含这些对象的备份恢复。",
+                offending.join("、")
+            ),
+            format!(
+                "The imported file contains unsupported executable schema objects ({}). Import rejected; the current database is unchanged. Restore from a backup without these objects.",
+                offending.join(", ")
+            ),
+        ))
+    }
+
     /// 导出数据库为 SQL 文本
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
@@ -1123,6 +1192,9 @@ impl Database {
 
         Self::validate_sqlite_integrity(&staging_conn)?;
         Self::validate_imported_schema(&staging_conn)?;
+        // SEC-05：二进制恢复不经过 SQL 文本 authorizer，触发器等可执行对象
+        // 必须在迁移、回填、复制前从 schema 审查拦下。
+        Self::reject_unsupported_schema_objects(&staging_conn)?;
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
         Self::create_tables_on_conn(&staging_conn)?;
         Self::apply_schema_migrations_on_conn(&staging_conn)?;
@@ -1275,6 +1347,22 @@ impl Database {
             return Err(AppError::InvalidInput(format!(
                 "Backup file not found: {filename}"
             )));
+        }
+
+        // SEC-05：备份文件将**整库顶替**主库且不经过任何 SQL 文本 authorizer，
+        // 复制前必须审查其 schema。在损坏主库改名之前做，审查失败时现场不变。
+        {
+            let source_conn = Connection::open_with_flags(
+                &backup_path,
+                rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+                    | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+            let review = Self::reject_unsupported_schema_objects(&source_conn);
+            if let Err(close_err) = source_conn.close() {
+                log::warn!("关闭恢复来源连接失败: {}", close_err.1);
+            }
+            review?;
         }
 
         // 损坏主库改名留证；失败则整体中止，绝不出现"没有主库也没有新主库"的窗口。
@@ -1450,6 +1538,280 @@ mod tests {
                 target.display()
             );
         }
+        Ok(())
+    }
+
+    // ─── SEC-05（安全方案 §5）：外部 SQL / 二进制备份里的触发器不得篡改本机回填 ───
+
+    /// SEC-05（SQL 路径）：合法格式导出 + 作用于 `secret_refs` 的 AFTER INSERT 触发器。
+    /// 暂存库回填本机引用时触发器把刚写回的 item id 改成攻击者合成值，随后整库
+    /// 复制为主库——「本机优先」失效。修复后导入必须被拒绝，主库保持不变。
+    #[test]
+    #[serial]
+    fn sec05_import_rejects_trigger_tampering_with_local_ref_backfill() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let target = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Local', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO secret_refs (app, provider_id, vault_id, item_id, fields, updated_at)
+                 VALUES ('claude', 'p1', 'vault-x', 'item-local', '[\"api_key\"]', 0)",
+                [],
+            )?;
+        }
+
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        let malicious = format!(
+            "{exported}\nCREATE TRIGGER sec05_steal_ref AFTER INSERT ON secret_refs\nBEGIN\n  UPDATE secret_refs SET item_id = 'item-evil' WHERE item_id = 'item-local';\nEND;\n"
+        );
+
+        let result = target.import_sql_string(&malicious);
+        assert!(
+            result.is_err(),
+            "SEC-05：携带触发器的 SQL 导入必须被拒绝（触发器可在本机回填阶段篡改引用）"
+        );
+        let item_id: String = {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.query_row(
+                "SELECT item_id FROM secret_refs WHERE app = 'claude' AND provider_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )?
+        };
+        assert_eq!(
+            item_id, "item-local",
+            "SEC-05：无论导入成败，本机引用行不得被导入内容改写"
+        );
+        Ok(())
+    }
+
+    /// SEC-05（SQL 路径）：触发器篡改设备本地 settings（B 级键）的回填。
+    #[test]
+    #[serial]
+    fn sec05_import_rejects_trigger_tampering_with_device_local_settings() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let target = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.execute(
+                "INSERT INTO settings (key, value) VALUES ('managed_env_vars', 'real-local-value')",
+                [],
+            )?;
+        }
+
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        let malicious = format!(
+            "{exported}\nCREATE TRIGGER sec05_tamper_settings AFTER INSERT ON settings\nBEGIN\n  UPDATE settings SET value = 'tampered' WHERE key = 'managed_env_vars';\nEND;\n"
+        );
+
+        let result = target.import_sql_string(&malicious);
+        assert!(
+            result.is_err(),
+            "SEC-05：携带 settings 触发器的 SQL 导入必须被拒绝"
+        );
+        let value: Option<String> = {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.query_row(
+                "SELECT value FROM settings WHERE key = 'managed_env_vars'",
+                [],
+                |row| row.get(0),
+            )
+            .ok()
+        };
+        assert_eq!(
+            value.as_deref(),
+            Some("real-local-value"),
+            "SEC-05：设备本地设置不得被导入触发器改写"
+        );
+        Ok(())
+    }
+
+    /// SEC-05（二进制 `.db` 恢复路径）：触发器随二进制备份进入暂存库，
+    /// 不经过 SQL 文本 authorizer——恢复前必须审查 `sqlite_schema` 拒绝。
+    #[test]
+    #[serial]
+    fn sec05_restore_rejects_binary_backup_with_trigger() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let target = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.execute("DELETE FROM providers", [])?;
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Local', '{}', '{}')",
+                [],
+            )?;
+            conn.execute(
+                "INSERT INTO secret_refs (app, provider_id, vault_id, item_id, fields, updated_at)
+                 VALUES ('claude', 'p1', 'vault-x', 'item-local', '[\"api_key\"]', 0)",
+                [],
+            )?;
+        }
+
+        // 用合法导出构造一个「除触发器外完全正常」的二进制备份。
+        let backup_dir = crate::config::get_app_config_dir().join("backups");
+        std::fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
+        let backup_path = backup_dir.join("with-trigger.db");
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        {
+            let conn =
+                Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(&exported)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(
+                "CREATE TRIGGER sec05_steal_ref AFTER INSERT ON secret_refs\nBEGIN\n  UPDATE secret_refs SET item_id = 'item-evil' WHERE item_id = 'item-local';\nEND;",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        let result = target.restore_from_backup("with-trigger.db");
+        assert!(result.is_err(), "SEC-05：带触发器的二进制备份必须被拒绝");
+        let item_id: String = {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.query_row(
+                "SELECT item_id FROM secret_refs WHERE app = 'claude' AND provider_id = 'p1'",
+                [],
+                |row| row.get(0),
+            )?
+        };
+        assert_eq!(
+            item_id, "item-local",
+            "SEC-05：恢复失败/被拒后主库引用行必须原样保留"
+        );
+        Ok(())
+    }
+
+    /// SEC-05：合法导出头 + 视图。视图虽不直接改数据，但属于不可信 schema 逻辑，
+    /// 且能随主库替换长期驻留；与触发器同一防线拒绝。
+    #[test]
+    #[serial]
+    fn sec05_import_rejects_view_in_sql() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let target = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Local', '{}', '{}')",
+                [],
+            )?;
+        }
+
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        let malicious = format!(
+            "{exported}\nCREATE VIEW secret_refs_exposed AS\n  SELECT app, provider_id, item_id FROM secret_refs;\n"
+        );
+
+        let result = target.import_sql_string(&malicious);
+        assert!(result.is_err(), "SEC-05：携带视图的 SQL 导入必须被拒绝");
+        let provider_count: i64 = {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?
+        };
+        assert_eq!(provider_count, 1, "SEC-05：拒绝后主库保持不变");
+        Ok(())
+    }
+
+    /// SEC-05（二进制 `.db` 恢复路径）：虚拟表（FTS5 等模块）同样属于不可信
+    /// schema 对象，`sqlite_schema` 审查按 `CREATE VIRTUAL TABLE` 识别拒绝。
+    #[test]
+    #[serial]
+    fn sec05_restore_rejects_binary_backup_with_virtual_table() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let target = Database::init()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.execute("DELETE FROM providers", [])?;
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Local', '{}', '{}')",
+                [],
+            )?;
+        }
+
+        let backup_dir = crate::config::get_app_config_dir().join("backups");
+        std::fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
+        let backup_path = backup_dir.join("with-vtable.db");
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        {
+            let conn =
+                Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(&exported)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch("CREATE VIRTUAL TABLE sec05_fts USING fts5(needle);")
+                .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        let result = target.restore_from_backup("with-vtable.db");
+        assert!(result.is_err(), "SEC-05：带虚拟表的二进制备份必须被拒绝");
+        let provider_count: i64 = {
+            let conn = crate::database::lock_conn!(target.conn);
+            conn.query_row("SELECT COUNT(*) FROM providers", [], |row| row.get(0))?
+        };
+        assert_eq!(provider_count, 1, "SEC-05：拒绝后主库保持不变");
+        Ok(())
+    }
+
+    /// SEC-05（离线恢复路径）：`restore_main_db_file_from_backup` 直接用文件
+    /// 复制顶替主库、不经过任何 authorizer，必须在损坏主库改名**之前**审查
+    /// schema；拒绝时现场保持不变（无 `.corrupt-*`、无 `.restoring` 残留）。
+    #[test]
+    #[serial]
+    fn sec05_offline_restore_rejects_backup_with_trigger() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let config_dir = crate::config::get_app_config_dir();
+        let db_path = config_dir.join("cc-switch.db");
+        let sentinel_before = std::fs::read(&db_path).map_err(|e| AppError::io(&db_path, e))?;
+
+        let backup_dir = config_dir.join("backups");
+        std::fs::create_dir_all(&backup_dir).map_err(|e| AppError::io(&backup_dir, e))?;
+        let backup_path = backup_dir.join("offline-trigger.db");
+        let source = Database::memory()?;
+        let exported = source.export_sql_string()?;
+        {
+            let conn =
+                Connection::open(&backup_path).map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(&exported)
+                .map_err(|e| AppError::Database(e.to_string()))?;
+            conn.execute_batch(
+                "CREATE TRIGGER sec05_offline_steal_ref AFTER INSERT ON secret_refs\nBEGIN\n  UPDATE secret_refs SET item_id = 'item-evil' WHERE item_id = 'item-local';\nEND;",
+            )
+            .map_err(|e| AppError::Database(e.to_string()))?;
+        }
+
+        let result = Database::restore_main_db_file_from_backup("offline-trigger.db");
+        assert!(
+            result.is_err(),
+            "SEC-05：带触发器的备份在离线恢复路径必须被拒绝"
+        );
+        let sentinel_after = std::fs::read(&db_path).map_err(|e| AppError::io(&db_path, e))?;
+        assert_eq!(
+            sentinel_before, sentinel_after,
+            "SEC-05：拒绝后主库文件必须原样保留"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&config_dir)
+            .map_err(|e| AppError::io(&config_dir, e))?
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                let name = e.file_name();
+                let name = name.to_string_lossy();
+                name.starts_with("cc-switch.corrupt-") || name.starts_with("cc-switch.db.restoring")
+            })
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "SEC-05：schema 审查必须在损坏主库改名之前，不留下恢复中间产物: {leftovers:?}"
+        );
         Ok(())
     }
 

@@ -301,25 +301,90 @@ impl OnePasswordVault {
     ///
     /// 拒绝时日志只记结构定位信息，不含任何值（§9-13）。
     fn title_ownership_matches(&self, raw: &[u8], title: &str, group: &SecretGroup) -> bool {
+        let _ = title;
+        self.verify_item_identity(raw, group, None)
+    }
+
+    /// SEC-01：单一条目身份核验——所有 `op item get` 的响应在解析并向业务层
+    /// 返回秘密前必须通过；核验只用已取得的 JSON，不为校验额外请求 op（§9-5）。
+    ///
+    /// 通过 = 可证明条目属于 `expected` 组、未归档、且响应与请求定位一致。
+    /// 任一无法证明（归属字段缺失/格式错/不匹配、归档、响应 id 与请求 id 冲突、
+    /// 响应 vault 与配置 vault 不符）一律拒绝：调用方必须把该条目按「不存在」
+    /// 处理，绝不可静默改归属后写回，也不可降级成空包继续。
+    ///
+    /// `requested_item_id`：按 id 直达时传该 id（校验响应一致性）；按标题兜底时
+    /// 传 `None`（响应的 id 是新信息，正是 repair_ref 要的）。
+    fn verify_item_identity(
+        &self,
+        raw: &[u8],
+        expected: &SecretGroup,
+        requested_item_id: Option<&str>,
+    ) -> bool {
+        // 1) 归档 = 已删除（op item get <id> 会命中归档区，真机实测 op 2.39）。
+        if is_archived_item(raw) {
+            return false;
+        }
+        let value: serde_json::Value = match serde_json::from_slice(raw) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        // 2) 响应 ID 一致性：op 返回非空 id 且与请求定位的 id 不同 = 定位被带偏
+        //    （引用行指向错误条目、响应错位等），拒绝。
+        if let Some(requested) = requested_item_id {
+            if let Some(resp_id) = value
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+            {
+                if resp_id != requested {
+                    log::warn!(
+                        "1P 条目响应 id 与请求定位不一致，按不存在处理（仅结构定位，不含值；目标组 {expected:?}）"
+                    );
+                    return false;
+                }
+            }
+        }
+        // 3) vault 归属：响应带 vault 信息时必须与配置的 vault 一致。
+        match value.get("vault") {
+            Some(serde_json::Value::String(v)) if !v.is_empty() && v != &self.vault => {
+                return false;
+            }
+            Some(serde_json::Value::Object(obj)) => {
+                if let Some(vid) = obj
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                {
+                    if vid != self.vault {
+                        return false;
+                    }
+                }
+            }
+            _ => {}
+        }
+        // 4) 组归属：新格式条目必须精确匹配 `cc-switch-group` 字段；无该字段的
+        //    旧格式条目只接受结构化标题（`cc-switch/<app>/<id>`）承载的可证明归属。
         match parse_item_group_field(raw) {
             Some(field) => {
-                if parse_group_from_group_value(&field).is_some_and(|g| &g == group) {
+                if parse_group_from_group_value(&field).is_some_and(|g| &g == expected) {
                     true
                 } else {
                     log::warn!(
-                        "1P 条目标题撞名但 cc-switch-group 归属不符，视为不存在并继续候选标题\
-                         （仅结构定位，不含值；目标组 {group:?}）"
+                        "1P 条目 cc-switch-group 归属不符，视为不存在并继续候选\
+                         （仅结构定位，不含值；目标组 {expected:?}）"
                     );
                     false
                 }
             }
             None => {
-                if parse_group_from_title(title).is_some_and(|g| &g == group) {
+                let title = value.get("title").and_then(|t| t.as_str()).unwrap_or("");
+                if parse_group_from_title(title).is_some_and(|g| &g == expected) {
                     true
                 } else {
                     log::warn!(
-                        "1P 条目标题命中但缺少 cc-switch-group 字段且非结构化标题，视为不存在\
-                         并继续候选标题（仅结构定位，不含值；目标组 {group:?}）"
+                        "1P 条目缺少 cc-switch-group 字段且非结构化标题，归属不可证明，视为不存在\
+                         （仅结构定位，不含值；目标组 {expected:?}）"
                     );
                     false
                 }
@@ -408,6 +473,11 @@ impl OnePasswordVault {
             if is_archived_item(&raw) {
                 continue;
             }
+            // SEC-01：引用行直达的条目也必须核验归属——被污染的引用（导入合并
+            // 采纳的远端引用）不得借对账把他组条目改名成当前组的首选标题。
+            if !self.verify_item_identity(&raw, &group, Some(&item_id)) {
+                continue;
+            }
             let mut item: serde_json::Value = serde_json::from_slice(&raw)
                 .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
             if item.get("title").and_then(|t| t.as_str()) == Some(expected.as_str()) {
@@ -482,7 +552,6 @@ impl OnePasswordVault {
             .filter(|i| i.title == title && !i.id.is_empty())
             .collect();
         candidates.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
-        let expected = group_field_value(group);
         for item in candidates {
             // 旧格式标题本身承载归属，无需额外读取。
             if parse_group_from_title(&item.title).as_ref() == Some(group) {
@@ -491,22 +560,18 @@ impl OnePasswordVault {
                 );
                 return Ok(Some(item.id.clone()));
             }
-            // 方案 B 条目：读条目核对 cc-switch-group 字段（不带 --reveal）。
+            // 方案 B 条目：读条目核对归属（不带 --reveal）。SEC-01：核验统一走
+            // 身份函数（含归档、响应 id 一致性、vault 一致）。
             let bytes = self
                 .run_op(&self.base_read_args(&item.id), None)
                 .map_err(RunErr::into_vault)?;
-            if is_archived_item(&bytes) {
+            if !self.verify_item_identity(&bytes, group, Some(&item.id)) {
                 continue;
             }
-            if matches!(
-                parse_item_group_field(&bytes),
-                Some(v) if v == expected
-            ) {
-                log::warn!(
-                    "1Password 中存在同标题条目，已按 cc-switch-group 定位对应条目；请在 1Password 中清理重复条目（仅结构定位，不含值）"
-                );
-                return Ok(Some(item.id.clone()));
-            }
+            log::warn!(
+                "1Password 中存在同标题条目，已按 cc-switch-group 定位对应条目；请在 1Password 中清理重复条目（仅结构定位，不含值）"
+            );
+            return Ok(Some(item.id.clone()));
         }
         Ok(None)
     }
@@ -518,10 +583,15 @@ impl OnePasswordVault {
     /// 真机实测（op 2.39）：`op item get <id>` 会命中**归档区**条目（返回 JSON 带
     /// `"state":"ARCHIVED"`），按标题则不会。归档 = 已删除，一律按 NotFound 处理。
     fn fetch_item_resolved(&self, group: &SecretGroup) -> Result<Option<FetchedItem>, VaultError> {
-        // 1) 引用行里的真实 item id 直达。
+        // 1) 引用行里的真实 item id 直达。SEC-01：直达命中也必须核验归属——
+        //    引用行可能来自导入合并采纳的远端引用，指向同 vault 的他组条目；
+        //    核验只用已取得的 JSON，不增加 op。拒绝时按「id 失效」继续标题兜底。
         if let Some(id) = self.ref_item_id(group) {
             match self.run_op(&self.base_read_args(&id), None) {
-                Ok(raw) if !is_archived_item(&raw) => {
+                Ok(raw)
+                    if !is_archived_item(&raw)
+                        && self.verify_item_identity(&raw, group, Some(&id)) =>
+                {
                     let bundle = parse_item_bundle(&raw)?;
                     return Ok(Some(FetchedItem {
                         bundle,
@@ -529,7 +599,7 @@ impl OnePasswordVault {
                         raw,
                     }));
                 }
-                // id 失效（条目被删/已归档/换 vault）：按标题兜底。
+                // id 失效（条目被删/已归档/换 vault）或归属不可证明：按标题兜底。
                 Ok(_) | Err(RunErr::NotFound) => {}
                 Err(RunErr::Vault(e)) => return Err(e),
             }
@@ -561,7 +631,10 @@ impl OnePasswordVault {
                         continue;
                     };
                     match self.run_op(&self.base_read_args(&id), None) {
-                        Ok(raw) if !is_archived_item(&raw) => {
+                        Ok(raw)
+                            if !is_archived_item(&raw)
+                                && self.verify_item_identity(&raw, group, Some(&id)) =>
+                        {
                             let bundle = parse_item_bundle(&raw)?;
                             return Ok(Some(FetchedItem {
                                 bundle,
@@ -626,6 +699,14 @@ impl OnePasswordVault {
                         VaultError::Other("op 条目缺少 id，无法就地编辑".to_string())
                     })?,
                 };
+                // SEC-01：edit 是破坏性动作，写前对响应原文再核验一次身份
+                // （纯函数复用 fetch 已取得的 JSON，不增加 op；fetch 定位路径
+                // 已核验，这里是防未来改动遗漏的第二道闸）。
+                if !self.verify_item_identity(&fetched.raw, group, Some(&item_id)) {
+                    return Err(VaultError::Other(
+                        "条目归属核验未通过，已拒绝就地编辑".to_string(),
+                    ));
+                }
                 // 在条目 JSON 原文上就地改托管字段后整份走 stdin edit。
                 let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
                     .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
@@ -1448,32 +1529,48 @@ impl SecretVault for OnePasswordVault {
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
-        // F2-2：id 直达，失效时按标题兜底（新旧标题都试）；同标题多条核对归属后
-        // 按 id 删。已不存在视为删除成功（幂等）。
+        // SEC-02：删除与读取共用同一套安全定位——先 get 核验身份，再按核验后
+        // 的 id 归档。绝不按标题直接 delete（裸显示名候选可能唯一命中其他应用
+        // 的同名旧格式条目），绝不归档归属不可证明的条目。破坏性操作增加必要
+        // get 是允许的（§SEC-01-5，不受「模型编辑零 op」限制）。
+        //
+        // 引用直达的 id 也要先核验：引用行可能来自导入合并采纳的远端引用，
+        // 指向同 vault 的他组条目（SEC-01）。归属不符的候选按「不存在」跳过，
+        // 继续找合法候选；全部候选不可证明时不做任何归档，按幂等成功返回
+        // （该组在保险箱里没有可安全归档的条目，他组条目不可触碰）。
+        let mut candidates: Vec<String> = Vec::new();
         if let Some(id) = self.ref_item_id(group) {
-            let args = self.base_delete_args(&id);
-            match self.run_op(&args, None) {
-                Ok(_) => return Ok(()),
-                Err(RunErr::NotFound) => {}
-                Err(RunErr::Vault(e)) => return Err(e),
-            }
+            candidates.push(id);
         }
-        for title in self.candidate_titles(group) {
-            let args = self.base_delete_args(&title);
-            match self.run_op(&args, None) {
-                Ok(_) => return Ok(()),
+        candidates.extend(self.candidate_titles(group));
+        for reference in candidates {
+            let raw = match self.run_op(&self.base_read_args(&reference), None) {
+                Ok(raw) => raw,
                 Err(RunErr::NotFound) => continue,
+                // 同标题多条：核对归属取相符的最新一条（沿用读取路径的规则）。
                 Err(RunErr::Vault(VaultError::ItemConflict)) => {
-                    let Some(id) = self.resolve_conflicting_item_id(&title, group)? else {
+                    let Some(id) = self.resolve_conflicting_item_id(&reference, group)? else {
                         continue;
                     };
-                    let args = self.base_delete_args(&id);
-                    match self.run_op(&args, None) {
-                        Ok(_) => return Ok(()),
+                    match self.run_op(&self.base_read_args(&id), None) {
+                        Ok(raw) => raw,
                         Err(RunErr::NotFound) => continue,
                         Err(RunErr::Vault(e)) => return Err(e),
                     }
                 }
+                Err(RunErr::Vault(e)) => return Err(e),
+            };
+            // 响应里拿不到非空 id 就无法安全按 id 归档，跳过该候选。
+            let Some(item_id) = parse_item_id(&raw).filter(|s| !s.is_empty()) else {
+                continue;
+            };
+            if !self.verify_item_identity(&raw, group, Some(&item_id)) {
+                continue;
+            }
+            let args = self.base_delete_args(&item_id);
+            match self.run_op(&args, None) {
+                Ok(_) => return Ok(()),
+                Err(RunErr::NotFound) => continue,
                 Err(RunErr::Vault(e)) => return Err(e),
             }
         }
@@ -1787,13 +1884,17 @@ mod tests {
     #[test]
     fn fake_runner_records_calls_and_replays_script() {
         // F0-1 自测：替身按脚本返回、按序记录。
+        // 条目带 AppSync 的归属字段——SEC-01 之后无归属的响应会被身份核验拒绝。
+        // 第一次 fetch 命中后 repair_ref 登记引用行，第二次 fetch 走 id 直达：
+        // 直达 NotFound → 标题兜底 NotFound → None（3 次调用）。
         let (vault, runner) = vault_with(vec![
-            Ok(br#"{"id":"i1","fields":[]}"#.to_vec()),
+            Ok(br#"{"id":"i1","title":"cc-switch/app/sync","fields":[{"id":"f-g","type":"STRING","label":"cc-switch-group","value":"app/sync"},{"id":"f-k","type":"CONCEALED","label":"api_key","value":"sk-fixture-sync-0001"}]}"#.to_vec()),
+            Err(RunErr::NotFound),
             Err(RunErr::NotFound),
         ]);
         assert!(vault.fetch(&SecretGroup::AppSync).unwrap().is_some());
         assert!(vault.fetch(&SecretGroup::AppSync).unwrap().is_none());
-        assert_eq!(runner.call_count(), 2);
+        assert_eq!(runner.call_count(), 3);
         let (args, stdin) = runner.call(0);
         assert_eq!(args[0], "item");
         assert_eq!(args[1], "get");
@@ -3000,5 +3101,279 @@ mod tests {
             fetched.is_none(),
             "显示名命中 + 无 group 字段 = 归属不可证明，必须拒绝（S2）"
         );
+    }
+
+    // ─── SEC-01（安全方案 §5）：按 item ID 读写删改必须核验条目归属 ───
+
+    /// 带新格式 group 字段的条目构造（group 字段值 = `<app>/<provider_id>`）。
+    fn item_json_grouped(
+        id: &str,
+        title: &str,
+        group_value: &str,
+        fields: &[(&str, &str, &str)],
+    ) -> String {
+        item_json_with_title(
+            id,
+            title,
+            [
+                ("cc-switch-group", "STRING", group_value),
+                (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+            ]
+            .iter()
+            .chain(fields.iter())
+            .copied()
+            .collect::<Vec<_>>()
+            .as_slice(),
+        )
+    }
+
+    /// 构造「恶意导入后的终态」：本机 `secret_refs` 里 A 组的引用行指向同 vault
+    /// 内属于 B 组的条目。该行正是 `merge_secret_refs` 采纳远端引用（同 vault +
+    /// 供应商存在即采纳，不核验条目归属）之后的产物，也是 SEC-01 修复必须拦住
+    /// 的入口——后续 fetch / put / delete / retitle 都会拿这个 item id 直达。
+    fn vault_with_poisoned_ref(
+        script: Vec<Result<Vec<u8>, RunErr>>,
+    ) -> (
+        OnePasswordVault,
+        Arc<FakeOpRunner>,
+        Arc<crate::database::Database>,
+    ) {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let victim = crate::provider::Provider::from_parts(
+            "victim".to_string(),
+            "Victim".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("claude", &victim).expect("save victim");
+        let attacker = crate::provider::Provider::from_parts(
+            "a".to_string(),
+            "Attacker".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("claude", &attacker)
+            .expect("save attacker");
+        // 污染引用行：claude/a 的引用指向 claude/victim 的条目。
+        db.upsert_secret_ref(
+            "claude",
+            "a",
+            "vault-x",
+            "item-of-victim",
+            &[FIELD_API_KEY.to_string()],
+        )
+        .expect("write poisoned ref");
+        let runner = Arc::new(FakeOpRunner::new(script));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x", db.clone());
+        (vault, runner, db)
+    }
+
+    const VICTIM_ITEM_JSON: &str = r#"{"id":"item-of-victim","title":"claude/Victim","category":"API_CREDENTIAL","version":3,"fields":[{"id":"f-g","type":"STRING","label":"cc-switch-group","value":"claude/victim"},{"id":"f-k","type":"CONCEALED","label":"api_key","value":"sk-victim-secret"}]}"#;
+
+    /// SEC-01 验收（fetch）：导入的恶意引用不得让 A 组读出 B 组（victim）的钥匙。
+    /// 修复后：id 直达命中但归属拒绝 → 按标题兜底继续 → 全部候选不可证明 →
+    /// 返回 None（绝不返回他组秘密）。
+    #[test]
+    fn sec01_fetch_with_imported_ref_never_returns_other_group_secret() {
+        let (vault, runner, _db) = vault_with_poisoned_ref(vec![
+            Ok(VICTIM_ITEM_JSON.as_bytes().to_vec()),
+            Err(RunErr::NotFound), // 标题兜底 claude/Attacker
+            Err(RunErr::NotFound), // 标题兜底 Attacker
+            Err(RunErr::NotFound), // 标题兜底 cc-switch/claude/a
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let fetched = vault.fetch(&group).expect("fetch 不应抛分类错误");
+
+        let leaked = fetched
+            .map(|b| b.get(FIELD_API_KEY).map(|v| v.to_string()))
+            .unwrap_or(None);
+        assert_ne!(
+            leaked.as_deref(),
+            Some("sk-victim-secret"),
+            "SEC-01：恶意引用指向他组条目时，fetch 不得返回他组秘密"
+        );
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            assert!(
+                !args.contains(&"item-of-victim".to_string())
+                    || args.get(1).map(String::as_str) == Some("get"),
+                "SEC-01：victim 条目只允许被 get（用于核验拒绝），实际: {args:?}"
+            );
+        }
+    }
+
+    /// SEC-01 验收（合法引用直达）：归属核验复用已取得的 JSON——合法路径的
+    /// fetch 恰好 1 次 op，不为校验额外请求（§SEC-01-2）。
+    #[test]
+    fn sec01_legitimate_ref_fetch_uses_single_get() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let own = crate::provider::Provider::from_parts(
+            "a".to_string(),
+            "Attacker".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("claude", &own).expect("save provider");
+        db.upsert_secret_ref(
+            "claude",
+            "a",
+            "vault-x",
+            "item-own",
+            &[FIELD_API_KEY.to_string()],
+        )
+        .expect("write ref");
+        let own_item = item_json_grouped(
+            "item-own",
+            "claude/Attacker",
+            "claude/a",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-own")],
+        );
+        let runner = Arc::new(FakeOpRunner::new(vec![Ok(own_item.into_bytes())]));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x", db);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+
+        let bundle = vault
+            .fetch(&group)
+            .expect("fetch")
+            .expect("合法条目必须命中");
+        assert_eq!(
+            bundle.get(FIELD_API_KEY).map(|v| v.to_string()),
+            Some("sk-own".to_string())
+        );
+        assert_eq!(
+            runner.call_count(),
+            1,
+            "SEC-01：归属核验必须复用已取得的 JSON，不得为校验增加 op 调用"
+        );
+    }
+
+    /// SEC-01 验收（put）：导入的恶意引用不得让保存 A 组改写 B 组条目
+    /// （修复后：id 直达被拒 → 标题兜底落空 → 对真正的新建走 create，
+    /// 绝不 edit 他组条目，也绝不把 A 组归属写进他组条目）。
+    #[test]
+    fn sec01_put_with_imported_ref_never_edits_other_group_item() {
+        let (vault, runner, _db) = vault_with_poisoned_ref(vec![
+            Ok(VICTIM_ITEM_JSON.as_bytes().to_vec()),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Ok(item_json_grouped(
+                "item-new",
+                "claude/Attacker",
+                "claude/a",
+                &[(FIELD_API_KEY, "CONCEALED", "sk-attacker-new")],
+            )
+            .into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let mut bundle = SecretBundle::new();
+        bundle.insert(FIELD_API_KEY, Zeroizing::new("sk-attacker-new".to_string()));
+        let result = vault.put(&group, &bundle);
+
+        if let Ok(vref) = &result {
+            assert_ne!(
+                vref.item_id, "item-of-victim",
+                "SEC-01：put 不得落在他组条目上"
+            );
+        }
+        for i in 0..runner.call_count() {
+            let (args, stdin) = runner.call(i);
+            let is_edit_on_victim =
+                args.contains(&"edit".to_string()) && args.contains(&"item-of-victim".to_string());
+            assert!(
+                !is_edit_on_victim,
+                "SEC-01：任何调用都不得 edit 他组条目，实际: {args:?}"
+            );
+            if let Some(stdin) = stdin {
+                let text = String::from_utf8_lossy(&stdin);
+                assert!(
+                    !text.contains("claude/victim") || is_edit_on_victim,
+                    "SEC-01：stdin 不得把 A 组归属写进他组条目"
+                );
+            }
+        }
+    }
+
+    /// SEC-01 验收（delete）：导入的恶意引用不得让删除 A 组归档 B 组条目。
+    #[test]
+    fn sec01_delete_with_imported_ref_never_archives_other_group_item() {
+        let (vault, runner, _db) = vault_with_poisoned_ref(vec![
+            Ok(VICTIM_ITEM_JSON.as_bytes().to_vec()),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let _ = vault.delete(&group);
+
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            let is_delete_on_victim = args.contains(&"delete".to_string())
+                && args.contains(&"item-of-victim".to_string());
+            assert!(
+                !is_delete_on_victim,
+                "SEC-01：delete 不得归档他组条目，实际: {args:?}"
+            );
+        }
+    }
+
+    /// SEC-01 验收（retitle 对账）：`retitle_managed_items` 对引用行直达的条目
+    /// 也必须核验归属——现状会把他组条目改名成 A 组的首选标题。
+    #[test]
+    fn sec01_retitle_never_renames_other_group_item() {
+        let (vault, runner, _db) =
+            vault_with_poisoned_ref(vec![Ok(VICTIM_ITEM_JSON.as_bytes().to_vec())]);
+        let _ = vault.retitle_managed_items();
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            let is_edit_on_victim =
+                args.contains(&"edit".to_string()) && args.contains(&"item-of-victim".to_string());
+            assert!(
+                !is_edit_on_victim,
+                "SEC-01：对账改名不得触碰他组条目，实际: {args:?}"
+            );
+        }
+    }
+
+    // ─── SEC-02（安全方案 §5）：删除的标题兜底不得归档他组同名条目 ───
+
+    /// SEC-02：待删供应商引用缺失，裸显示名候选唯一命中他组旧格式条目时，
+    /// 不得直接按标题归档（现状：`op item delete <裸名>` 成功 = 删掉别人的条目）。
+    #[test]
+    fn sec02_delete_never_archives_other_group_item_via_bare_title() {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let gone = crate::provider::Provider::from_parts(
+            "gone".to_string(),
+            "Shared".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("claude", &gone).expect("save gone");
+        // 他组条目：标题为裸显示名「Shared」，group 字段是 claude/other（不是待删组）。
+        // 无引用行 → delete 走标题兜底：claude/Shared（NotFound）→ Shared（命中他组）。
+        let other_group_item = item_json_grouped(
+            "item-of-other",
+            "Shared",
+            "claude/other",
+            &[(FIELD_API_KEY, "CONCEALED", "sk-other")],
+        );
+        let runner = Arc::new(FakeOpRunner::new(vec![
+            Err(RunErr::NotFound),                     // delete "claude/Shared"
+            Ok(other_group_item.clone().into_bytes()), // 修复后按标题删前会先核归属；当前实现把这条当 delete 成功
+            Err(RunErr::NotFound),                     // 其余候选
+        ]));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x", db);
+        let group = SecretGroup::provider(AppType::Claude, "gone");
+        let _ = vault.delete(&group);
+
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            let deletes_bare_title = args.contains(&"delete".to_string())
+                && args.iter().any(|a| a == "Shared" || a == "item-of-other");
+            assert!(
+                !deletes_bare_title,
+                "SEC-02：归属未证明的裸标题候选不得被删除/归档，实际: {args:?}"
+            );
+        }
     }
 }
