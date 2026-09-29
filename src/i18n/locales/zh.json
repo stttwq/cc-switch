@@ -1230,6 +1230,8 @@
     "fetchModelsNotSupported": "该供应商不支持获取模型列表",
     "fetchModelsEndpointNotFound": "未找到可用的模型列表端点，请检查 Base URL 或确认供应商是否开放该接口",
     "fetchModelsTimeout": "请求超时，请检查网络连接",
+    "fetchModelsRedirectBlocked": "端点返回了重定向，已停止跟随；请把 API 端点直接改为最终地址后重试",
+    "fetchModelsInvalidUrl": "API 端点地址无效（仅支持 http/https，且不会向跨源地址携带凭据），请检查后重试",
     "requiredFields": "请填写供应商名称、API 地址、API Key 和模型",
     "apiKeyConfigured": "已配置，留空保持不变",
     "apiKeyConfiguredHint": "已配置，留空保持不变，点击右侧眼睛查看",

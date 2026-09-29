@@ -350,7 +350,18 @@ export function CodexFormFields({
   useEffect(() => {
     fetchModelsSeqRef.current += 1;
     setFetchedModels((prev) => (prev.length === 0 ? prev : []));
+    // 作废在途请求后重置 loading：旧请求的 finally 因下方守卫被跳过，
+    // 不重置会让获取按钮永久禁用（OPT-A：与 Claude/Pi 行为对齐）
+    setIsFetchingModels(false);
   }, [codexBaseUrl, isFullUrl, codexApiKey]);
+
+  // OPT-A：卸载时作废在途请求，避免旧请求把结果/toast 写进已卸载的表单
+  useEffect(
+    () => () => {
+      fetchModelsSeqRef.current += 1;
+    },
+    [],
+  );
   // 模型映射常驻（填了才生成 catalog），已与「路由接管」概念解耦。
   const isAnthropicFormat = apiFormat === "anthropic";
   const canEditCatalog = Boolean(onCatalogModelsChange);
@@ -428,7 +439,12 @@ export function CodexFormFields({
         console.warn("[ModelFetch] Failed:", err);
         showFetchModelsError(err, t);
       })
-      .finally(() => setIsFetchingModels(false));
+      .finally(() => {
+        // OPT-A：旧请求晚到不得清掉新在途请求的 loading
+        if (seq === fetchModelsSeqRef.current) {
+          setIsFetchingModels(false);
+        }
+      });
   }, [codexBaseUrl, codexApiKey, isFullUrl, t]);
 
   const handleAddCatalogRow = useCallback(() => {

@@ -1230,6 +1230,8 @@
     "fetchModelsNotSupported": "This provider does not support fetching model list",
     "fetchModelsEndpointNotFound": "No reachable models endpoint found. Please check the Base URL or confirm whether the provider exposes this API.",
     "fetchModelsTimeout": "Request timed out, please check network connection",
+    "fetchModelsRedirectBlocked": "The endpoint returned a redirect, which was not followed. Point the API endpoint directly at the final address and retry.",
+    "fetchModelsInvalidUrl": "Invalid API endpoint URL (only http/https is supported, and credentials are never sent cross-origin). Please check the endpoint.",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
     "apiKeyConfigured": "Configured; leave blank to keep unchanged",
     "apiKeyConfiguredHint": "Configured; leave blank to keep unchanged, click the eye icon to reveal",

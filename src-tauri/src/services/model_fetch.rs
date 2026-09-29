@@ -5,7 +5,7 @@
 //! 协议挂在兼容子路径上的官方供应商（DeepSeek、Kimi、智谱 GLM 等）。
 
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
-use reqwest::StatusCode;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -16,6 +16,37 @@ use std::time::Duration;
 pub struct FetchedModel {
     pub id: String,
     pub owned_by: Option<String>,
+}
+
+/// 传给前端的错误载荷（SEC-C）
+///
+/// 只含稳定 code、重试标志与可选 HTTP 状态码；禁止把 reqwest 错误的
+/// 原始 Display 送往前端——其 Display 会附带完整请求 URL（可能含
+/// 查询参数中的 token 等敏感内容）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelFetchError {
+    pub code: String,
+    pub retryable: bool,
+    pub status: Option<u16>,
+}
+
+impl ModelFetchError {
+    fn new(code: &str, retryable: bool) -> Self {
+        Self {
+            code: code.to_string(),
+            retryable,
+            status: None,
+        }
+    }
+
+    fn with_status(code: &str, retryable: bool, status: StatusCode) -> Self {
+        Self {
+            code: code.to_string(),
+            retryable,
+            status: Some(status.as_u16()),
+        }
+    }
 }
 
 /// OpenAI 兼容的 /v1/models 响应格式
@@ -62,11 +93,56 @@ pub async fn fetch_models(
     models_url_override: Option<&str>,
     api_format: Option<&str>,
     request_headers: Option<&BTreeMap<String, String>>,
-) -> Result<Vec<FetchedModel>, String> {
-    let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)?;
-    let headers = build_model_fetch_headers(api_key, api_format, request_headers)?;
-    let client = crate::services::http_client::get();
-    let mut last_err: Option<String> = None;
+) -> Result<Vec<FetchedModel>, ModelFetchError> {
+    let client = crate::services::http_client::get_no_redirect_client();
+    fetch_models_with_client(
+        client,
+        base_url,
+        api_key,
+        is_full_url,
+        models_url_override,
+        api_format,
+        request_headers,
+    )
+    .await
+}
+
+/// 用指定客户端获取模型列表（测试可注入直连/无重定向客户端）
+pub async fn fetch_models_with_client(
+    client: Client,
+    base_url: &str,
+    api_key: &str,
+    is_full_url: bool,
+    models_url_override: Option<&str>,
+    api_format: Option<&str>,
+    request_headers: Option<&BTreeMap<String, String>>,
+) -> Result<Vec<FetchedModel>, ModelFetchError> {
+    // SEC-B：override 与 Base URL 跨源时，拒绝携带凭据向另一目标发请求
+    if let Some(raw) = models_url_override {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            ensure_override_same_origin(base_url, trimmed).map_err(|e| {
+                log::debug!("[ModelFetch] {e}");
+                ModelFetchError::new("cross_origin_override", false)
+            })?;
+        }
+    }
+    let candidates = build_models_url_candidates(base_url, is_full_url, models_url_override)
+        .map_err(|e| {
+            log::debug!("[ModelFetch] {e}");
+            ModelFetchError::new("invalid_url", false)
+        })?;
+    for url in &candidates {
+        validate_candidate_url(url).map_err(|e| {
+            log::debug!("[ModelFetch] Rejected candidate URL: {e}");
+            ModelFetchError::new("invalid_url", false)
+        })?;
+    }
+    let headers = build_model_fetch_headers(api_key, api_format, request_headers).map_err(|e| {
+        log::debug!("[ModelFetch] Rejected request headers: {e}");
+        ModelFetchError::new("invalid_request", false)
+    })?;
+    let mut last_err: Option<ModelFetchError> = None;
     let mut known_secrets = vec![api_key.to_string()];
     if let Some(request_headers) = request_headers {
         known_secrets.extend(request_headers.values().cloned());
@@ -83,18 +159,43 @@ pub async fn fetch_models(
             .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS));
         let response = match request.send().await {
             Ok(r) => r,
+            // SEC-C：按错误类别映射为稳定 code，不把原始 Display（含 URL）送出
             Err(e) => {
-                return Err(format!("Request failed: {e}"));
+                let err = if e.is_timeout() {
+                    ModelFetchError::new("timeout", true)
+                } else if e.is_connect() {
+                    ModelFetchError::new("connect_failed", true)
+                } else if e.is_request() {
+                    ModelFetchError::new("request_failed", true)
+                } else {
+                    ModelFetchError::new("network_failed", true)
+                };
+                log::debug!(
+                    "[ModelFetch] Request error ({}): {}",
+                    err.code,
+                    crate::url_for_log_with_secrets(url, &known_secrets)
+                );
+                return Err(err);
             }
         };
 
         let status = response.status();
 
+        // SEC-B：重定向策略为 none，3xx 会原样返回；一律不跟随，
+        // 也不把 Location（可能含目标地址上的 token）带回前端
+        if status.is_redirection() {
+            log::debug!(
+                "[ModelFetch] Redirect blocked at {}",
+                crate::url_for_log_with_secrets(url, &known_secrets)
+            );
+            return Err(ModelFetchError::new("redirect_blocked", false));
+        }
+
         if status.is_success() {
-            let resp: ModelsResponse = response
-                .json()
-                .await
-                .map_err(|e| format!("Failed to parse response: {e}"))?;
+            let resp: ModelsResponse = response.json().await.map_err(|e| {
+                log::debug!("[ModelFetch] Failed to parse response: {e}");
+                ModelFetchError::new("parse_failed", false)
+            })?;
 
             let mut models: Vec<FetchedModel> = resp
                 .data
@@ -111,25 +212,80 @@ pub async fn fetch_models(
         }
 
         if status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED {
-            let body = redact_model_fetch_error_body(
-                response.text().await.unwrap_or_default(),
-                &known_secrets,
-            );
-            last_err = Some(format!("HTTP {status}: {body}"));
+            log_error_body(response, status, &known_secrets).await;
+            last_err = Some(ModelFetchError::with_status(
+                "endpoint_not_found",
+                false,
+                status,
+            ));
             continue;
         }
 
-        let body = redact_model_fetch_error_body(
-            response.text().await.unwrap_or_default(),
-            &known_secrets,
-        );
-        return Err(format!("HTTP {status}: {body}"));
+        log_error_body(response, status, &known_secrets).await;
+        return Err(ModelFetchError::with_status("http_error", false, status));
     }
 
-    Err(format!(
-        "All candidates failed: {}",
-        last_err.unwrap_or_else(|| "no candidates".to_string())
+    Err(last_err.unwrap_or_else(|| ModelFetchError::new("all_candidates_failed", false)))
+}
+
+/// 读取并按 debug 级别记录（脱敏+截断后的）错误响应体
+///
+/// 正文只进本机 debug 日志，不进入 IPC 错误载荷（SEC-C）。
+async fn log_error_body(response: reqwest::Response, status: StatusCode, known_secrets: &[String]) {
+    let body = response.text().await.unwrap_or_default();
+    log::debug!(
+        "[ModelFetch] HTTP {status} body: {}",
+        redact_model_fetch_error_body(body, known_secrets)
+    );
+}
+
+/// 校验模型端点候选 URL（SEC-B §5.2-5）
+///
+/// 仅允许 http/https；禁止 userinfo（`user:pass@host`）——凭据只能
+/// 走请求头，不允许藏在 URL 里被代理/日志/重定向二次扩散。
+fn validate_candidate_url(raw: &str) -> Result<(), String> {
+    let parsed = url::Url::parse(raw).map_err(|e| format!("Invalid URL: {e}"))?;
+    match parsed.scheme() {
+        "http" | "https" => {}
+        other => return Err(format!("Unsupported scheme: {other}")),
+    }
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("URL must not contain userinfo credentials".to_string());
+    }
+    Ok(())
+}
+
+/// 比较 URL 的源（scheme + host + 有效端口）
+fn url_origin(u: &url::Url) -> Option<(String, String, Option<u16>)> {
+    Some((
+        u.scheme().to_string(),
+        u.host_str()?.to_string(),
+        u.port_or_known_default(),
     ))
+}
+
+/// override 与 Base URL 跨源时拒绝（SEC-B §5.2-5）
+///
+/// 默认不携当前凭据向另一源发请求；要求用户把 Base URL 改到目标源。
+/// 双方都能解析为合法 URL 时才做比较，比较按 URL 语义而非前缀。
+fn ensure_override_same_origin(base_url: &str, override_url: &str) -> Result<(), String> {
+    let base = url::Url::parse(base_url.trim())
+        .ok()
+        .and_then(|u| url_origin(&u));
+    let over = url::Url::parse(override_url)
+        .ok()
+        .and_then(|u| url_origin(&u));
+    if let (Some(b), Some(o)) = (base, over) {
+        if b != o {
+            return Err(
+                "Models URL override points to a different origin than the Base URL; \
+                 credentials are not sent cross-origin. Update the Base URL to the \
+                 target origin instead."
+                    .to_string(),
+            );
+        }
+    }
+    Ok(())
 }
 
 fn redact_model_fetch_error_body(body: String, known_secrets: &[String]) -> String {
@@ -373,6 +529,294 @@ mod tests {
             &secrets,
         );
         assert_eq!(body, "invalid [REDACTED] / [REDACTED]");
+    }
+
+    /// SEC-B §5.2-5：仅允许 http/https
+    #[test]
+    fn candidate_url_validation_rejects_non_http_schemes() {
+        assert!(validate_candidate_url("https://api.example.com/v1/models").is_ok());
+        assert!(validate_candidate_url("http://127.0.0.1:8080/v1/models").is_ok());
+        assert!(validate_candidate_url("ftp://api.example.com/v1/models").is_err());
+        assert!(validate_candidate_url("file:///etc/passwd").is_err());
+        assert!(validate_candidate_url("not a url").is_err());
+    }
+
+    /// SEC-B §5.2-5：禁止 userinfo，凭据只允许走请求头
+    #[test]
+    fn candidate_url_validation_rejects_userinfo() {
+        assert!(validate_candidate_url("http://user:pass@127.0.0.1:8080/v1/models").is_err());
+        assert!(validate_candidate_url("http://user@127.0.0.1:8080/v1/models").is_err());
+        assert!(validate_candidate_url("https://:pass@api.example.com/v1/models").is_err());
+    }
+
+    /// SEC-B §5.2-5：跨源 override 拒绝；同源（含默认端口归一化）放行
+    #[test]
+    fn override_origin_check_blocks_cross_origin_and_allows_same_origin() {
+        // 同 host 不同端口 = 不同源
+        assert!(ensure_override_same_origin(
+            "http://127.0.0.1:8000",
+            "http://127.0.0.1:8001/v1/models"
+        )
+        .is_err());
+        // HTTPS → HTTP 是跨源（scheme 不同）
+        assert!(ensure_override_same_origin(
+            "https://api.example.com",
+            "http://api.example.com/v1/models"
+        )
+        .is_err());
+        // 同源：默认端口归一化后一致
+        assert!(ensure_override_same_origin(
+            "https://api.example.com/anthropic",
+            "https://api.example.com/v1/models"
+        )
+        .is_ok());
+        assert!(ensure_override_same_origin(
+            "https://api.example.com:443",
+            "https://api.example.com/v1/models"
+        )
+        .is_ok());
+        // 路径不同不影响同源判定
+        assert!(ensure_override_same_origin(
+            "https://api.deepseek.com/anthropic",
+            "https://api.deepseek.com/models"
+        )
+        .is_ok());
+        // Base URL 无法解析时不做比较（由候选构造/请求阶段自行失败）
+        assert!(
+            ensure_override_same_origin("not a url", "https://api.example.com/v1/models").is_ok()
+        );
+    }
+
+    /// SEC-C：错误载荷序列化后只含 code/retryable/status
+    #[test]
+    fn model_fetch_error_payload_has_no_url_material() {
+        let err = ModelFetchError::with_status("http_error", false, StatusCode::UNAUTHORIZED);
+        let json = serde_json::to_string(&err).unwrap();
+        assert_eq!(
+            json,
+            r#"{"code":"http_error","retryable":false,"status":401}"#
+        );
+    }
+
+    // —— SEC-B/SEC-C 集成测试：本机回环假 HTTP 服务，不访问公网 ——
+
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Debug, Clone)]
+    struct RecordedRequest {
+        method: String,
+        target: String,
+        headers: Vec<(String, String)>,
+    }
+
+    impl RecordedRequest {
+        fn header(&self, name: &str) -> Option<&str> {
+            self.headers
+                .iter()
+                .find(|(n, _)| n.eq_ignore_ascii_case(name))
+                .map(|(_, v)| v.as_str())
+        }
+    }
+
+    /// 启动一个极简回环 HTTP 服务：每个连接读取一个请求、按 responder
+    /// 生成响应并以 Connection: close 关闭。请求记录进共享 Vec。
+    fn spawn_fake_server(
+        responder: Arc<dyn Fn(&RecordedRequest) -> String + Send + Sync>,
+    ) -> (String, Arc<Mutex<Vec<RecordedRequest>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let requests = Arc::new(Mutex::new(Vec::new()));
+        let requests_clone = Arc::clone(&requests);
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let mut stream: TcpStream = stream;
+                let Some(req) = read_request(&mut stream) else {
+                    continue;
+                };
+                requests_clone.lock().unwrap().push(req.clone());
+                let response = responder(&req);
+                let _ = stream.write_all(response.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), requests)
+    }
+
+    fn read_request(stream: &mut TcpStream) -> Option<RecordedRequest> {
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 1024];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => {
+                    buf.extend_from_slice(&chunk[..n]);
+                    if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                Err(_) => return None,
+            }
+        }
+        let head_end = buf
+            .windows(4)
+            .position(|w| w == b"\r\n\r\n")
+            .map(|p| p + 4)?;
+        let head = String::from_utf8_lossy(&buf[..head_end]);
+        let mut lines = head.lines();
+        let request_line = lines.next()?;
+        let mut segs = request_line.split_whitespace();
+        let method = segs.next()?.to_string();
+        let target = segs.next()?.to_string();
+        let headers = lines
+            .filter_map(|l| l.split_once(':'))
+            .map(|(n, v)| (n.trim().to_string(), v.trim().to_string()))
+            .collect();
+        Some(RecordedRequest {
+            method,
+            target,
+            headers,
+        })
+    }
+
+    fn ok_models_response() -> String {
+        let body = r#"{"data":[{"id":"m1","owned_by":"t"}]}"#;
+        format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+    }
+
+    fn redirect_response(status: u16, location: &str) -> String {
+        let reason = match status {
+            302 => "Found",
+            307 => "Temporary Redirect",
+            _ => "Permanent Redirect",
+        };
+        format!(
+            "HTTP/1.1 {status} {reason}\r\nLocation: {location}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+        )
+    }
+
+    fn no_redirect_client() -> Client {
+        Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .unwrap()
+    }
+
+    /// SEC-B 验收：A 对 B 的 302/307/308 跳转，B 必须收到 0 个携凭据请求
+    #[tokio::test]
+    async fn redirect_is_not_followed_and_second_target_receives_no_credentials() {
+        for status in [302u16, 307, 308] {
+            let (b_base, b_requests) = spawn_fake_server(Arc::new(|_req| ok_models_response()));
+            let b_models = format!("{b_base}/v1/models");
+            let (a_base, a_requests) =
+                spawn_fake_server(Arc::new(move |_req| redirect_response(status, &b_models)));
+
+            let err = fetch_models_with_client(
+                no_redirect_client(),
+                &a_base,
+                "synthetic-key-abc",
+                false,
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+
+            assert_eq!(err.code, "redirect_blocked", "status {status}");
+            assert!(
+                b_requests.lock().unwrap().is_empty(),
+                "第二目标收到了请求 (status {status})"
+            );
+            let a_reqs = a_requests.lock().unwrap();
+            assert_eq!(a_reqs.len(), 1, "status {status}");
+            assert_eq!(a_reqs[0].method, "GET", "status {status}");
+            assert_eq!(a_reqs[0].target, "/v1/models", "status {status}");
+            assert_eq!(
+                a_reqs[0].header("authorization"),
+                Some("Bearer synthetic-key-abc"),
+                "首目标应正常携带凭据 (status {status})"
+            );
+        }
+    }
+
+    /// SEC-B 验收：override 跨源（同 host 不同端口）默认不携 key 发请求
+    #[tokio::test]
+    async fn cross_origin_override_is_rejected_without_any_request() {
+        let (b_base, b_requests) = spawn_fake_server(Arc::new(|_req| ok_models_response()));
+        let (a_base, a_requests) = spawn_fake_server(Arc::new(|_req| ok_models_response()));
+        let override_url = format!("{b_base}/v1/models");
+
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &a_base,
+            "synthetic-key-abc",
+            false,
+            Some(&override_url),
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "cross_origin_override");
+        assert!(b_requests.lock().unwrap().is_empty(), "跨源目标收到了请求");
+        assert!(a_requests.lock().unwrap().is_empty(), "首目标不应被请求");
+    }
+
+    /// 同源 override 正常工作（不破坏合法用法）
+    #[tokio::test]
+    async fn same_origin_override_round_trips() {
+        let (base, requests) = spawn_fake_server(Arc::new(|_req| ok_models_response()));
+        let override_url = format!("{base}/models");
+
+        let models = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            Some(&override_url),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0].id, "m1");
+        assert_eq!(requests.lock().unwrap().len(), 1);
+    }
+
+    /// SEC-C 验收：网络失败时错误载荷不含 URL/合成秘密
+    #[tokio::test]
+    async fn network_error_payload_leaks_no_url_material() {
+        // 拿一个空闲端口后释放 → 连接拒绝（connect_failed 分类）
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+
+        let base = format!("http://127.0.0.1:{port}/v1?token=supersecret-token");
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "connect_failed");
+        let json = serde_json::to_string(&err).unwrap();
+        assert!(!json.contains("supersecret"), "载荷含 URL 材料: {json}");
+        assert!(!json.contains("127.0.0.1"), "载荷含主机: {json}");
     }
 
     #[test]

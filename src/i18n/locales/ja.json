@@ -1230,6 +1230,8 @@
     "fetchModelsNotSupported": "このプロバイダーはモデル一覧の取得に対応していません",
     "fetchModelsEndpointNotFound": "利用可能なモデル一覧エンドポイントが見つかりません。Base URL を確認するか、プロバイダーが該当 API を公開しているかご確認ください",
     "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
+    "fetchModelsRedirectBlocked": "エンドポイントがリダイレクトを返したため追従を中止しました。API エンドポイントを最終的なアドレスに変更して再試行してください",
+    "fetchModelsInvalidUrl": "API エンドポイントの URL が無効です（http/https のみ対応で、資格情報はオリジンをまたいで送信されません）。確認して再試行してください",
     "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください",
     "apiKeyConfigured": "設定済み、空白のままなら変更なし",
     "apiKeyConfiguredHint": "設定済み、空白のままなら変更なし。右の目アイコンで表示できます",

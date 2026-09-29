@@ -4,6 +4,7 @@
 //! 所有需要发送 HTTP 请求的模块都应使用此模块提供的客户端。
 
 use once_cell::sync::OnceCell;
+use reqwest::redirect::Policy;
 use reqwest::Client;
 use std::sync::RwLock;
 use std::time::Duration;
@@ -113,13 +114,46 @@ pub fn get() -> Client {
         })
 }
 
-/// 构建 HTTP 客户端
+/// 获取「携凭据模型请求」专用的无重定向客户端（SEC-B）
+///
+/// 与 [`get`] 使用完全相同的代理选择（显式代理或跟随系统代理），
+/// 但禁用自动重定向：自定义 API key 头不在 reqwest 跨 host 重定向的
+/// 敏感头移除名单内，禁止让它们跟随 3xx 流向第二个目标。
+pub fn get_no_redirect_client() -> Client {
+    let proxy_url = CURRENT_PROXY_URL
+        .get()
+        .and_then(|lock| lock.read().ok())
+        .and_then(|guard| guard.clone());
+    match build_client_with_redirect(proxy_url.as_deref(), Policy::none()) {
+        Ok(client) => client,
+        Err(e) => {
+            log::warn!("[GlobalProxy] [GP-005] No-redirect client build failed: {e}");
+            Client::builder()
+                .redirect(Policy::none())
+                .build()
+                .unwrap_or_default()
+        }
+    }
+}
+
+/// 构建 HTTP 客户端（默认重定向策略）
 fn build_client(proxy_url: Option<&str>) -> Result<Client, String> {
+    build_client_with_redirect(proxy_url, Policy::default())
+}
+
+/// 构建 HTTP 客户端（指定重定向策略）
+///
+/// 代理、超时与连接池配置与通用客户端完全一致，只允许定制重定向策略。
+fn build_client_with_redirect(
+    proxy_url: Option<&str>,
+    redirect_policy: Policy,
+) -> Result<Client, String> {
     let mut builder = Client::builder()
         .timeout(Duration::from_secs(600))
         .connect_timeout(Duration::from_secs(30))
         .pool_max_idle_per_host(10)
         .tcp_keepalive(Duration::from_secs(60))
+        .redirect(redirect_policy)
         // 禁用 reqwest 自动解压：防止 reqwest 覆盖客户端原始 accept-encoding header。
         .no_gzip()
         .no_brotli()

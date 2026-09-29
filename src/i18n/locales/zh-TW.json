@@ -1230,6 +1230,8 @@
     "fetchModelsNotSupported": "該供應商不支援取得模型清單",
     "fetchModelsEndpointNotFound": "未找到可用的模型清單端點，請檢查 Base URL 或確認供應商是否開放該 API",
     "fetchModelsTimeout": "請求逾時，請檢查網路連線",
+    "fetchModelsRedirectBlocked": "端點回傳了重新導向，已停止跟隨；請把 API 端點直接改為最終位址後重試",
+    "fetchModelsInvalidUrl": "API 端點位址無效（僅支援 http/https，且不會向跨源位址攜帶憑證），請檢查後重試",
     "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型",
     "apiKeyConfigured": "已配置，留空保持不變",
     "apiKeyConfiguredHint": "已配置，留空保持不變，點擊右側眼睛檢視",

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import {
@@ -169,6 +169,25 @@ export function ClaudeFormFields({
   // 通用模型获取（非 Copilot 供应商）
   const [fetchedModels, setFetchedModels] = useState<FetchedModel[]>([]);
   const [isFetchingModels, setIsFetchingModels] = useState(false);
+  // 拉取请求序号（OPT-A）：请求身份（Base URL / 完整地址开关 / API Key）
+  // 一变即自增，清空旧列表并作废在途响应——/models 结果可能按 Key 的模型
+  // 授权返回，换号后残留旧列表会误导选择；卸载时同样作废，避免旧请求
+  // 把结果/toast 写进已切换的表单
+  const fetchModelsSeqRef = useRef(0);
+
+  useEffect(() => {
+    fetchModelsSeqRef.current += 1;
+    setFetchedModels((prev) => (prev.length === 0 ? prev : []));
+    // 作废在途请求后重置 loading，避免旧请求的 finally 因 generation 失效
+    // 被跳过导致获取按钮永久禁用
+    setIsFetchingModels(false);
+  }, [baseUrl, isFullUrl, apiKey]);
+
+  useEffect(() => {
+    return () => {
+      fetchModelsSeqRef.current += 1;
+    };
+  }, []);
 
   const showModelFetchResult = useCallback(
     (count: number) => {
@@ -197,17 +216,24 @@ export function ClaudeFormFields({
     });
     const modelsUrl = matchedPreset?.modelsUrl;
 
+    const seq = ++fetchModelsSeqRef.current;
     setIsFetchingModels(true);
     fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl)
       .then((models) => {
+        if (seq !== fetchModelsSeqRef.current) return;
         setFetchedModels(models);
         showModelFetchResult(models.length);
       })
       .catch((err) => {
+        if (seq !== fetchModelsSeqRef.current) return;
         console.warn("[ModelFetch] Failed:", err);
         showFetchModelsError(err, t);
       })
-      .finally(() => setIsFetchingModels(false));
+      .finally(() => {
+        if (seq === fetchModelsSeqRef.current) {
+          setIsFetchingModels(false);
+        }
+      });
   }, [baseUrl, apiKey, isFullUrl, showModelFetchResult, t]);
 
   const modelFetchLoading = isFetchingModels;

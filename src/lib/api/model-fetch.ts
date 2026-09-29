@@ -36,30 +36,55 @@ export async function fetchModelsForConfig(
 }
 
 /**
- * 根据错误类型显示对应的 toast 提示
+ * 后端结构化错误载荷（SEC-C）
+ *
+ * 后端只返回稳定 code / retryable / status，不携带原始请求 URL。
  */
-export function showFetchModelsError(
-  err: unknown,
-  t: TFunction,
-  opts?: { hasApiKey: boolean; hasBaseUrl: boolean },
-): void {
-  // 前端预检：缺少必填字段
-  if (opts && !opts.hasBaseUrl && !opts.hasApiKey) {
-    toast.error(t("providerForm.fetchModelsNeedConfig"));
-    return;
-  }
-  if (opts && !opts.hasApiKey) {
-    toast.error(t("providerForm.fetchModelsNeedApiKey"));
-    return;
-  }
-  if (opts && !opts.hasBaseUrl) {
-    toast.error(t("providerForm.fetchModelsNeedEndpoint"));
-    return;
-  }
+export interface ModelFetchErrorPayload {
+  code: string;
+  retryable?: boolean;
+  status?: number;
+}
 
-  // 解析后端错误字符串
-  const msg = String(err);
+function isModelFetchErrorPayload(err: unknown): err is ModelFetchErrorPayload {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    typeof (err as ModelFetchErrorPayload).code === "string"
+  );
+}
 
+/** 后端 code → toast 文案；未知 code 走通用兜底 */
+function showToastForCode(code: string, t: TFunction): void {
+  switch (code) {
+    case "auth_failed":
+      toast.error(t("providerForm.fetchModelsAuthFailed"));
+      return;
+    // 单候选 404/405 或全部候选失败：供应商可能未开放 /models 接口
+    case "endpoint_not_found":
+    case "all_candidates_failed":
+      toast.error(t("providerForm.fetchModelsEndpointNotFound"));
+      return;
+    case "timeout":
+      toast.error(t("providerForm.fetchModelsTimeout"));
+      return;
+    case "parse_failed":
+      toast.error(t("providerForm.fetchModelsNotSupported"));
+      return;
+    case "redirect_blocked":
+      toast.error(t("providerForm.fetchModelsRedirectBlocked"));
+      return;
+    case "invalid_url":
+    case "cross_origin_override":
+      toast.error(t("providerForm.fetchModelsInvalidUrl"));
+      return;
+    default:
+      toast.error(t("providerForm.fetchModelsFailed"));
+  }
+}
+
+/** 迁移期兼容：旧后端返回英文明文错误串（SEC-C 之前的格式） */
+function showToastForLegacyMessage(msg: string, t: TFunction): void {
   if (msg.includes("HTTP 401") || msg.includes("HTTP 403")) {
     toast.error(t("providerForm.fetchModelsAuthFailed"));
     return;
@@ -81,7 +106,37 @@ export function showFetchModelsError(
     toast.error(t("providerForm.fetchModelsNotSupported"));
     return;
   }
-
-  // 通用兜底
   toast.error(t("providerForm.fetchModelsFailed"));
+}
+
+/**
+ * 根据错误类型显示对应的 toast 提示
+ */
+export function showFetchModelsError(
+  err: unknown,
+  t: TFunction,
+  opts?: { hasApiKey: boolean; hasBaseUrl: boolean },
+): void {
+  // 前端预检：缺少必填字段
+  if (opts && !opts.hasBaseUrl && !opts.hasApiKey) {
+    toast.error(t("providerForm.fetchModelsNeedConfig"));
+    return;
+  }
+  if (opts && !opts.hasApiKey) {
+    toast.error(t("providerForm.fetchModelsNeedApiKey"));
+    return;
+  }
+  if (opts && !opts.hasBaseUrl) {
+    toast.error(t("providerForm.fetchModelsNeedEndpoint"));
+    return;
+  }
+
+  // 后端结构化错误（SEC-C）：按 code 映射，不解析错误原文
+  if (isModelFetchErrorPayload(err)) {
+    showToastForCode(err.code, t);
+    return;
+  }
+
+  // 迁移期兜底：旧后端的英文明文错误串
+  showToastForLegacyMessage(String(err), t);
 }
