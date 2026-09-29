@@ -56,6 +56,7 @@ import {
 } from "@/config/piThinkingProfiles";
 import {
   fetchModelsForConfig,
+  fetchModelsForProvider,
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
@@ -387,6 +388,7 @@ function buildPiSettingsConfig({
 }
 
 export function PiProviderForm({
+  appId,
   providerId,
   submitLabel,
   onSubmit,
@@ -940,8 +942,16 @@ export function PiProviderForm({
   const handleFetchModels = useCallback(() => {
     const endpoint = baseUrl.trim();
     const requestHeaders = normalizeRequestHeaders(providerHeaders);
+    // 编辑态：表单无明文密钥（空白 = 保留已存值），后端已配置 key 时改走
+    // 按供应商身份解析的后端路径（明文不过 IPC）
+    const storedKeyTarget =
+      !apiKey && initialData?.secretStatus?.apiKey?.present === true && providerId
+        ? { app: appId, providerId }
+        : null;
     const hasCredentials =
-      Boolean(apiKey) || Object.keys(requestHeaders).length > 0;
+      Boolean(apiKey) ||
+      Boolean(storedKeyTarget) ||
+      Object.keys(requestHeaders).length > 0;
     if (!endpoint || !hasCredentials) {
       showFetchModelsError(null, t, {
         hasApiKey: hasCredentials,
@@ -953,10 +963,16 @@ export function PiProviderForm({
     const requestGeneration = ++modelFetchGenerationRef.current;
     setFetchedModels([]);
     setIsFetchingModels(true);
-    fetchModelsForConfig(endpoint, apiKey, undefined, undefined, {
-      apiFormat: api,
-      requestHeaders,
-    })
+    const request = storedKeyTarget
+      ? fetchModelsForProvider(storedKeyTarget.app, storedKeyTarget.providerId, endpoint, undefined, undefined, {
+          apiFormat: api,
+          requestHeaders,
+        })
+      : fetchModelsForConfig(endpoint, apiKey, undefined, undefined, {
+          apiFormat: api,
+          requestHeaders,
+        });
+    request
       .then((result) => {
         if (modelFetchGenerationRef.current !== requestGeneration) return;
         setFetchedModels(result);
@@ -978,7 +994,7 @@ export function PiProviderForm({
           setIsFetchingModels(false);
         }
       });
-  }, [api, apiKey, baseUrl, providerHeaders, t]);
+  }, [api, apiKey, appId, providerId, initialData, baseUrl, providerHeaders, t]);
 
   const handleApiChange = useCallback(
     (value: string) => {

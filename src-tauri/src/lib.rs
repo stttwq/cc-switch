@@ -1204,6 +1204,7 @@ pub fn run() {
             commands::apply_profile,
             // model list fetch (OpenAI-compatible /v1/models)
             commands::fetch_models_for_config,
+            commands::fetch_models_for_provider,
             // app_config_dir override via Store
             commands::get_app_config_dir_override,
             commands::set_app_config_dir_override,

@@ -32,7 +32,7 @@ pub struct ModelFetchError {
 }
 
 impl ModelFetchError {
-    fn new(code: &str, retryable: bool) -> Self {
+    pub(crate) fn new(code: &str, retryable: bool) -> Self {
         Self {
             code: code.to_string(),
             retryable,

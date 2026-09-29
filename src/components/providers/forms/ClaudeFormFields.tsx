@@ -28,6 +28,7 @@ import { ApiKeySection, EndpointField, ModelInputWithFetch } from "./shared";
 import type { AppId } from "@/lib/api";
 import {
   fetchModelsForConfig,
+  fetchModelsForProvider,
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
@@ -201,9 +202,13 @@ export function ClaudeFormFields({
   );
 
   const handleFetchModels = useCallback(() => {
-    if (!baseUrl || !apiKey) {
+    // 编辑态：表单无明文密钥（空白 = 保留已存值），后端已配置 key 时改走
+    // 按供应商身份解析的后端路径（明文不过 IPC）
+    const storedKeyTarget =
+      !apiKey && apiKeyConfiguredStatus?.present ? apiKeyRevealTarget : null;
+    if (!baseUrl || (!apiKey && !storedKeyTarget)) {
       showFetchModelsError(null, t, {
-        hasApiKey: !!apiKey,
+        hasApiKey: !!apiKey || !!storedKeyTarget,
         hasBaseUrl: !!baseUrl,
       });
       return;
@@ -218,7 +223,16 @@ export function ClaudeFormFields({
 
     const seq = ++fetchModelsSeqRef.current;
     setIsFetchingModels(true);
-    fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl)
+    const request = storedKeyTarget
+      ? fetchModelsForProvider(
+          storedKeyTarget.app,
+          storedKeyTarget.providerId,
+          baseUrl,
+          isFullUrl,
+          modelsUrl,
+        )
+      : fetchModelsForConfig(baseUrl, apiKey, isFullUrl, modelsUrl);
+    request
       .then((models) => {
         if (seq !== fetchModelsSeqRef.current) return;
         setFetchedModels(models);
@@ -234,7 +248,15 @@ export function ClaudeFormFields({
           setIsFetchingModels(false);
         }
       });
-  }, [baseUrl, apiKey, isFullUrl, showModelFetchResult, t]);
+  }, [
+    baseUrl,
+    apiKey,
+    isFullUrl,
+    apiKeyConfiguredStatus,
+    apiKeyRevealTarget,
+    showModelFetchResult,
+    t,
+  ]);
 
   const modelFetchLoading = isFetchingModels;
   const handleModelFetchClick = handleFetchModels;

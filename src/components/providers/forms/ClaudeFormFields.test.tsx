@@ -17,10 +17,12 @@ vi.mock("sonner", () => ({
 }));
 
 const fetchModelsForConfig = vi.fn();
+const fetchModelsForProvider = vi.fn();
 const showFetchModelsError = vi.fn();
 
 vi.mock("@/lib/api/model-fetch", () => ({
   fetchModelsForConfig: (...args: unknown[]) => fetchModelsForConfig(...args),
+  fetchModelsForProvider: (...args: unknown[]) => fetchModelsForProvider(...args),
   showFetchModelsError: (...args: unknown[]) => showFetchModelsError(...args),
 }));
 
@@ -37,7 +39,12 @@ function deferred<T>() {
 const fetchedModel = { id: "m1", ownedBy: "test" };
 
 /** 提供真实 usage 同款的 react-hook-form 上下文（FormLabel 依赖它） */
-function Harness(props: { baseUrl: string; apiKey?: string }) {
+function Harness(props: {
+  baseUrl: string;
+  apiKey?: string;
+  apiKeyConfiguredStatus?: { present: boolean } | null;
+  apiKeyRevealTarget?: { app: "claude"; providerId: string } | null;
+}) {
   const form = useForm();
   return (
     <Form {...form}>
@@ -73,6 +80,8 @@ function Harness(props: { baseUrl: string; apiKey?: string }) {
         onApiKeyFieldChange={vi.fn()}
         isFullUrl={false}
         onFullUrlChange={vi.fn()}
+        apiKeyConfiguredStatus={props.apiKeyConfiguredStatus ?? null}
+        apiKeyRevealTarget={props.apiKeyRevealTarget ?? null}
       />
     </Form>
   );
@@ -137,5 +146,80 @@ describe("ClaudeFormFields 模型拉取 generation 隔离", () => {
         "providerForm.fetchModelsSuccess",
       );
     });
+  });
+});
+
+describe("ClaudeFormFields 编辑态按供应商获取模型", () => {
+  it("表单无明文 key 但后端已配置时，改走 fetchModelsForProvider", async () => {
+    const user = userEvent.setup();
+    fetchModelsForProvider.mockResolvedValueOnce([fetchedModel]);
+
+    render(
+      <Harness
+        baseUrl="https://a.example.com"
+        apiKey=""
+        apiKeyConfiguredStatus={{ present: true }}
+        apiKeyRevealTarget={{ app: "claude", providerId: "p1" }}
+      />,
+    );
+    await user.click(fetchButton());
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "providerForm.fetchModelsSuccess",
+      );
+    });
+    expect(fetchModelsForProvider).toHaveBeenCalledWith(
+      "claude",
+      "p1",
+      "https://a.example.com",
+      false,
+      undefined,
+    );
+    expect(fetchModelsForConfig).not.toHaveBeenCalled();
+  });
+
+  it("表单填了明文 key 时仍走 fetchModelsForConfig（显式 set 意图优先）", async () => {
+    const user = userEvent.setup();
+    fetchModelsForConfig.mockResolvedValueOnce([fetchedModel]);
+
+    render(
+      <Harness
+        baseUrl="https://a.example.com"
+        apiKey="typed-key"
+        apiKeyConfiguredStatus={{ present: true }}
+        apiKeyRevealTarget={{ app: "claude", providerId: "p1" }}
+      />,
+    );
+    await user.click(fetchButton());
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        "providerForm.fetchModelsSuccess",
+      );
+    });
+    expect(fetchModelsForConfig).toHaveBeenCalled();
+    expect(fetchModelsForProvider).not.toHaveBeenCalled();
+  });
+
+  it("无明文 key 且后端未配置时，仍提示先填 API Key", async () => {
+    const user = userEvent.setup();
+
+    render(
+      <Harness
+        baseUrl="https://a.example.com"
+        apiKey=""
+        apiKeyConfiguredStatus={{ present: false }}
+        apiKeyRevealTarget={null}
+      />,
+    );
+    await user.click(fetchButton());
+
+    expect(showFetchModelsError).toHaveBeenCalledWith(null, expect.anything(), {
+      hasApiKey: false,
+      hasBaseUrl: true,
+    });
+    expect(fetchModelsForProvider).not.toHaveBeenCalled();
+    expect(fetchModelsForConfig).not.toHaveBeenCalled();
   });
 });

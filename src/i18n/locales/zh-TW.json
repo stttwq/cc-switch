@@ -1224,6 +1224,7 @@
     "fetchModelsFailed": "取得模型清單失敗",
     "fetchModelsEmpty": "未找到可用模型",
     "fetchModelsNeedApiKey": "請先填寫 API Key",
+    "fetchModelsKeyUnavailable": "讀取已儲存的 API Key 失敗（後端可能已鎖定或不可用），請重試或手動填寫",
     "fetchModelsNeedEndpoint": "請先填寫 API 端點",
     "fetchModelsNeedConfig": "請先填寫 API 端點和 API Key",
     "fetchModelsAuthFailed": "API Key 無效或無權限",

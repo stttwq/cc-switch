@@ -1224,6 +1224,7 @@
     "fetchModelsFailed": "Failed to fetch models",
     "fetchModelsEmpty": "No models found",
     "fetchModelsNeedApiKey": "Please fill in API Key first",
+    "fetchModelsKeyUnavailable": "Failed to read the saved API key (the backend may be locked or unavailable). Retry or enter the key manually.",
     "fetchModelsNeedEndpoint": "Please fill in API endpoint first",
     "fetchModelsNeedConfig": "Please fill in API endpoint and API Key first",
     "fetchModelsAuthFailed": "API Key is invalid or lacks permission",

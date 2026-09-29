@@ -42,6 +42,7 @@ import {
 import { ApiKeySection, EndpointField, ModelDropdown } from "./shared";
 import {
   fetchModelsForConfig,
+  fetchModelsForProvider,
   showFetchModelsError,
   type FetchedModel,
 } from "@/lib/api/model-fetch";
@@ -413,16 +414,30 @@ export function CodexFormFields({
   }, [catalogRows, onCatalogModelsChange]);
 
   const handleFetchModels = useCallback(() => {
-    if (!codexBaseUrl || !codexApiKey) {
+    // 编辑态：表单无明文密钥（空白 = 保留已存值），后端已配置 key 时改走
+    // 按供应商身份解析的后端路径（明文不过 IPC）
+    const storedKeyTarget =
+      !codexApiKey && apiKeyConfiguredStatus?.present
+        ? apiKeyRevealTarget
+        : null;
+    if (!codexBaseUrl || (!codexApiKey && !storedKeyTarget)) {
       showFetchModelsError(null, t, {
-        hasApiKey: !!codexApiKey,
+        hasApiKey: !!codexApiKey || !!storedKeyTarget,
         hasBaseUrl: !!codexBaseUrl,
       });
       return;
     }
     const seq = ++fetchModelsSeqRef.current;
     setIsFetchingModels(true);
-    fetchModelsForConfig(codexBaseUrl, codexApiKey, isFullUrl)
+    const request = storedKeyTarget
+      ? fetchModelsForProvider(
+          storedKeyTarget.app,
+          storedKeyTarget.providerId,
+          codexBaseUrl,
+          isFullUrl,
+        )
+      : fetchModelsForConfig(codexBaseUrl, codexApiKey, isFullUrl);
+    request
       .then((models) => {
         if (seq !== fetchModelsSeqRef.current) return;
         setFetchedModels(models);
@@ -445,7 +460,14 @@ export function CodexFormFields({
           setIsFetchingModels(false);
         }
       });
-  }, [codexBaseUrl, codexApiKey, isFullUrl, t]);
+  }, [
+    codexBaseUrl,
+    codexApiKey,
+    isFullUrl,
+    apiKeyConfiguredStatus,
+    apiKeyRevealTarget,
+    t,
+  ]);
 
   const handleAddCatalogRow = useCallback(() => {
     if (!onCatalogModelsChange) return;

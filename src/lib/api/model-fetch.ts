@@ -36,6 +36,30 @@ export async function fetchModelsForConfig(
 }
 
 /**
+ * 编辑态获取模型：表单不持有明文密钥（P3：回显不进受控值），由后端按
+ * 供应商身份从凭据后端解析已存 API Key 后发起请求——明文密钥不过 IPC。
+ * 后端错误码：key_not_configured（未配置）/ key_unavailable（后端锁定或读取失败）。
+ */
+export async function fetchModelsForProvider(
+  app: string,
+  providerId: string,
+  baseUrl: string,
+  isFullUrl?: boolean,
+  modelsUrl?: string,
+  options?: ModelFetchOptions,
+): Promise<FetchedModel[]> {
+  return invoke("fetch_models_for_provider", {
+    app,
+    providerId,
+    baseUrl,
+    isFullUrl,
+    modelsUrl,
+    apiFormat: options?.apiFormat,
+    requestHeaders: options?.requestHeaders,
+  });
+}
+
+/**
  * 后端结构化错误载荷（SEC-C）
  *
  * 后端只返回稳定 code / retryable / status，不携带原始请求 URL。
@@ -77,6 +101,12 @@ function showToastForCode(code: string, t: TFunction): void {
     case "invalid_url":
     case "cross_origin_override":
       toast.error(t("providerForm.fetchModelsInvalidUrl"));
+      return;
+    case "key_not_configured":
+      toast.error(t("providerForm.fetchModelsNeedApiKey"));
+      return;
+    case "key_unavailable":
+      toast.error(t("providerForm.fetchModelsKeyUnavailable"));
       return;
     default:
       toast.error(t("providerForm.fetchModelsFailed"));

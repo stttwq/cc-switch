@@ -3326,6 +3326,38 @@ mod vault_call_count_tests {
         assert_eq!(counting.fetch_count(), 1, "显示明文只能一次往返");
     }
 
+    /// 编辑态「获取模型」按供应商解析已存密钥：一次 fetch、明文经 Zeroizing 返回。
+    #[test]
+    fn fetch_models_resolve_stored_key_is_single_fetch() {
+        let (state, counting) = counting_state();
+        futures::executor::block_on(state.secrets.store(
+            &SecretTarget::provider_api_key(AppType::Claude, "p1"),
+            "sk-fetch",
+        ))
+        .expect("seed");
+        counting.reset();
+        let key = match crate::resolve_stored_api_key(&state, &AppType::Claude, "p1") {
+            Ok(key) => key,
+            Err(e) => panic!("应成功解析已存密钥，实际返回 code={}", e.code),
+        };
+        assert_eq!(key.as_str(), "sk-fetch");
+        assert_eq!(counting.fetch_count(), 1, "解析已存密钥只能一次往返");
+        assert_eq!(counting.put_count(), 0);
+    }
+
+    /// 无已存密钥 → key_not_configured（前端映射「请先填写 API Key」）；
+    /// 不区分「供应商不存在」与「未配置」，避免本路径成为凭据存在性探测器。
+    #[test]
+    fn fetch_models_resolve_without_key_maps_to_not_configured() {
+        let (state, _counting) = counting_state();
+        let err = match crate::resolve_stored_api_key(&state, &AppType::Claude, "p-none") {
+            Err(e) => e,
+            Ok(_) => panic!("无密钥应返回 key_not_configured"),
+        };
+        assert_eq!(err.code, "key_not_configured");
+        assert!(!err.retryable);
+    }
+
     #[test]
     fn add_provider_secrets_is_put_only() {
         let (state, counting) = counting_state();
