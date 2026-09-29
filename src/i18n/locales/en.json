@@ -1503,6 +1503,18 @@
         "name": "@upstash/context7-mcp",
         "description": "Context7 documentation search tool providing latest library docs and code examples, with higher limits when configured with a key"
       }
+    },
+    "approval": {
+      "title": "Approve MCP server content",
+      "description": "\"{{name}}\" will be written into the {{app}} configuration. Review the full executable content below before confirming.",
+      "emptyConfig": "(No executable fields to display)",
+      "sensitive": "sensitive",
+      "revealSecrets": "Reveal sensitive values",
+      "approveAndEnable": "Approve & enable",
+      "approved": "Approved and enabled",
+      "pendingBadge": "Needs approval",
+      "pendingApps": "Pending apps: {{apps}}",
+      "bulkSkipped": "Skipped {{count}} item(s) pending approval; review and approve them individually"
     }
   },
   "prompts": {

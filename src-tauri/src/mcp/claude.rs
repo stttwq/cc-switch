@@ -129,6 +129,25 @@ pub fn sync_single_server_to_claude(
     crate::claude_mcp::set_mcp_servers_map(&updated)
 }
 
+/// SEC-A（§4.3-8）：判断 Claude live（~/.claude.json）中该 id 的当前内容是否
+/// 与给定规范逐字一致（键序无关）。读取失败按「不一致」处理，保守进入待审批。
+pub fn claude_live_matches_spec(id: &str, spec: &Value) -> bool {
+    let live = match crate::claude_mcp::read_mcp_servers_map() {
+        Ok(map) => map,
+        Err(err) => {
+            log::warn!("读取 Claude live MCP 配置失败，保守视为不一致: {err}");
+            return false;
+        }
+    };
+    match live.get(id) {
+        Some(live_spec) => {
+            crate::services::mcp::canonical_json(live_spec)
+                == crate::services::mcp::canonical_json(spec)
+        }
+        None => false,
+    }
+}
+
 /// 从 Claude live 配置中移除单个 MCP 服务器
 pub fn remove_server_from_claude(id: &str) -> Result<(), AppError> {
     if !should_sync_claude_mcp() {

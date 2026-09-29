@@ -494,6 +494,45 @@ pub fn remove_server_from_codex(id: &str) -> Result<(), AppError> {
 // TOML 转换辅助函数
 // ============================================================================
 
+/// SEC-A（§4.3-8）：判断 Codex live（config.toml 的 [mcp_servers.<id>]）当前
+/// 内容是否与 DB 规范的投影一致。比较走「DB 规范 → 投影 TOML → JSON」与
+/// 「live TOML → JSON」的同基规范化，吸收 headers/http_headers 之类的字段
+/// 映射差异；live 读不到、解析失败或含投影白名单之外的字段一律视为不一致
+/// （保守进入待审批，§4.3-8「有歧义则待审批」）。
+pub fn codex_live_matches_spec(id: &str, spec: &Value) -> bool {
+    let config_path = crate::codex_config::get_codex_config_path();
+    let Ok(text) = std::fs::read_to_string(&config_path) else {
+        return false;
+    };
+
+    let live_json: Option<serde_json::Value> = (|| {
+        let root: toml::Table = toml::from_str(&text).ok()?;
+        let entry = root.get("mcp_servers")?.as_table()?.get(id)?;
+        serde_json::to_value(entry).ok()
+    })();
+    let Some(live_json) = live_json else {
+        return false;
+    };
+
+    let projected_json: Option<serde_json::Value> = (|| -> Option<serde_json::Value> {
+        let table = json_server_to_toml_table(spec).ok()?;
+        let mut doc = toml_edit::DocumentMut::new();
+        doc["mcp_servers"] = {
+            let mut outer = toml_edit::Table::new();
+            outer.insert(id, toml_edit::Item::Table(table));
+            toml_edit::Item::Table(outer)
+        };
+        let reparsed: toml::Table = doc.to_string().parse().ok()?;
+        serde_json::to_value(reparsed.get("mcp_servers")?.get(id)?).ok()
+    })();
+    let Some(projected_json) = projected_json else {
+        return false;
+    };
+
+    crate::services::mcp::canonical_json(&live_json)
+        == crate::services::mcp::canonical_json(&projected_json)
+}
+
 /// 通用 JSON 值到 TOML 值转换器（支持简单类型和浅层嵌套）
 ///
 /// 支持的类型转换：

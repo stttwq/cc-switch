@@ -924,6 +924,14 @@ pub fn run() {
                 }
             }
 
+            // SEC-A（§4.3-8）：一次性有限继承——只补记「本机 DB 与本机托管
+            // live 内容一致」的既有条目的批准，歧义项保持待审批。
+            match crate::services::mcp::McpService::migrate_local_approval_inheritance(&app_state)
+            {
+                Ok(()) => {}
+                Err(e) => log::warn!("✗ MCP approval inheritance migration failed: {e}"),
+            }
+
             // 4. 导入提示词文件（表空时触发）
             if app_state.db.is_prompts_table_empty().unwrap_or(false) {
                 log::info!("Prompts table empty, importing from live configurations...");
@@ -1146,6 +1154,8 @@ pub fn run() {
             commands::delete_mcp_server,
             commands::toggle_mcp_app,
             commands::import_mcp_from_apps,
+            commands::get_mcp_approval_states,
+            commands::approve_mcp_server,
             // Prompt management
             commands::get_prompts,
             commands::upsert_prompt,

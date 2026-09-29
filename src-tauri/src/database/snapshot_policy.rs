@@ -124,10 +124,12 @@ pub(crate) enum LocalBackend {
 ///
 /// 裁剪内容：
 /// 1. B 级 settings 键（含前缀）——两种模式都删；
-/// 2. `provider_endpoints`——1P 模式删（D3-B 之后 1P 是端点真源，带出去既
+/// 2. `mcp_approvals`（SEC-A，B 级设备本地）——审批只对本机有效，外部文件里
+///    的批准记录绝不能随导入复活（§4.3-8）；
+/// 3. `provider_endpoints`——1P 模式删（D3-B 之后 1P 是端点真源，带出去既
 ///    多余又造成 P0-3）；凭据管理器模式保留（该模式没有自带同步的真源，随
 ///    同步走是 D3-A 给这类用户的便利，不回归，§2.1-5 / D-S1）；
-/// 3. `secret_refs` 中 `vault_id = ''` 的行——凭据管理器的占位引用对其他设备
+/// 4. `secret_refs` 中 `vault_id = ''` 的行——凭据管理器的占位引用对其他设备
 ///    没有意义；1P 引用照常带出（D-S3）。
 pub(crate) fn prune_for_export(
     snapshot: &Connection,
@@ -135,6 +137,11 @@ pub(crate) fn prune_for_export(
     local_backend: LocalBackend,
 ) -> Result<ExportMeta, AppError> {
     delete_device_local_settings(snapshot)?;
+
+    // SEC-A：MCP 审批是设备本机数据（B 级），导出一律剔除。
+    snapshot
+        .execute("DELETE FROM mcp_approvals", [])
+        .map_err(|e| AppError::Database(format!("裁剪 MCP 审批记录失败: {e}")))?;
 
     let endpoints_included = match local_backend {
         LocalBackend::OnePassword => {
@@ -221,6 +228,7 @@ pub(crate) fn merge_for_import(
         .map_err(|e| AppError::Database(format!("开启导入合并事务失败: {e}")))?;
 
     merge_device_local_settings(main, &tx)?;
+    merge_mcp_approvals(main, &tx)?;
     let pruned_endpoints = merge_endpoints(main, &tx, policy)?;
     let (pruned_refs, adopted_refs, unlinked) = merge_secret_refs(main, &tx, policy)?;
 
@@ -278,6 +286,36 @@ fn device_local_setting_predicates() -> Vec<(&'static str, String)> {
                 .map(|prefix| ("key LIKE ?1", format!("{prefix}%"))),
         )
         .collect()
+}
+
+/// SEC-A（B 级）：MCP 审批记录。丢掉暂存库（外部文件）的值，拷回本机当前
+/// 值——外部载荷里的「批准」绝不能被采纳，本机已批准的条目也不能被外部
+/// 数据撤销。
+fn merge_mcp_approvals(main: &Connection, tx: &Connection) -> Result<(), AppError> {
+    tx.execute("DELETE FROM mcp_approvals", [])
+        .map_err(|e| AppError::Database(format!("清空暂存库 MCP 审批记录失败: {e}")))?;
+    let mut stmt = main
+        .prepare("SELECT server_id, app, approved_revision, approved_at FROM mcp_approvals")
+        .map_err(|e| AppError::Database(format!("读取本机 MCP 审批记录失败: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })
+        .map_err(|e| AppError::Database(format!("读取本机 MCP 审批记录失败: {e}")))?;
+    for row in rows.flatten() {
+        tx.execute(
+            "INSERT OR REPLACE INTO mcp_approvals (server_id, app, approved_revision, approved_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            rusqlite::params![row.0, row.1, row.2, row.3],
+        )
+        .map_err(|e| AppError::Database(format!("回拷 MCP 审批记录失败: {e}")))?;
+    }
+    Ok(())
 }
 
 /// C 级：端点缓存。返回清理掉的孤儿行数。

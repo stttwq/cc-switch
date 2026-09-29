@@ -58,6 +58,21 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 3.1 MCP 审批表（SEC-A）：设备本地的「已批准内容修订」记录，B 级——
+        // 导出剔除、导入保留本机值（snapshot_policy）。approved_revision 是
+        // server_config 规范化 JSON 全文，与同库明文的 server_config 同级暴露。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS mcp_approvals (
+            server_id TEXT NOT NULL,
+            app TEXT NOT NULL,
+            approved_revision TEXT NOT NULL,
+            approved_at INTEGER NOT NULL,
+            PRIMARY KEY (server_id, app)
+        )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 4. Prompts 表
         conn.execute("CREATE TABLE IF NOT EXISTS prompts (
             id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,

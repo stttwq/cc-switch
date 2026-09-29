@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   McpConfigResponse,
   McpServer,
+  McpServerApprovalState,
   McpServerSpec,
   McpServersMap,
   McpStatus,
@@ -125,5 +126,31 @@ export const mcpApi = {
    */
   async importFromApps(): Promise<number> {
     return await invoke("import_mcp_from_apps");
+  },
+
+  // ========================================================================
+  // SEC-A：MCP 导入审批
+  // ========================================================================
+
+  /**
+   * 汇总所有 MCP 服务器的审批状态（enabled && !approved 即待审批）
+   */
+  async getApprovalStates(): Promise<McpServerApprovalState[]> {
+    return await invoke("get_mcp_approval_states");
+  },
+
+  /**
+   * 审批确认：绑定预览修订（expectedRevision），一致才批准、启用并投影
+   */
+  async approveServer(
+    serverId: string,
+    app: AppId,
+    expectedRevision: string,
+  ): Promise<void> {
+    return await invoke("approve_mcp_server", {
+      serverId,
+      app,
+      expectedRevision,
+    });
   },
 };

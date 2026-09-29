@@ -1503,6 +1503,18 @@
         "name": "@upstash/context7-mcp",
         "description": "Context7 文件搜尋工具，提供最新的函式庫文件和程式碼範例，設定 key 會有更高限額"
       }
+    },
+    "approval": {
+      "title": "批准 MCP 伺服器內容",
+      "description": "「{{name}}」將寫入 {{app}} 的設定。請核對以下完整執行內容後確認。",
+      "emptyConfig": "（該條目沒有可展示的執行欄位）",
+      "sensitive": "敏感",
+      "revealSecrets": "顯示敏感值",
+      "approveAndEnable": "批准並啟用",
+      "approved": "已批准並啟用",
+      "pendingBadge": "待審批",
+      "pendingApps": "待審批應用：{{apps}}",
+      "bulkSkipped": "已跳過 {{count}} 個待審批條目，請逐個查看並批准"
     }
   },
   "prompts": {

@@ -197,3 +197,31 @@ pub async fn toggle_mcp_app(
 pub async fn import_mcp_from_apps(state: State<'_, AppState>) -> Result<usize, String> {
     McpService::import_from_all_apps(&state).map_err(|e| e.to_string())
 }
+
+// ============================================================================
+// SEC-A：MCP 导入审批
+// ============================================================================
+
+use crate::services::mcp::McpServerApprovalState;
+
+/// 汇总所有 MCP 服务器的审批状态（enabled && !approved 即待审批）。
+#[tauri::command]
+pub async fn get_mcp_approval_states(
+    state: State<'_, AppState>,
+) -> Result<Vec<McpServerApprovalState>, String> {
+    McpService::approval_states(&state).map_err(|e| e.to_string())
+}
+
+/// 审批确认：绑定预览修订（expectedRevision），后端重读当前内容比对，一致才
+/// 批准、启用并投影到该应用；期间内容变化则拒绝。
+#[tauri::command]
+pub async fn approve_mcp_server(
+    state: State<'_, AppState>,
+    server_id: String,
+    app: String,
+    expected_revision: String,
+) -> Result<(), String> {
+    let app_ty = AppType::from_str(&app).map_err(|e| e.to_string())?;
+    McpService::approve_server(&state, &server_id, &app_ty, &expected_revision)
+        .map_err(|e| e.to_string())
+}

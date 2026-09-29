@@ -361,6 +361,20 @@ export interface McpServer {
 // MCP 服务器映射（id -> McpServer）
 export type McpServersMap = Record<string, McpServer>;
 
+// SEC-A：单个应用的 MCP 审批状态（enabled && !approved 即待审批）
+export interface McpAppApprovalState {
+  enabled: boolean;
+  approved: boolean;
+  // 当前内容的修订（规范化 JSON），审批确认时原样回传绑定
+  revision: string;
+}
+
+// SEC-A：单个服务器的审批状态（仅含启用或已有批准记录的应用）
+export interface McpServerApprovalState {
+  serverId: string;
+  apps: Record<string, McpAppApprovalState>;
+}
+
 // MCP 配置状态
 export interface McpStatus {
   userConfigPath: string;

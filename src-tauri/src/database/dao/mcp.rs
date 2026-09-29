@@ -140,6 +140,59 @@ impl Database {
             .map_err(|e| AppError::Database(e.to_string()))?;
         Ok(())
     }
+
+    // ========================================================================
+    // SEC-A：MCP 审批（设备本机数据，见 snapshot_policy 的 B 级分类）
+    // ========================================================================
+
+    /// 读取某个 (服务器, 应用) 当前已批准的内容修订（server_config 规范化 JSON）。
+    pub fn get_mcp_approved_revision(
+        &self,
+        server_id: &str,
+        app: &str,
+    ) -> Result<Option<String>, AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.query_row(
+            "SELECT approved_revision FROM mcp_approvals WHERE server_id = ?1 AND app = ?2",
+            params![server_id, app],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|e| AppError::Database(e.to_string()))
+    }
+
+    /// 记录/更新某个 (服务器, 应用) 的批准修订。
+    pub fn upsert_mcp_approval(
+        &self,
+        server_id: &str,
+        app: &str,
+        approved_revision: &str,
+    ) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "INSERT OR REPLACE INTO mcp_approvals (server_id, app, approved_revision, approved_at)
+             VALUES (?1, ?2, ?3, ?4)",
+            params![
+                server_id,
+                app,
+                approved_revision,
+                chrono::Utc::now().timestamp()
+            ],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
+
+    /// 删除某个服务器的全部审批记录（服务器被删除时清理孤儿行）。
+    pub fn delete_mcp_approvals_for_server(&self, server_id: &str) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "DELETE FROM mcp_approvals WHERE server_id = ?1",
+            params![server_id],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

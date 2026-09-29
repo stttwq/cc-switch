@@ -1,6 +1,6 @@
 # CC Switch 2.3.2 后续优化与安全加固实施方案
 
-- **状态**：施工中。**S0 与 S1 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude generation），全量检查通过；S2–S5（SEC-A、REL-A、SEC-D、REL-B、OPT-A 后端预算、DOC-A）尚未施工。
+- **状态**：施工中。**S0、S1、S2 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A），全量检查通过；S3–S5（REL-A、SEC-D、REL-B、OPT-A 后端预算、DOC-A）尚未施工。
 - **审查日期**：2026-09-29。
 - **代码基线**：`1password` 分支，`2a25d07118c7b087d6bd2618d4ca2877e3350320`，应用版本 `2.3.2`。
 - **适用对象**：接手施工的模型、复核模型与维护者。
@@ -513,3 +513,14 @@ git diff --check
 - **测试**：后端新增 4 个回环假 HTTP 服务集成测试（302/307/308 重定向零凭据外泄、跨源 override 零请求、同源 override 正常、网络错误载荷无 URL 材料）与 4 个单元测试；前端新增 `ClaudeFormFields.test.tsx`（旧请求不回灌、卸载无 toast、正常路径可用）。`cargo test` 975 通过 0 失败、`vitest` 747 通过 0 失败、`clippy -D warnings`、`tsc`、`check-links`、`git diff --check` 全部通过。
 - **基线已存在、未处理的失败项**：`src/components/EndpointBackfillBanner.tsx` 与 `src/components/settings/EnvDeliverySection.tsx` 两文件在 `prettier --check` 下不合格（基线 `2a25d07` 即如此，与本次改动无关）。
 - **未动态验证**：代理配置下重定向行为（仅静态保证继承代理）；真实公网端点兼容性；云端 workflow 实际运行；minisign 实际签名/回验（文档步骤，需发布机私钥）；Windows 安装/升级路径。
+
+### 2026-09-29：S2 完成（SEC-A 导入授权边界）
+
+- **审批模型**：新增设备本机表 `mcp_approvals(server_id, app, approved_revision, approved_at)`；`approved_revision` 是 `server_config` 的规范化 JSON 全文（键递归排序、数组保序、不做任何 trim/大小写转换），与同库明文的 `server_config` 同级暴露，不另存可离线猜测的秘密摘要（§4.3-4）。
+- **门禁位置**：批准检查放在 `McpService::sync_server_to_app`——所有投影路径（表单保存、启用开关、启动重投影、手动同步、导入后处理 `run_post_import_sync → sync_all_enabled`）的唯一入口，任何调用方不能绕过（§4.3-5）。未批准时批量投影不再写 live，并把旧内容从 live 移除（§4.3-7：不沿用 ID 信任，不用旧命令继续执行）。
+- **审批生命周期**：表单保存（upsert）= 用户对内容的显式决定，保存即批准该内容（Claude/Codex 各记一条，与启用位解耦——启用位只管投递范围）；从本机 live 导入（`import_from_claude/codex`，含启动表空自动导入）的新条目内容即本机 CLI 正在运行的配置，按「本机 DB 与本机托管 live 一致」继承批准；外部导入（SQL/同步/恢复）不携带批准，条目进入待审批。删除条目清理审批行。
+- **审批确认**：新命令 `get_mcp_approval_states`（汇总 enabled/approved/revision）与 `approve_mcp_server`（绑定预览 expectedRevision，锁内重读比对，内容已变化即拒绝；一致才批准、启用并立即投影）。UI：列表行待审批徽标（点击打开确认框）、启用未批准条目被拦截改开确认框、批量启用跳过未批准条目并提示；确认框完整展示 type/command/逐项 args/cwd/url，env 与 headers 键名可见、值默认掩码并提供统一显示开关（§4.3-9），i18n 四语言。
+- **导出/导入边界**：`mcp_approvals` 列为 B 级设备本地——`prune_for_export` 导出剔除；`merge_for_import` 丢弃外部文件的批准行、原样回拷本机行（§4.3-8：导入和恢复不能采纳外部 approval）。
+- **一次性继承迁移**：启动时 `migrate_local_approval_inheritance`（守卫键 `mcp_approvals_migrated`，B 级 settings）只对「本机 DB 内容与本机托管 live 内容一致」的既有条目补记批准；Claude 逐字比对 live JSON，Codex 走「DB 规范→投影 TOML→JSON」与 live TOML→JSON 的同基规范化比对（吸收 headers/http_headers 映射）；读不到/不一致/含白名单外字段一律保持待审批。
+- **测试**：后端 `services/mcp.rs` 新增 8 个验收测试（canonical JSON 语义、未批准不投影/批准后恢复、内容变化批准失效并移除 live 旧内容、一致条目不反复失效、过期修订拒绝、单应用批准不跨应用 + pending toggle 被拒、upsert 自动批准 + 删除清理、继承迁移一次性与歧义保守）；`tests/mcp_commands.rs` 两个导入式种子的用例补记批准以匹配新门禁；schema 断言纳入新表。前端新增 `McpApprovalDialog.test.tsx`（3）与 `UnifiedMcpPanel.approval.test.tsx`（4），既有 `UnifiedMcpPanel.test.tsx` 补 mock 两个新 hook。`cargo test` 14 套全过（lib 849）、`clippy -D warnings`、`fmt`、`vitest` 759 全过、`tsc`、`check-links` 全部通过。
+- **未动态验证**：真实 SQL/同步载荷的端到端导入审批流程（测试用直接写 DB 模拟）；`.db` 恢复路径的审批保留（静态确认与 SQL 导入共用 `merge_for_import`）；前端审批框在真实 Tauri 环境的交互。

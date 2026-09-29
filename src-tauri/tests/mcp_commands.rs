@@ -398,6 +398,11 @@ fn set_mcp_enabled_for_codex_writes_live_config() {
 
     let state = create_test_state_with_config(&config).expect("create test state");
 
+    // SEC-A：导入式种子不携带本机批准，这里模拟用户已审批该内容
+    let servers = state.db.get_all_mcp_servers().expect("get servers");
+    let seeded = servers.get("codex-server").expect("seeded server");
+    McpService::record_approval(&state, seeded, &AppType::Codex).expect("record approval");
+
     // v3.7.0: 使用 toggle_app 替代 set_enabled
     McpService::toggle_app(&state, "codex-server", AppType::Codex, true)
         .expect("toggle_app should succeed");
@@ -961,6 +966,11 @@ fn sync_all_enabled_removes_known_disabled_but_preserves_unknown_live_entries() 
             tags: Vec::new(),
         })
         .expect("save enabled server");
+
+    // SEC-A：直接写 DB 的种子等价外部导入，投影前先补批准
+    let servers = state.db.get_all_mcp_servers().expect("get servers");
+    let seeded = servers.get("managed-enabled").expect("seeded server");
+    McpService::record_approval(&state, seeded, &AppType::Claude).expect("record approval");
 
     McpService::sync_all_enabled(&state).expect("reconcile mcp");
 

@@ -19,6 +19,8 @@ const mocks = vi.hoisted(() => ({
   bulkToggle: vi.fn(),
   deleteServer: vi.fn(),
   importServers: vi.fn(),
+  approve: vi.fn(),
+  approvalStates: [] as unknown[],
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
 }));
@@ -28,6 +30,9 @@ vi.mock("@/hooks/useMcp", () => ({
     data: mocks.serversMap,
     isLoading: mocks.isLoading,
   }),
+  // SEC-A：默认空列表 = 所有条目已批准，不出现待审批徽标/拦截
+  useMcpApprovalStates: () => ({ data: mocks.approvalStates }),
+  useApproveMcpServer: () => ({ mutateAsync: mocks.approve, isPending: false }),
   useToggleMcpApp: () => ({
     mutateAsync: mocks.toggle,
     isPending: mocks.togglePending,

@@ -1,19 +1,34 @@
 import React, { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { Edit3, ExternalLink, Search, Server, Trash2 } from "lucide-react";
+import {
+  Edit3,
+  ExternalLink,
+  Search,
+  Server,
+  ShieldAlert,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { TooltipProvider } from "@/components/ui/tooltip";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import {
   useAllMcpServers,
   useBulkToggleMcpApp,
   useToggleMcpApp,
   useDeleteMcpServer,
   useImportMcpFromApps,
+  useMcpApprovalStates,
+  useApproveMcpServer,
 } from "@/hooks/useMcp";
 import type { McpServer } from "@/types";
 import type { AppId } from "@/lib/api/types";
 import McpFormModal from "./McpFormModal";
+import McpApprovalDialog from "./McpApprovalDialog";
 import { ConfirmDialog } from "../ConfirmDialog";
 import { settingsApi } from "@/lib/api";
 import { mcpPresets } from "@/config/mcpPresets";
@@ -78,10 +93,35 @@ const UnifiedMcpPanel = React.forwardRef<
   } | null>(null);
 
   const { data: serversMap, isLoading } = useAllMcpServers();
+  const { data: approvalStates } = useMcpApprovalStates();
   const toggleAppMutation = useToggleMcpApp();
   const bulkToggleAppMutation = useBulkToggleMcpApp();
   const deleteServerMutation = useDeleteMcpServer();
   const importMutation = useImportMcpFromApps();
+  const approveMutation = useApproveMcpServer();
+
+  // SEC-A：待审批映射 serverId -> app -> 当前内容修订（!approved，无论启用位
+  // ——禁用的未批准条目在启用前同样必须先过审批）。
+  const pendingRevisions = useMemo(() => {
+    const map: Record<string, Partial<Record<AppId, string>>> = {};
+    (approvalStates ?? []).forEach(({ serverId, apps }) => {
+      Object.entries(apps).forEach(([app, state]) => {
+        if (!state.approved) {
+          map[serverId] = map[serverId] ?? {};
+          map[serverId][app as AppId] = state.revision;
+        }
+      });
+    });
+    return map;
+  }, [approvalStates]);
+
+  // SEC-A：对未批准内容的启用操作不放行到 toggle，改为打开审批确认框，
+  // 用户查看完整配置并确认后由 approve 命令批准、启用并投影（§4.3-5/9）。
+  const [approvalDialog, setApprovalDialog] = useState<{
+    serverId: string;
+    app: AppId;
+    revision: string;
+  } | null>(null);
 
   const mutationPending =
     toggleAppMutation.isPending ||
@@ -89,7 +129,11 @@ const UnifiedMcpPanel = React.forwardRef<
     deleteServerMutation.isPending ||
     importMutation.isPending;
   const interactionBlocked =
-    writePending || mutationPending || isFormOpen || confirmDialog !== null;
+    writePending ||
+    mutationPending ||
+    isFormOpen ||
+    confirmDialog !== null ||
+    approvalDialog !== null;
 
   React.useEffect(() => {
     onInteractionBlockedChange?.(interactionBlocked);
@@ -117,6 +161,19 @@ const UnifiedMcpPanel = React.forwardRef<
   const endWrite = () => {
     writeLockRef.current = false;
     setWritePending(false);
+  };
+
+  // SEC-A：徽标点击 = 打开审批确认框（pending 且启用位已为 true 的条目，
+  // 开关点击是「关闭」而非「启用」，所以审批入口放在徽标上）。
+  const openApprovalDialog = (serverId: string) => {
+    const apps = pendingRevisions[serverId];
+    const firstApp = MCP_APP_IDS.find((app) => apps?.[app]);
+    if (!firstApp) return;
+    setApprovalDialog({
+      serverId,
+      app: firstApp,
+      revision: apps[firstApp] as string,
+    });
   };
 
   const serverEntries = useMemo((): Array<[string, McpServer]> => {
@@ -157,6 +214,15 @@ const UnifiedMcpPanel = React.forwardRef<
     enabled: boolean,
   ) => {
     if (!isMcpAppId(app)) return;
+    // SEC-A：启用未批准内容 → 打开审批确认框，不直接 toggle
+    if (enabled && pendingRevisions[serverId]?.[app]) {
+      setApprovalDialog({
+        serverId,
+        app,
+        revision: pendingRevisions[serverId][app] as string,
+      });
+      return;
+    }
     if (!beginWrite()) return;
     try {
       await toggleAppMutation.mutateAsync({ serverId, app, enabled });
@@ -181,9 +247,26 @@ const UnifiedMcpPanel = React.forwardRef<
       return;
     }
 
+    // SEC-A：批量启用不夹带未批准条目——它们由用户逐个审批后再启用。
+    const skippedPending = enabled
+      ? serverIds.filter((id) => pendingRevisions[id]?.[app])
+      : [];
+    const actionableIds = serverIds.filter(
+      (id) => !skippedPending.includes(id),
+    );
+    if (actionableIds.length === 0) {
+      endWrite();
+      if (skippedPending.length > 0) {
+        toast.info(
+          t("mcp.approval.bulkSkipped", { count: skippedPending.length }),
+        );
+      }
+      return;
+    }
+
     try {
       const result = await bulkToggleAppMutation.mutateAsync({
-        serverIds,
+        serverIds: actionableIds,
         app,
         enabled,
       });
@@ -192,12 +275,19 @@ const UnifiedMcpPanel = React.forwardRef<
           t("common.bulkToggleFailed", { count: result.failed.length }),
           { closeButton: true },
         );
+      } else if (skippedPending.length > 0) {
+        toast.info(
+          t("mcp.approval.bulkSkipped", { count: skippedPending.length }),
+        );
       }
     } catch (error) {
-      toast.error(t("common.bulkToggleFailed", { count: serverIds.length }), {
-        description: String(error),
-        closeButton: true,
-      });
+      toast.error(
+        t("common.bulkToggleFailed", { count: actionableIds.length }),
+        {
+          description: String(error),
+          closeButton: true,
+        },
+      );
     } finally {
       endWrite();
     }
@@ -317,6 +407,12 @@ const UnifiedMcpPanel = React.forwardRef<
                     key={id}
                     id={id}
                     server={server}
+                    pendingApps={
+                      Object.keys(pendingRevisions[id] ?? {}).filter((app) =>
+                        isMcpAppId(app as AppId),
+                      ) as AppId[]
+                    }
+                    onOpenApproval={openApprovalDialog}
                     onToggleApp={handleToggleApp}
                     onEdit={handleEdit}
                     onDelete={handleDelete}
@@ -356,6 +452,33 @@ const UnifiedMcpPanel = React.forwardRef<
           onCancel={() => setConfirmDialog(null)}
         />
       )}
+
+      {approvalDialog && (
+        <McpApprovalDialog
+          isOpen
+          server={serversMap?.[approvalDialog.serverId]}
+          app={approvalDialog.app}
+          pending={approveMutation.isPending}
+          onConfirm={async () => {
+            try {
+              await approveMutation.mutateAsync({
+                serverId: approvalDialog.serverId,
+                app: approvalDialog.app,
+                expectedRevision: approvalDialog.revision,
+              });
+              setApprovalDialog(null);
+              toast.success(t("mcp.approval.approved"), { closeButton: true });
+            } catch (error) {
+              // 内容在确认前被再次改动等情形：后端拒绝，保持对话框让用户重看
+              toast.error(t("common.error"), {
+                description: String(error),
+                closeButton: true,
+              });
+            }
+          }}
+          onCancel={() => setApprovalDialog(null)}
+        />
+      )}
     </div>
   );
 });
@@ -365,6 +488,10 @@ UnifiedMcpPanel.displayName = "UnifiedMcpPanel";
 interface UnifiedMcpListItemProps {
   id: string;
   server: McpServer;
+  /** SEC-A：待审批的应用列表（enabled && !approved） */
+  pendingApps: AppId[];
+  /** SEC-A：打开审批确认框（点击待审批徽标） */
+  onOpenApproval: (serverId: string) => void;
   onToggleApp: (serverId: string, app: AppId, enabled: boolean) => void;
   onEdit: (id: string) => void;
   onDelete: (id: string) => void;
@@ -375,6 +502,8 @@ interface UnifiedMcpListItemProps {
 const UnifiedMcpListItem: React.FC<UnifiedMcpListItemProps> = ({
   id,
   server,
+  pendingApps,
+  onOpenApproval,
   onToggleApp,
   onEdit,
   onDelete,
@@ -407,6 +536,26 @@ const UnifiedMcpListItem: React.FC<UnifiedMcpListItemProps> = ({
           <span className="font-medium text-sm text-foreground truncate">
             {name}
           </span>
+          {pendingApps.length > 0 && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <button
+                  type="button"
+                  onClick={() => onOpenApproval(id)}
+                  className="flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-500/15 dark:text-amber-400 flex-shrink-0 cursor-pointer"
+                  data-testid="mcp-pending-badge"
+                >
+                  <ShieldAlert size={10} />
+                  {t("mcp.approval.pendingBadge")}
+                </button>
+              </TooltipTrigger>
+              <TooltipContent>
+                {t("mcp.approval.pendingApps", {
+                  apps: pendingApps.join(", "),
+                })}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {docsUrl && (
             <button
               type="button"

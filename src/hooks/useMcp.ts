@@ -98,3 +98,34 @@ export function useImportMcpFromApps() {
       queryClient.invalidateQueries({ queryKey: ["mcp", "all"] }),
   });
 }
+
+/**
+ * SEC-A：查询所有 MCP 服务器的审批状态（enabled && !approved 即待审批）
+ */
+export function useMcpApprovalStates() {
+  return useQuery({
+    queryKey: ["mcp", "approvals"],
+    queryFn: () => mcpApi.getApprovalStates(),
+  });
+}
+
+/**
+ * SEC-A：审批确认（绑定预览修订，一致才批准、启用并投影）
+ */
+export function useApproveMcpServer() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({
+      serverId,
+      app,
+      expectedRevision,
+    }: {
+      serverId: string;
+      app: AppId;
+      expectedRevision: string;
+    }) => mcpApi.approveServer(serverId, app, expectedRevision),
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["mcp"] });
+    },
+  });
+}

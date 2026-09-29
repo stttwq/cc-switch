@@ -1503,6 +1503,18 @@
         "name": "@upstash/context7-mcp",
         "description": "最新のライブラリドキュメントとコード例を提供する Context7 ドキュメント検索ツール。キー設定で上限が拡張されます"
       }
+    },
+    "approval": {
+      "title": "MCP サーバーの内容を承認",
+      "description": "「{{name}}」は {{app}} の設定に書き込まれます。以下の実行内容を確認してから承認してください。",
+      "emptyConfig": "（表示できる実行フィールドがありません）",
+      "sensitive": "機密",
+      "revealSecrets": "機密値を表示",
+      "approveAndEnable": "承認して有効化",
+      "approved": "承認して有効化しました",
+      "pendingBadge": "承認待ち",
+      "pendingApps": "承認待ちのアプリ: {{apps}}",
+      "bulkSkipped": "承認待ちの {{count}} 件をスキップしました。個別に確認して承認してください"
     }
   },
   "prompts": {
