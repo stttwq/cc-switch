@@ -1,6 +1,6 @@
 # CC Switch 2.3.2 后续优化与安全加固实施方案
 
-- **状态**：施工中。**S0、S1、S2、S3、S4 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A、REL-A、REL-B、OPT-A 后端、SEC-D），全量检查通过；S5（DOC-A、最终复核与交付材料）尚未施工。
+- **状态**：**S0–S5 已于 2026-09-29 全部完成**（SEC-B、SEC-C、DEL-A、OPT-A、SEC-A、REL-A、REL-B、SEC-D、DOC-A），全量检查通过。发布动作（构建 → 签名 → 上传）按 §3 原则 12 停在人工授权前；隔离 Windows VM 验收未执行，未测项见 §17 各阶段记录。
 - **审查日期**：2026-09-29。
 - **代码基线**：`1password` 分支，`2a25d07118c7b087d6bd2618d4ca2877e3350320`，应用版本 `2.3.2`。
 - **适用对象**：接手施工的模型、复核模型与维护者。
@@ -544,3 +544,28 @@ git diff --check
 - **测试**：REL-B 新增 4 个（Windows 真实子进程：stdout 超限及时 kill 返回 OutputLimit、锁被占时排队超时返回 QueueTimeout、排队预算不影响正常路径，另 3 个既有 exec_op 测试回归通过）；OPT-A 后端新增 5 个回环假服务测试（无 Content-Length 巨体、Content-Length 超限提前拒绝、条目数超限、单 ID 超限、正常尺寸不受影响）；SEC-D 新增 6 个（程序 schema 归一化后与模板逐表一致、未知表/未知列/表达式索引/伪版本四类拒绝、端到端导入后主库结构与模板一致且夹带未知表被拒后主库不变）。`cargo test` 全过（lib 874、集成套件合计 1008 通过 0 失败），`onepassword_op_counts` 回归不退化（普通编辑 0 次）；`clippy -D warnings`、`cargo fmt`、`vitest` 759 全过、`tsc`、`check-links`、`git diff --check` 通过；prettier 仅剩基线即有的 2 个失败文件（未动）。
 - **兼容性**：v3.8.3 历史单行 INSERT 导出（`import_still_accepts_legacy_single_row_insert_exports`）、空业务表导出、当前二进制备份恢复、增量 vacuum 保留等既有测试全部通过；SEC-D 期间曾出现干净库迁移种子行与导入 settings 冲突（UNIQUE），已以 OR REPLACE 语义解决并保持既有导入结果不变。
 - **未动态验证**：大库（数十万行）复制的耗时与峰值内存未实测（复制为事务内逐表 `INSERT…SELECT`，无逐行建连接）；`restore_main_db_file_from_backup` 离线紧急路径未做归一化（仅结构审查，主库损坏场景下的兜底通道，行为与 2.3.2 一致）；20 秒总预算耗尽路径未做真实慢服务测试（单候选 15 秒超时与预算取 min 的逻辑为静态保证）；op 排队 permit 池在真实多窗口并发下的 UI 表现未验证。
+
+### 2026-09-29：S5 完成（DOC-A 对账、最终复核与交付材料）
+
+- **SECURITY.md 六处对账（§12.1，逐条经代码核实）**：
+  1. **威胁模型总述区分三种投递形态**：严格投递（默认全局开启，钥匙只注入本程序启动的终端 / `ccs env`）、兼容投递（仅凭据管理器后端可退出，激活值明文写 `HKCU\Environment`）、1P 模式强制严格投递（`settings.rs::set_env_delivery_strict_mode` 拒绝关闭）。原文「向 CLI 投递的方式是用户级环境变量」不再作为总体描述。
+  2. **`get_providers` 取 Base URL 的来源修正**：由「读取凭据管理器」改为「读本地端点缓存，0 次凭据后端调用」——与 `commands/provider.rs`（F1-2：列表只读端点表）一致；1P 模式下缓存镜像自保险箱，未回填的供应商返回空值并提示待回填。
+  3. **secret_refs 的「不随云同步」改为受限传递实情**（§12.1-2）：1P 实引行（`vault_id != ''`）随 SQL 导出与 WebDAV/S3 同步载荷携带（仅 vault/item id 与字段名，无秘密值），导入侧仅在本机为 1P 后端且载荷 vault id 与本机一致时采纳；占位行导出剔除。核实自 `snapshot_policy.rs::prune_for_export` / `merge_secret_refs`。
+  4. **「What it defends」的绝对承诺限定到托管路径**，并列明例外：迁移前备份库、写 vault 失败仍在待办重试的供应商（明文可能暂留 DB，`secrets_import_pending` 登记并提示）、第三方维护的 live 文件、已启动终端的环境块——与「Local DB is intentionally NOT encrypted」一节的既有例外清单对齐（§12.1-3）。
+  5. **E2E 口令存储补齐 1P 后端**（§12.1-4）：凭据管理器后端存 `cc-switch/v1/app/sync/passphrase`，1P 后端存 1Password 条目 `app.e2e_passphrase` 字段（核实自 `secrets/sync_secrets.rs::store_sync_passphrase` 走 vault 抽象）。同时修正原文「绝不上上传」笔误。
+  6. **条件写删去「不丢数据」绝对保证**（§12.1-5）：忽略 If-Match 的 WebDAV 服务器退化为无条件 PUT，「最后一次下载之后、下次上传之前」的并发编辑可能丢失（最后写入者获胜），只能从本机备份找回；S3 的 HEAD ETag 比较同样有窗口。
+  - 另新增 **「Data Location Matrix / 数据位置矩阵」** 一节（§12.2-1/2）：按凭据管理器 / 1Password 两列分列 API key、普通 Base URL、含凭据 URL、引用元数据、E2E 口令、历史备份、进程环境七类，并附迁移/提取待办状态的例外说明。
+- **历史方案对账（§12.2-3）**：`security-and-selective-1password-update-plan-zh.md` 状态行由「待施工」改为「历史设计；已实施」，指向 CHANGELOG 2.3.2 小节（P0–P6）、关联提交 `db6ebe4`/`46ff28d`/`2a25d07` 与本方案；未验收项单列（真实 1Password 保险箱人工验收 §9.5、Windows 特殊文件名/重解析点与 TLS 动态测试 §10.2）；原文与行号保留作历史证据，不覆盖。`snapshot_policy.rs` 模块头注释删除「S4（导入合并）仍为骨架」过期阶段信息，改为指向历史设计文档。
+- **DOC-A 不调整产品安全行为（§12.2-5）**：本阶段改动仅 `SECURITY.md`、两份 plans 文档与 `snapshot_policy.rs` 模块注释，无业务代码改动；行为验收沿用各阶段记录。
+- **全量检查**：`cargo test` 1016 通过 0 失败（含 `onepassword_op_counts` 18 项——普通编辑 0 op 回归不退化）、`cargo clippy --all-targets -- -D warnings`、`cargo fmt --check`、`pnpm typecheck`、`pnpm test:unit` 759 全过、`node scripts/check-links.mjs`（34 个 Markdown 文件）、`git diff --check` 通过；`prettier --check` 仅剩基线 `2a25d07` 即有的 2 个失败文件（`EndpointBackfillBanner.tsx`、`EnvDeliverySection.tsx`，未动，与历阶段记录一致）。
+- **release staging 与验证报告（§13-S5）**：staging 流程已在 S1（DEL-A）落地为 [`release-process-zh.md`](../../docs/release-process-zh.md) §3.5——独立 staging 目录、先复制最终上传名再生成 `SHA256SUMS`、minisign 签名、干净目录回验，云端补位只产出草稿 Release。本阶段**未**重新构建 MSI/staging：当前无新版本号与发布标签（版本安排按 §0 由维护者决定），签名需发布机私钥与交互式 passcode，上传属发布授权——按 §3 原则 12 一律停在人工授权前。发布时按 release-process-zh.md 逐步执行即可，无遗留流程缺口。
+- **未动态验证（如实标注）**：隔离 Windows VM 的安装/升级/卸载/恢复路径未执行（本轮无 VM 环境；含自定义目录、中文/空格路径、旧版升级数据保留）；minisign 实际签名与干净目录回验未运行（需发布机私钥与 passcode）；真实 1Password 保险箱人工验收（沿用历史方案 §9.5 待授权项）；needs_attention 的专用前端横幅（S3 已记录，现以 error 日志 + 暂停自动同步 + 拒绝新同步呈现）。
+- **阶段结论**：S5 为最后阶段，全部工作包（SEC-A/B/C/D、REL-A/B、OPT-A、DEL-A、DOC-A）已实施并有可复核测试；交付停在正式发布授权之前，待维护者决定版本号并执行发布流程。
+
+### 2026-09-29：2.3.3 发布手测修正（编辑态获取模型）
+
+- **问题（用户实机手测发现）**：1Password 解锁后，编辑已存供应商点「获取模型」恒提示「请先填写 API Key」。**根因是 2.3.2 的既有限制而非 2.3.3 回归**：P3 安全设计（原方案 §7.1-2）规定回显明文只进输入框本地展示状态、绝不写回表单受控值，故编辑态表单 `apiKey` 恒空（空白=保留）；而前端预检只看表单值（`ClaudeFormFields.tsx` 的 `!!apiKey`），拿不到「后端已配置密钥」这一事实。以 `git show 2a25d07` 核对 2.3.2 基线行为相同。
+- **修复（与零密钥前端架构一致的最小方案）**：新增后端命令 `fetch_models_for_provider(app, providerId, ...)`——表单 key 留空但 `secretStatus.apiKey.present` 为真时，由后端经 `ProviderService::fetch_provider_secrets`（唯一 vault.fetch 入口，一次往返）解析**已存** API Key 后调用同一 `fetch_models`（继承 SEC-B 无重定向客户端、SEC-C 结构化错误、OPT-A 有限响应），**明文密钥不过 IPC**。供应商不存在与未配置密钥统一返回 `key_not_configured`（避免凭据存在性探测）；凭据后端锁定/读取失败返回 `key_unavailable`（可重试），细节只进本机日志。这是用户显式动作，1P 模式计入一次 op，不违反普通编辑 0-op 承诺。
+- **接入面**：Claude / Codex / Pi 三表单的 `handleFetchModels` 统一改为「表单有明文 key → 走原 `fetch_models_for_config`（显式 set 意图优先）；表单留空且后端已配置 → 走按供应商路径」；i18n 四语言新增 `fetchModelsKeyUnavailable`。
+- **测试**：后端新增 2 个（解析已存密钥恰好一次 fetch；无密钥 → `key_not_configured`）；前端 `ClaudeFormFields.test.tsx` 新增 3 个（留空走 provider 路径、显式 key 优先走 config 路径、未配置仍提示先填写）。`cargo test` 1018 通过 0 失败、`clippy -D warnings`、`cargo fmt`、`tsc`、`vitest` 762 全过。
+- **未覆盖**：Pi 表单仅覆盖已存 API Key 的解析；凭据存于 Pi 敏感请求头（无 api_key）的供应商获取 /models 仍需用户在表单填相应头（与手填 key 路径一致），留待后续盘点。
