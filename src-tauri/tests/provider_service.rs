@@ -172,6 +172,18 @@ command = "say"
 
     let state = create_test_state_with_config(&initial_config).expect("create test state");
 
+    // SEC-A（S2 门禁）：MultiAppConfig 种子直写 DB 不经 upsert 自动批准，
+    // 切换供应商的 MCP 投影会正确拦截未批准内容——先补记本机批准。
+    let echo_server = state
+        .db
+        .get_all_mcp_servers()
+        .expect("get mcp servers")
+        .get("echo-server")
+        .expect("echo-server seeded")
+        .clone();
+    cc_switch_lib::McpService::record_approval(&state, &echo_server, &AppType::Codex)
+        .expect("record approval");
+
     ProviderService::switch(&state, AppType::Codex, "new-provider")
         .expect("switch provider should succeed");
 

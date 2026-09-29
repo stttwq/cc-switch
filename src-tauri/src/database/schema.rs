@@ -73,6 +73,18 @@ impl Database {
         )
         .map_err(|e| AppError::Database(e.to_string()))?;
 
+        // 3.2 同步恢复 commit marker（REL-A）：随主库整库替换原子生效的本机
+        // 「已提交」标记，B 级——导出剔除、导入保留本机值（snapshot_policy）。
+        // 由本机在暂存库替换主库前写入，绝不信任外部 SQL 带来的同名值。
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS local_sync_commit (
+            op_id TEXT PRIMARY KEY,
+            committed_at INTEGER NOT NULL
+        )",
+            [],
+        )
+        .map_err(|e| AppError::Database(e.to_string()))?;
+
         // 4. Prompts 表
         conn.execute("CREATE TABLE IF NOT EXISTS prompts (
             id TEXT NOT NULL, app_type TEXT NOT NULL, name TEXT NOT NULL, content TEXT NOT NULL,

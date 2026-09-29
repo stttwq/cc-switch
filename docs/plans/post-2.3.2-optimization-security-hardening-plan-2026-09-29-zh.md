@@ -1,6 +1,6 @@
 # CC Switch 2.3.2 后续优化与安全加固实施方案
 
-- **状态**：施工中。**S0、S1、S2 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A），全量检查通过；S3–S5（REL-A、SEC-D、REL-B、OPT-A 后端预算、DOC-A）尚未施工。
+- **状态**：施工中。**S0、S1、S2、S3 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A、REL-A），全量检查通过；S4–S5（SEC-D、REL-B、OPT-A 后端预算、DOC-A）尚未施工。
 - **审查日期**：2026-09-29。
 - **代码基线**：`1password` 分支，`2a25d07118c7b087d6bd2618d4ca2877e3350320`，应用版本 `2.3.2`。
 - **适用对象**：接手施工的模型、复核模型与维护者。
@@ -524,3 +524,14 @@ git diff --check
 - **一次性继承迁移**：启动时 `migrate_local_approval_inheritance`（守卫键 `mcp_approvals_migrated`，B 级 settings）只对「本机 DB 内容与本机托管 live 内容一致」的既有条目补记批准；Claude 逐字比对 live JSON，Codex 走「DB 规范→投影 TOML→JSON」与 live TOML→JSON 的同基规范化比对（吸收 headers/http_headers 映射）；读不到/不一致/含白名单外字段一律保持待审批。
 - **测试**：后端 `services/mcp.rs` 新增 8 个验收测试（canonical JSON 语义、未批准不投影/批准后恢复、内容变化批准失效并移除 live 旧内容、一致条目不反复失效、过期修订拒绝、单应用批准不跨应用 + pending toggle 被拒、upsert 自动批准 + 删除清理、继承迁移一次性与歧义保守）；`tests/mcp_commands.rs` 两个导入式种子的用例补记批准以匹配新门禁；schema 断言纳入新表。前端新增 `McpApprovalDialog.test.tsx`（3）与 `UnifiedMcpPanel.approval.test.tsx`（4），既有 `UnifiedMcpPanel.test.tsx` 补 mock 两个新 hook。`cargo test` 14 套全过（lib 849）、`clippy -D warnings`、`fmt`、`vitest` 759 全过、`tsc`、`check-links` 全部通过。
 - **未动态验证**：真实 SQL/同步载荷的端到端导入审批流程（测试用直接写 DB 模拟）；`.db` 恢复路径的审批保留（静态确认与 SQL 导入共用 `merge_for_import`）；前端审批框在真实 Tauri 环境的交互。
+
+### 2026-09-29：S3 完成（REL-A 同步中断恢复）
+
+- **持久恢复材料（REL-A1）**：`apply_snapshot` 的 Skills 备份从随作用域消失的 `TempDir` 改为应用数据根下 `sync-recovery/<op_id>/skills-backup/` 持久私有目录，并在 `sync-recovery/journal.json`（`atomic_write_private`）记录阶段、operation ID、快照标识（两 artifact 哈希短组合）与备份清单（文件数/字节）；journal 不含密钥与原始载荷。旧 Skills/DB 备份保留到恢复完成才清理；错误路径回滚失败不再吞掉——落 `needs_attention` 并返回合并错误。
+- **commit marker（§7.2-6/7）**：新增本机表 `local_sync_commit(op_id, committed_at)`。同步导入统一走 `import_sql_string_for_sync_with_commit_marker`：marker 在 `merge_for_import` 之后、整库替换之前写入**暂存库**，随 SQLite Backup 替换主库原子生效——重启时凭它区分「DB 已提交」与「仅 Skills 已换」，杜绝把「新 DB + 新 Skills」回滚成「新 DB + 旧 Skills」。marker 本机生成，列为 B 级（导出剔除、导入回拷本机行），不随同步/导出传播。
+- **意图式阶段机（REL-A2）**：新模块 `services/sync_recovery.rs`。阶段 `prepared → skills_replaced → db_committed → projections_pending →（清理即 complete）`，`needs_attention` 停止一切自动动作。`skills_replaced` 是**意图记录**、在替换 Skills 之前写入，「行动与记录之间崩溃」永远落在可安全恢复的一侧（回滚幂等）。恢复动作有限：`prepared` 丢弃 staging；`skills_replaced` 无 marker → 从持久备份回滚旧 Skills；有 marker / `db_committed` / `projections_pending` → 只补幂等投影；备份清单不一致或 marker 缺失 → `needs_attention`。恢复不新增任何 1P 操作、不批准 MCP、不重放旧快照（投影按 §7.2 阶段表以最新 DB 重试，与正常下载后处理同一路径）。
+- **挂接点**：`apply_snapshot` 改为返回 op_id 并在入口处理旧 journal（`prepared` 丢弃放行、无 marker 回滚后放行、其余拒绝并要求重启）；`run_post_import_sync` 入口/出口推进 `projections_pending` 与完成清理（三条导入路径与重启恢复共用同一套幂等收尾）；`lib.rs` 在凭据迁移之后、一切 live 修改任务之前执行 `recover_at_startup`，DB 已提交即补投影，`needs_attention` 时暂停自动同步 worker。
+- **测试（§7.3 故障注入矩阵）**：父测试把同一测试二进制以 `--exact` 拉起为子进程，经环境变量在 7 个边界（journal 写前/写后、Skills 意图/替换后、DB 导入前/提交后、投影中段）`exit(9)` 模拟强杀，重启后断言 DB/Skills/journal/marker 属同一确定状态；覆盖原无 Skills 目录、恢复前编辑不被重新导入覆盖、二次恢复幂等、备份不完整进 `needs_attention`、会话内守卫（prepared 丢弃/db_committed 拒绝/needs_attention 拒绝）。共 11 个新测试，全部经真实子进程故障注入，`CC_SWITCH_TEST_HOME` 隔离、无真实 op。
+- **测试统计**：`cargo test` 全过（lib 860、集成套件合计 1002 通过 0 失败）、`clippy -D warnings`、`cargo fmt`、`vitest` 759 全过、`tsc`、`check-links`、`git diff --check` 通过；prettier 仅剩基线即有的 2 个失败文件（未动）。
+- **S2 遗留修正（S3 全量复核发现）**：S2 的 SEC-A 门禁使三处「直写 DB 种子再切换/启用 MCP」的集成测试夹具失效（`tests/profile_roundtrip.rs`、`tests/provider_commands.rs`、`tests/provider_service.rs`——绕过表单 upsert 的自动批准路径），当时全量验证漏检。修法与 S2 的 `mcp_commands.rs` 一致：夹具补记本机批准，测试意图（有效条目照常生效）不变。
+- **未动态验证**：磁盘满/文件占用类回滚失败（备份不完整路径已用清单校验覆盖，真实磁盘满未注入）；needs_attention 的专用前端横幅（当前以 error 日志 + 暂停自动同步 + 拒绝新同步操作呈现，UI 呈现留待 S5 交付复核决定）；真实 WebDAV/S3 远端上的中断演练（测试用本地载荷直调 `apply_snapshot`）。

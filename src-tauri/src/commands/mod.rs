@@ -18,7 +18,7 @@ mod session_manager;
 mod settings;
 mod shell_menu;
 pub mod skill;
-mod sync_support;
+pub(crate) mod sync_support;
 
 mod lightweight;
 mod s3_sync;

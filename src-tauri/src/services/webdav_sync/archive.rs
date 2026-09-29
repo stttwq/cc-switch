@@ -3,7 +3,7 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-use tempfile::{tempdir, TempDir};
+use tempfile::tempdir;
 use zip::write::SimpleFileOptions;
 use zip::DateTime;
 
@@ -16,13 +16,6 @@ use crate::services::sync_protocol::{
 
 /// Maximum number of entries allowed in a zip archive.
 const MAX_EXTRACT_ENTRIES: usize = 10_000;
-
-pub(crate) struct SkillsBackup {
-    _tmp: TempDir,
-    backup_dir: PathBuf,
-    ssot_path: PathBuf,
-    existed: bool,
-}
 
 pub(crate) fn zip_skills_ssot(dest_path: &Path) -> Result<(), AppError> {
     let source = SkillService::get_ssot_dir().map_err(|e| {
@@ -161,49 +154,6 @@ pub(crate) fn restore_skills_zip(raw: &[u8]) -> Result<(), AppError> {
     Ok(())
 }
 
-pub(crate) fn backup_current_skills() -> Result<SkillsBackup, AppError> {
-    let ssot = SkillService::get_ssot_dir().map_err(|e| {
-        localized(
-            "webdav.sync.skills_ssot_dir_failed",
-            format!("获取 Skills SSOT 目录失败: {e}"),
-            format!("Failed to resolve Skills SSOT directory: {e}"),
-        )
-    })?;
-    let tmp = tempdir().map_err(|e| {
-        io_context_localized(
-            "webdav.sync.skills_backup_tmpdir_failed",
-            "创建 skills 备份临时目录失败",
-            "Failed to create temporary directory for skills backup",
-            e,
-        )
-    })?;
-    let backup_dir = tmp.path().join("skills-backup");
-
-    let existed = ssot.exists();
-    if existed {
-        copy_dir_recursive(&ssot, &backup_dir)?;
-    }
-
-    Ok(SkillsBackup {
-        _tmp: tmp,
-        backup_dir,
-        ssot_path: ssot,
-        existed,
-    })
-}
-
-pub(crate) fn restore_skills_from_backup(backup: &SkillsBackup) -> Result<(), AppError> {
-    if backup.ssot_path.exists() {
-        fs::remove_dir_all(&backup.ssot_path).map_err(|e| AppError::io(&backup.ssot_path, e))?;
-    }
-
-    if backup.existed {
-        copy_dir_recursive(&backup.backup_dir, &backup.ssot_path)?;
-    }
-
-    Ok(())
-}
-
 fn zip_dir_recursive(
     root: &Path,
     current: &Path,
@@ -292,7 +242,8 @@ fn zip_dir_recursive(
     Ok(())
 }
 
-fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), AppError> {
+/// 递归复制目录。除 `sync_recovery` 的持久恢复备份外仅限本模块内部使用。
+pub(crate) fn copy_dir_recursive(src: &Path, dest: &Path) -> Result<(), AppError> {
     let mut visited = HashSet::new();
     copy_dir_recursive_inner(src, dest, &mut visited)
 }

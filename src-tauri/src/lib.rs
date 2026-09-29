@@ -571,6 +571,20 @@ pub fn run() {
                 app_state.db.clone(),
             );
 
+            // REL-A（§7.2-10）：同步恢复必须先于自动同步与任何会修改 live 的
+            // 启动任务执行。DB 已提交但投影未完成时在此补齐幂等投影；
+            // needs_attention 时暂停自动同步，等待人工处理（详见日志）。
+            let sync_recovery_outcome =
+                crate::services::sync_recovery::recover_at_startup(&app_state.db);
+            if sync_recovery_outcome
+                == crate::services::sync_recovery::StartupRecovery::PendingProjections
+            {
+                if let Err(e) = crate::commands::sync_support::run_post_import_sync(&app_state, None)
+                {
+                    log::warn!("✗ 同步恢复投影未完成，将在下次启动重试: {e}");
+                }
+            }
+
             // §6.1：DB init 只做纯 SQL，凭据迁移在 AppState::new 之后用同一份 store 触发；
             // §6.3 的明文残留清理紧随其后。失败按 §6.6 走「重试 / 退出」阻断对话框。
             // §6.7：1Password 模式下跳过——这类迁移把 DB 明文写进凭据管理器，方向与 1P 相反；
@@ -981,14 +995,20 @@ pub fn run() {
             }
 
             let _tray = tray_builder.build(app)?;
-            crate::services::webdav_auto_sync::start_worker(
-                app_state.db.clone(),
-                app.handle().clone(),
-            );
-            crate::services::s3_auto_sync::start_worker(
-                app_state.db.clone(),
-                app.handle().clone(),
-            );
+            // REL-A（§7.2-10）：存在未解决恢复状态时暂停自动同步，避免在
+            // 不一致的本机状态上继续上传/下载；手动操作会被恢复守卫拦截。
+            if sync_recovery_outcome
+                != crate::services::sync_recovery::StartupRecovery::NeedsAttention
+            {
+                crate::services::webdav_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+                crate::services::s3_auto_sync::start_worker(
+                    app_state.db.clone(),
+                    app.handle().clone(),
+                );
+            }
             // 将同一个实例注入到全局状态，避免重复创建导致的不一致
             app.manage(app_state);
 

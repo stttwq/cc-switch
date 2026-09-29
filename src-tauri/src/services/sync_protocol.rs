@@ -19,9 +19,9 @@ use crate::error::AppError;
 use crate::services::skill::{skill_state_read_guard, skill_state_write_guard};
 
 // Re-export archive functions for use by transport layers.
-pub(crate) use super::webdav_sync::archive::{
-    backup_current_skills, restore_skills_from_backup, restore_skills_zip, zip_skills_ssot,
-};
+pub(crate) use super::webdav_sync::archive::{restore_skills_zip, zip_skills_ssot};
+
+use super::sync_recovery;
 
 // ─── Protocol constants ──────────────────────────────────────
 
@@ -477,11 +477,21 @@ pub(crate) fn verify_artifact(
 
 // ─── Snapshot application ────────────────────────────────────
 
+/// 应用远端快照（Skills + DB），返回本次操作的恢复 operation ID。
+///
+/// REL-A（§7.2）：Skills 备份持久化到应用数据根、journal 记录阶段意图、
+/// DB 导入随主库替换写入本机 commit marker——进程中断后由
+/// [`super::sync_recovery`] 恢复到一致状态。返回的 op_id 供调用方在
+/// 后置投影完成后收尾（实际收尾由 `run_post_import_sync` 内部完成）。
 pub(crate) fn apply_snapshot(
     db: &crate::database::Database,
     db_sql: &[u8],
     skills_zip: &[u8],
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
+    // §7.2-10：旧 journal 未归位时不开始新操作（部分状态可在本函数内安全
+    // 处理：丢弃 staging / 回滚旧 Skills；其余拒绝并要求重启完成恢复）。
+    sync_recovery::resolve_before_new_operation(db)?;
+
     let sql_str = std::str::from_utf8(db_sql).map_err(|e| {
         localized(
             "sync.sql_not_utf8",
@@ -489,27 +499,60 @@ pub(crate) fn apply_snapshot(
             format!("SQL is not valid UTF-8: {e}"),
         )
     })?;
+
+    // 持久备份现用 Skills 并写 journal(Prepared)——失败发生在现用数据被改动
+    // 之前，直接中止。
+    let op = sync_recovery::SyncRestoreOperation::begin(&sync_recovery::snapshot_identity(
+        db_sql, skills_zip,
+    ))?;
+
     // Exclude installs, uninstalls, updates, and local projection while Skills
     // are backed up/replaced and the corresponding database snapshot is applied.
     let _skill_state_guard = skill_state_write_guard();
-    let skills_backup = backup_current_skills()?;
+    let result = apply_snapshot_inner(db, sql_str, skills_zip, &op);
 
-    // Replace skills first, then import database; roll back skills on DB failure.
-    restore_skills_zip(skills_zip)?;
-
-    if let Err(db_err) = db.import_sql_string_for_sync(sql_str) {
-        if let Err(rollback_err) = restore_skills_from_backup(&skills_backup) {
-            return Err(localized(
-                "sync.db_import_and_rollback_failed",
-                format!("导入数据库失败: {db_err}; 同时回滚 Skills 失败: {rollback_err}"),
-                format!(
-                    "Database import failed: {db_err}; skills rollback also failed: {rollback_err}"
-                ),
-            ));
+    match result {
+        Ok(()) => Ok(op.op_id.clone()),
+        Err(err) => {
+            // DB 未提交（marker 未写入）：回滚 Skills 到持久备份（§7.2-5，
+            // 回滚失败不得忽略）。
+            if let Err(rollback_err) = op.restore_skills_from_backup() {
+                op.mark_needs_attention();
+                return Err(localized(
+                    "sync.db_import_and_rollback_failed",
+                    format!("应用快照失败: {err}; 同时回滚 Skills 失败: {rollback_err}"),
+                    format!(
+                        "Applying snapshot failed: {err}; skills rollback also failed: {rollback_err}"
+                    ),
+                ));
+            }
+            op.cleanup(db);
+            Err(err)
         }
-        return Err(db_err);
     }
+}
 
+fn apply_snapshot_inner(
+    db: &crate::database::Database,
+    sql_str: &str,
+    skills_zip: &[u8],
+    op: &sync_recovery::SyncRestoreOperation,
+) -> Result<(), AppError> {
+    // 意图先写：journal 进入 SkillsReplaced 后，任何中断都落在可恢复一侧。
+    sync_recovery::fault_exit("before_skills_intent");
+    op.mark_skills_intent()?;
+    sync_recovery::fault_exit("after_skills_intent");
+
+    // Replace skills first, then import database.
+    restore_skills_zip(skills_zip)?;
+    sync_recovery::fault_exit("after_skills_replace");
+
+    sync_recovery::fault_exit("before_db_import");
+    // commit marker 随主库整库替换原子生效（§7.2-6）；导入失败时主库未动。
+    db.import_sql_string_for_sync_with_commit_marker(sql_str, &op.op_id)?;
+    sync_recovery::fault_exit("after_db_commit");
+
+    op.mark_db_committed();
     Ok(())
 }
 

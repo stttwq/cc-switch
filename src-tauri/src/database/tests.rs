@@ -653,6 +653,7 @@ fn create_tables_does_not_rebuild_v19_dropped_tables() {
         .map(|r| r.expect("row"))
         .collect();
     let expected = [
+        "local_sync_commit",
         "mcp_approvals",
         "mcp_servers",
         "profiles",

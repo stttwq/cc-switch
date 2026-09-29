@@ -24,6 +24,10 @@ pub(crate) fn run_post_import_sync(
     app_state: &AppState,
     pi_before: Option<&indexmap::IndexMap<String, crate::provider::Provider>>,
 ) -> Result<(), AppError> {
+    // REL-A（§7.2）：投影开始/结束都推进同步恢复 journal——正常下载与重启
+    // 恢复共用同一套幂等收尾（无 journal 时均为 no-op）。
+    crate::services::sync_recovery::note_projections_started(app_state.db.as_ref());
+
     let mut failures = Vec::new();
 
     // S1-4（§9-9）：导入会改写 Pi 的 DB 行，让 models.json 指纹失效，
@@ -73,6 +77,7 @@ pub(crate) fn run_post_import_sync(
     }
 
     if failures.is_empty() {
+        crate::services::sync_recovery::note_projections_finished(app_state.db.as_ref());
         Ok(())
     } else {
         Err(AppError::Message(format!(

@@ -69,6 +69,9 @@ pub async fn upload(
     force: bool,
 ) -> Result<Value, AppError> {
     settings.validate()?;
+    // REL-A（§7.2-10）：旧同步操作未归位时暂停冲突操作（上传会在不一致的
+    // 本机状态上继续）。prepared/未提交态在此安全归位，其余拒绝。
+    super::sync_recovery::resolve_before_new_operation(db)?;
     let auth = auth_for(secrets, settings, None).await?;
     if settings.e2e_enabled {
         return upload_e2e(db, secrets, settings, &auth, kek_cache, force).await;

@@ -126,10 +126,11 @@ pub(crate) enum LocalBackend {
 /// 1. B 级 settings 键（含前缀）——两种模式都删；
 /// 2. `mcp_approvals`（SEC-A，B 级设备本地）——审批只对本机有效，外部文件里
 ///    的批准记录绝不能随导入复活（§4.3-8）；
-/// 3. `provider_endpoints`——1P 模式删（D3-B 之后 1P 是端点真源，带出去既
+/// 3. `local_sync_commit`（REL-A，B 级设备本地）——本机恢复状态不随同步传播；
+/// 4. `provider_endpoints`——1P 模式删（D3-B 之后 1P 是端点真源，带出去既
 ///    多余又造成 P0-3）；凭据管理器模式保留（该模式没有自带同步的真源，随
 ///    同步走是 D3-A 给这类用户的便利，不回归，§2.1-5 / D-S1）；
-/// 4. `secret_refs` 中 `vault_id = ''` 的行——凭据管理器的占位引用对其他设备
+/// 5. `secret_refs` 中 `vault_id = ''` 的行——凭据管理器的占位引用对其他设备
 ///    没有意义；1P 引用照常带出（D-S3）。
 pub(crate) fn prune_for_export(
     snapshot: &Connection,
@@ -142,6 +143,11 @@ pub(crate) fn prune_for_export(
     snapshot
         .execute("DELETE FROM mcp_approvals", [])
         .map_err(|e| AppError::Database(format!("裁剪 MCP 审批记录失败: {e}")))?;
+
+    // REL-A：同步恢复 commit marker 是本机生成的恢复状态（B 级），不随同步传播。
+    snapshot
+        .execute("DELETE FROM local_sync_commit", [])
+        .map_err(|e| AppError::Database(format!("裁剪同步 commit marker 失败: {e}")))?;
 
     let endpoints_included = match local_backend {
         LocalBackend::OnePassword => {
@@ -229,6 +235,7 @@ pub(crate) fn merge_for_import(
 
     merge_device_local_settings(main, &tx)?;
     merge_mcp_approvals(main, &tx)?;
+    merge_local_sync_commit(main, &tx)?;
     let pruned_endpoints = merge_endpoints(main, &tx, policy)?;
     let (pruned_refs, adopted_refs, unlinked) = merge_secret_refs(main, &tx, policy)?;
 
@@ -314,6 +321,29 @@ fn merge_mcp_approvals(main: &Connection, tx: &Connection) -> Result<(), AppErro
             rusqlite::params![row.0, row.1, row.2, row.3],
         )
         .map_err(|e| AppError::Database(format!("回拷 MCP 审批记录失败: {e}")))?;
+    }
+    Ok(())
+}
+
+/// REL-A（B 级）：同步恢复 commit marker。本机生成的恢复状态不随导入变化——
+/// 丢弃暂存库的值、拷回本机当前值（未解决的恢复在无关导入后仍可继续）。
+fn merge_local_sync_commit(main: &Connection, tx: &Connection) -> Result<(), AppError> {
+    tx.execute("DELETE FROM local_sync_commit", [])
+        .map_err(|e| AppError::Database(format!("清空暂存库同步 commit marker 失败: {e}")))?;
+    let mut stmt = main
+        .prepare("SELECT op_id, committed_at FROM local_sync_commit")
+        .map_err(|e| AppError::Database(format!("读取本机同步 commit marker 失败: {e}")))?;
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })
+        .map_err(|e| AppError::Database(format!("读取本机同步 commit marker 失败: {e}")))?;
+    for row in rows.flatten() {
+        tx.execute(
+            "INSERT OR REPLACE INTO local_sync_commit (op_id, committed_at) VALUES (?1, ?2)",
+            rusqlite::params![row.0, row.1],
+        )
+        .map_err(|e| AppError::Database(format!("回拷同步 commit marker 失败: {e}")))?;
     }
     Ok(())
 }

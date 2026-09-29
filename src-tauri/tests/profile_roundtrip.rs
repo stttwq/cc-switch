@@ -41,6 +41,14 @@ fn mcp_server(id: &str, claude_enabled: bool) -> McpServer {
     .expect("construct mcp server")
 }
 
+/// SEC-A（S2 门禁）：直写 DB 不会像表单 upsert 一样自动批准内容；
+/// profile 场景要验证「有效条目照常生效」，须先补记本机批准。
+fn save_approved_mcp(state: &cc_switch_lib::AppState, id: &str, claude_enabled: bool) {
+    let server = mcp_server(id, claude_enabled);
+    state.db.save_mcp_server(&server).expect("save mcp");
+    McpService::record_approval(state, &server, &AppType::Claude).expect("record approval");
+}
+
 fn prompt(id: &str, enabled: bool) -> Prompt {
     Prompt {
         id: id.to_string(),
@@ -119,14 +127,8 @@ fn profile_snapshot_apply_roundtrip_restores_configuration() {
     )
     .expect("seed live settings.json");
 
-    state
-        .db
-        .save_mcp_server(&mcp_server("m1", true))
-        .expect("save mcp m1");
-    state
-        .db
-        .save_mcp_server(&mcp_server("m2", false))
-        .expect("save mcp m2");
+    save_approved_mcp(&state, "m1", true);
+    save_approved_mcp(&state, "m2", false);
 
     write_ssot_skill("test-skill");
     state
@@ -249,10 +251,7 @@ fn shared_profile_sides_are_isolated_and_mergeable() {
             .expect("serialize p1 settings"),
     )
     .expect("seed live settings.json");
-    state
-        .db
-        .save_mcp_server(&mcp_server("m1", true))
-        .expect("save mcp m1");
+    save_approved_mcp(&state, "m1", true);
 
     // 在 Codex 页新建项目：快照不应捕获 Claude 侧的任何状态
     let project = ProfileService::create(&state, "Shared Project", ProfileScope::Codex)
@@ -345,10 +344,7 @@ fn profile_apply_reports_dangling_references_and_continues() {
 
     let state = create_test_state().expect("create test state");
 
-    state
-        .db
-        .save_mcp_server(&mcp_server("m1", false))
-        .expect("save mcp m1");
+    save_approved_mcp(&state, "m1", false);
 
     // 手工构造引用了不存在资源的 payload
     let payload = json!({
@@ -463,14 +459,8 @@ fn switching_profile_autosaves_previous_profile_state() {
     )
     .expect("seed live settings.json");
 
-    state
-        .db
-        .save_mcp_server(&mcp_server("m1", true))
-        .expect("save mcp m1");
-    state
-        .db
-        .save_mcp_server(&mcp_server("m2", false))
-        .expect("save mcp m2");
+    save_approved_mcp(&state, "m1", true);
+    save_approved_mcp(&state, "m2", false);
 
     state
         .db

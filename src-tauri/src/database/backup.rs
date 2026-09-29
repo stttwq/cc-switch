@@ -301,7 +301,7 @@ impl Database {
         &self,
         sql_raw: &str,
     ) -> Result<ImportOutcome, AppError> {
-        self.import_sql_string_inner(sql_raw, None, None)
+        self.import_sql_string_inner(sql_raw, None, None, None)
     }
 
     /// Import SQL generated for sync, then restore local-only tables from the
@@ -310,18 +310,16 @@ impl Database {
     /// T-5（2.1 方案 2.4.2）：同步快照应用前必须先有一份可回退的 DB 文件备份。
     /// 该备份就在这里生成——替换主库之前、持主连接锁下的同一时间点，命名
     /// `pre-sync-restore_<ts>.db` 并纳入 `backup_retain_count` 轮换；apply 侧的
-    /// skills 回滚另有临时目录副本兜底，故不再另打一份以免重复占用保留位。
-    pub(crate) fn import_sql_string_for_sync(&self, sql_raw: &str) -> Result<String, AppError> {
-        self.import_sql_string_for_sync_with_report(sql_raw)
-            .map(|outcome| outcome.backup_id)
-    }
-
-    /// S4-3：同步导入并带回合并报告（WebDAV / S3 下载结果要显示未关联与采纳数）。
-    pub(crate) fn import_sql_string_for_sync_with_report(
+    /// skills 回滚另有持久目录副本兜底，故不再另打一份以免重复占用保留位。
+    ///
+    /// REL-A：同步导入统一经 [`Self::import_sql_string_for_sync_with_commit_marker`]
+    /// 携带本机 commit marker（§7.2-6）。
+    pub(crate) fn import_sql_string_for_sync_with_commit_marker(
         &self,
         sql_raw: &str,
+        op_id: &str,
     ) -> Result<ImportOutcome, AppError> {
-        self.import_sql_string_inner(sql_raw, Some("pre-sync-restore"), None)
+        self.import_sql_string_inner(sql_raw, Some("pre-sync-restore"), None, Some(op_id))
     }
 
     /// S4-1：构造导入策略——**本机**后端与保险箱决定采纳/保留规则（§2.2-4）。
@@ -347,11 +345,19 @@ impl Database {
         sql_raw: &str,
         backup_prefix: Option<&str>,
         hook: Option<Box<dyn FnOnce() -> Result<(), AppError> + '_>>,
+        commit_marker: Option<&str>,
     ) -> Result<ImportOutcome, AppError> {
         match hook {
             // `Box<dyn FnOnce(..)>` 本身就实现了 FnOnce，直接传即可。
-            Some(hook) => self.import_sql_string_inner_with_hook(sql_raw, backup_prefix, hook),
-            None => self.import_sql_string_inner_with_hook(sql_raw, backup_prefix, || Ok(())),
+            Some(hook) => {
+                self.import_sql_string_inner_with_hook(sql_raw, backup_prefix, hook, commit_marker)
+            }
+            None => self.import_sql_string_inner_with_hook(
+                sql_raw,
+                backup_prefix,
+                || Ok(()),
+                commit_marker,
+            ),
         }
     }
 
@@ -360,6 +366,7 @@ impl Database {
         sql_raw: &str,
         backup_prefix: Option<&str>,
         on_staging_ready: F,
+        commit_marker: Option<&str>,
     ) -> Result<ImportOutcome, AppError>
     where
         F: FnOnce() -> Result<(), AppError>,
@@ -430,6 +437,16 @@ impl Database {
             // S4-1：在**暂存库**上按数据分级合并本机数据（B 级键、C 级端点、
             // D 级引用），与整库替换在同一把锁、同一时间点内完成（§9-2）。
             let import_report = merge_for_import(&main_conn, &temp_conn, &policy)?;
+            // REL-A：本机 commit marker 写在暂存库上、整库替换之前——随替换
+            // 原子生效。写入失败即中止（主库未动，apply_snapshot 会回滚 Skills）。
+            if let Some(op_id) = commit_marker {
+                temp_conn
+                    .execute(
+                        "INSERT OR REPLACE INTO local_sync_commit (op_id, committed_at) VALUES (?1, ?2)",
+                        rusqlite::params![op_id, chrono::Utc::now().timestamp()],
+                    )
+                    .map_err(|e| AppError::Database(format!("写入同步 commit marker 失败: {e}")))?;
+            }
             let backup = Backup::new(&temp_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "替换主数据库")?;
@@ -2803,7 +2820,7 @@ mod tests {
             insert_provider(&conn, "p1")?;
             insert_ref(&conn, "p1", "item-local", "vault-x")?;
         }
-        local_db.import_sql_string_for_sync(&remote_sql)?;
+        local_db.import_sql_string_for_sync_with_commit_marker(&remote_sql, "test-op")?;
 
         {
             let conn = crate::database::lock_conn!(local_db.conn);
@@ -2849,7 +2866,9 @@ mod tests {
             )?;
         }
 
-        let safety_id = local_db.import_sql_string_for_sync(&remote_sql)?;
+        let safety_id = local_db
+            .import_sql_string_for_sync_with_commit_marker(&remote_sql, "test-op")?
+            .backup_id;
         assert!(
             safety_id.starts_with("pre-sync-restore_"),
             "sync import safety backup must use the pre-sync-restore prefix, got: {safety_id}"
@@ -3497,7 +3516,7 @@ SELECT 1;"
         // 远端快照里已经没有 Y。
         let remote_db = Database::memory()?;
         let sql = remote_db.export_sql_string_for_sync()?;
-        local_db.import_sql_string_for_sync(&sql)?;
+        local_db.import_sql_string_for_sync_with_commit_marker(&sql, "test-op")?;
 
         assert!(
             local_db.get_secret_ref_identity("claude", "y")?.is_none(),
@@ -3523,7 +3542,7 @@ SELECT 1;"
         remote_db.set_setting("managed_env_vars", r#"{"remote":true}"#)?;
         let sql = remote_db.export_sql_string_for_sync()?;
 
-        local_db.import_sql_string_for_sync(&sql)?;
+        local_db.import_sql_string_for_sync_with_commit_marker(&sql, "test-op")?;
         let value = local_db.get_setting("managed_env_vars")?;
         assert_eq!(
             value.as_deref(),

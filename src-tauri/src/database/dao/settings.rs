@@ -196,4 +196,42 @@ impl Database {
             .map_err(|e| AppError::Database(format!("序列化日志配置失败: {e}")))?;
         self.set_setting("log_config", &json)
     }
+
+    // --- 同步恢复 commit marker（REL-A）---
+
+    // 「写入」在 `backup.rs` 的暂存库连接上直写（随整库替换原子生效），
+    // 这里只提供针对主库的查询与清理。
+
+    /// 查询某次同步操作的 commit marker 是否存在。
+    pub(crate) fn has_sync_commit_marker(&self, op_id: &str) -> Result<bool, AppError> {
+        let conn = lock_conn!(self.conn);
+        let count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM local_sync_commit WHERE op_id = ?1",
+                params![op_id],
+                |row| row.get(0),
+            )
+            .map_err(|e| AppError::Database(format!("读取同步 commit marker 失败: {e}")))?;
+        Ok(count > 0)
+    }
+
+    /// 清除某次操作的 marker（恢复完成后）。
+    pub(crate) fn clear_sync_commit_marker(&self, op_id: &str) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute(
+            "DELETE FROM local_sync_commit WHERE op_id = ?1",
+            params![op_id],
+        )
+        .map_err(|e| AppError::Database(format!("清除同步 commit marker 失败: {e}")))?;
+        Ok(())
+    }
+
+    /// 清除全部 marker。marker 只在有 journal 时有意义，无 journal 时属残留，
+    /// 启动恢复顺手清理（幂等）。
+    pub(crate) fn clear_all_sync_commit_markers(&self) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute("DELETE FROM local_sync_commit", [])
+            .map_err(|e| AppError::Database(format!("清除同步 commit marker 失败: {e}")))?;
+        Ok(())
+    }
 }
