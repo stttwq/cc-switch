@@ -418,6 +418,10 @@ impl Database {
         // 补齐缺失表/索引并执行迁移
         Self::create_tables_on_conn(&temp_conn)?;
         Self::apply_schema_migrations_on_conn(&temp_conn)?;
+        // SEC-D：结构审计 + 归一化——数据搬入由本版本程序自建 schema 的干净
+        // 库，外部建表 SQL/约束/索引一律不进主库（§9.2-4）。之后的合并、
+        // commit marker 与整库替换都发生在干净库上。
+        let clean_conn = Self::normalize_imported_database(&temp_conn, temp_file.path())?;
         on_staging_ready()?;
 
         let backup_file_guard = lock_backup_file_operations()?;
@@ -434,20 +438,20 @@ impl Database {
                 &[],
                 backup_prefix,
             )?;
-            // S4-1：在**暂存库**上按数据分级合并本机数据（B 级键、C 级端点、
-            // D 级引用），与整库替换在同一把锁、同一时间点内完成（§9-2）。
-            let import_report = merge_for_import(&main_conn, &temp_conn, &policy)?;
-            // REL-A：本机 commit marker 写在暂存库上、整库替换之前——随替换
+            // S4-1：在**归一化后的干净库**上按数据分级合并本机数据（B 级键、
+            // C 级端点、D 级引用），与整库替换在同一把锁、同一时间点内完成（§9-2）。
+            let import_report = merge_for_import(&main_conn, &clean_conn, &policy)?;
+            // REL-A：本机 commit marker 写在干净库上、整库替换之前——随替换
             // 原子生效。写入失败即中止（主库未动，apply_snapshot 会回滚 Skills）。
             if let Some(op_id) = commit_marker {
-                temp_conn
+                clean_conn
                     .execute(
                         "INSERT OR REPLACE INTO local_sync_commit (op_id, committed_at) VALUES (?1, ?2)",
                         rusqlite::params![op_id, chrono::Utc::now().timestamp()],
                     )
                     .map_err(|e| AppError::Database(format!("写入同步 commit marker 失败: {e}")))?;
             }
-            let backup = Backup::new(&temp_conn, &mut main_conn)
+            let backup = Backup::new(&clean_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "替换主数据库")?;
             (backup_path, import_report)
@@ -854,6 +858,216 @@ impl Database {
         ))
     }
 
+    // ── SEC-D（§9.2-3/4）：从「禁止危险对象」推进到「只导入程序认可的数据」 ──
+
+    /// 用**本版本程序自己的建表与迁移链**构建一份参照 schema（内存库）。
+    fn build_reference_schema() -> Result<Connection, AppError> {
+        let conn = Connection::open_in_memory().map_err(|e| AppError::Database(e.to_string()))?;
+        Self::create_tables_on_conn(&conn)?;
+        Self::apply_schema_migrations_on_conn(&conn)?;
+        Ok(conn)
+    }
+
+    /// 枚举某类 schema 对象名（排除 `sqlite_%` 内部对象）。
+    fn schema_object_names(conn: &Connection, obj_type: &str) -> Result<Vec<String>, AppError> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = ?1 AND name NOT LIKE 'sqlite_%'")
+            .map_err(|e| AppError::Database(format!("枚举 schema 对象失败: {e}")))?;
+        let rows = stmt
+            .query_map([obj_type], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::Database(format!("枚举 schema 对象失败: {e}")))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(format!("枚举 schema 对象失败: {e}")))
+    }
+
+    /// 表的完整列清单（`table_xinfo`，含隐藏/生成列）——外部 schema 夹带的
+    /// 生成列、隐藏列也要能被审计发现。列名排序后比较，忽略顺序差异
+    /// （迁移的 `ALTER TABLE ADD COLUMN` 与全新建表的列序可能不同）。
+    fn table_xinfo_columns(conn: &Connection, table: &str) -> Result<Vec<String>, AppError> {
+        let quoted_table = Self::quote_identifier(table);
+        let mut stmt = conn
+            .prepare(&format!("PRAGMA table_xinfo({quoted_table})"))
+            .map_err(|e| AppError::Database(format!("读取表结构失败: {e}")))?;
+        let rows = stmt
+            .query_map([], |row| row.get::<_, String>(1))
+            .map_err(|e| AppError::Database(format!("读取表结构失败: {e}")))?;
+        let mut columns = rows
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(format!("读取表结构失败: {e}")))?;
+        columns.sort();
+        Ok(columns)
+    }
+
+    /// 结构审计：暂存库中的每个对象都必须能被本版本程序识别。
+    ///
+    /// - 对象类型只允许 table / index（trigger/view/虚拟表已被
+    ///   [`Self::reject_unsupported_schema_objects`] 拒绝，这里是兜底）；
+    /// - 表必须是程序 schema 已知的表，且列集合（xinfo）与参照完全一致——
+    ///   缺列、多列都是无法识别的结构，拒绝而非静默“修好”；
+    /// - 具名索引必须是程序会创建的索引（表达式索引不可能通过）。
+    ///
+    /// 迁移兼容：旧版导出先在暂存库上走完迁移链再审计，因此旧列序/旧索引
+    /// 已被迁移到当前结构；user_version 与实际结构不符（伪版本）会被列集合
+    /// 比对或迁移失败拦下。
+    fn audit_imported_structure(source: &Connection) -> Result<(), AppError> {
+        let reference = Self::build_reference_schema()?;
+
+        let mut type_stmt = source
+            .prepare("SELECT DISTINCT type FROM sqlite_master")
+            .map_err(|e| AppError::Database(format!("审查导入结构失败: {e}")))?;
+        let types = type_stmt
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|e| AppError::Database(format!("审查导入结构失败: {e}")))?
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|e| AppError::Database(format!("审查导入结构失败: {e}")))?;
+        if let Some(bad) = types
+            .iter()
+            .find(|t| t.as_str() != "table" && t.as_str() != "index")
+        {
+            return Err(Self::unrecognized_schema_error(&format!(
+                "不可识别的对象类型 {bad}"
+            )));
+        }
+        drop(type_stmt);
+
+        let reference_tables: Vec<String> = Self::schema_object_names(&reference, "table")?;
+        let source_tables = Self::schema_object_names(source, "table")?;
+        let mut unknown: Vec<String> = source_tables
+            .iter()
+            .filter(|t| !reference_tables.contains(t))
+            .cloned()
+            .collect();
+        unknown.sort();
+        if !unknown.is_empty() {
+            return Err(Self::unrecognized_schema_error(&format!(
+                "未知表 {}",
+                unknown.join("、")
+            )));
+        }
+
+        for table in &source_tables {
+            let expected = Self::table_xinfo_columns(&reference, table)?;
+            let actual = Self::table_xinfo_columns(source, table)?;
+            if expected != actual {
+                let missing: Vec<&String> =
+                    expected.iter().filter(|c| !actual.contains(c)).collect();
+                let extra: Vec<&String> = actual.iter().filter(|c| !expected.contains(c)).collect();
+                let detail = match (missing.is_empty(), extra.is_empty()) {
+                    (false, _) => format!("表 {table} 缺少列 {}", Self::join_names(&missing)),
+                    (true, false) => format!("表 {table} 含未知列 {}", Self::join_names(&extra)),
+                    (true, true) => unreachable!("列集合不相等却无差异"),
+                };
+                return Err(Self::unrecognized_schema_error(&detail));
+            }
+        }
+
+        let reference_indexes: Vec<String> = Self::schema_object_names(&reference, "index")?;
+        let source_indexes = Self::schema_object_names(source, "index")?;
+        let mut unknown_indexes: Vec<String> = source_indexes
+            .iter()
+            .filter(|i| !reference_indexes.contains(i))
+            .cloned()
+            .collect();
+        unknown_indexes.sort();
+        if !unknown_indexes.is_empty() {
+            return Err(Self::unrecognized_schema_error(&format!(
+                "未知索引 {}",
+                unknown_indexes.join("、")
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn join_names(names: &[&String]) -> String {
+        names
+            .iter()
+            .map(|s| s.as_str())
+            .collect::<Vec<_>>()
+            .join("、")
+    }
+
+    fn unrecognized_schema_error(detail: &str) -> AppError {
+        AppError::localized(
+            "backup.schema.unrecognized",
+            format!(
+                "导入内容包含无法识别的数据库结构（{detail}）。已拒绝导入，当前数据库保持不变；请使用由 CC Switch 导出的备份。"
+            ),
+            format!(
+                "The imported file contains an unrecognized database structure ({detail}). Import rejected; the current database is unchanged. Use a backup exported by CC Switch."
+            ),
+        )
+    }
+
+    /// SEC-D（§9.2-4）：把暂存库**归一化**为一个由本版本程序自建 schema 的干净
+    /// 数据库：审查结构 → 程序建表 → 白名单列 + 参数化 `INSERT…SELECT` 复制数据。
+    ///
+    /// 外部建表 SQL、外部约束与索引（含表达式索引）一律不进干净库——主库的
+    /// sqlite_schema 从此由程序模板决定。任何复制失败（如数据违反程序约束）
+    /// 都整体报错，主库保持不变。
+    fn normalize_imported_database(
+        source: &Connection,
+        source_path: &Path,
+    ) -> Result<Connection, AppError> {
+        Self::audit_imported_structure(source)?;
+
+        let clean = Connection::open_in_memory().map_err(|e| AppError::Database(e.to_string()))?;
+        // 与既有 SQL 导入路径同款：Backup 会把源库头部复制进目标，
+        // 空库阶段先固定 auto_vacuum，防止主库从 INCREMENTAL 降级。
+        clean
+            .execute("PRAGMA auto_vacuum = INCREMENTAL;", [])
+            .map_err(|e| AppError::Database(format!("设置归一化库 auto_vacuum 失败: {e}")))?;
+        Self::create_tables_on_conn(&clean)?;
+        Self::apply_schema_migrations_on_conn(&clean)?;
+
+        let attach_path = source_path.to_string_lossy().replace('\'', "''");
+        clean
+            .execute_batch(&format!(
+                "ATTACH DATABASE '{attach_path}' AS cc_import_src;"
+            ))
+            .map_err(|e| AppError::Database(format!("挂接导入暂存库失败: {e}")))?;
+
+        let tables = Self::schema_object_names(&clean, "table")?;
+        clean
+            .execute_batch("BEGIN;")
+            .map_err(|e| AppError::Database(format!("开启归一化复制事务失败: {e}")))?;
+        for table in &tables {
+            let quoted = Self::quote_identifier(table);
+            let columns: Vec<String> = Self::get_table_columns(&clean, table)?
+                .iter()
+                .map(|c| Self::quote_identifier(c))
+                .collect();
+            let column_list = columns.join(", ");
+            // OR REPLACE 仅会覆盖干净库上迁移链预置的默认标记行（如
+            // live_reapply_pending）——其值与暂存库同链产出一致，或应让位于
+            // 导入数据；整体等价于既有「暂存库整体替换」的导入结果。
+            let statement = format!(
+                "INSERT OR REPLACE INTO main.{quoted} ({column_list}) \
+                 SELECT {column_list} FROM cc_import_src.{quoted};"
+            );
+            if let Err(e) = clean.execute_batch(&statement) {
+                let _ = clean.execute_batch("ROLLBACK;");
+                let _ = clean.execute_batch("DETACH DATABASE cc_import_src;");
+                return Err(AppError::localized(
+                    "backup.schema.normalize_failed",
+                    format!("导入数据无法装入当前程序 schema（表 {table}），已拒绝导入：{e}"),
+                    format!(
+                        "Imported data does not fit the current application schema (table {table}); import rejected: {e}"
+                    ),
+                ));
+            }
+        }
+        clean
+            .execute_batch("COMMIT;")
+            .map_err(|e| AppError::Database(format!("提交归一化复制失败: {e}")))?;
+        clean
+            .execute_batch("DETACH DATABASE cc_import_src;")
+            .map_err(|e| AppError::Database(format!("卸载导入暂存库失败: {e}")))?;
+
+        Self::validate_sqlite_integrity(&clean)?;
+        Ok(clean)
+    }
+
     /// 导出数据库为 SQL 文本
     fn dump_sql(conn: &Connection, skip_tables: &[&str]) -> Result<String, AppError> {
         let mut output = String::new();
@@ -1215,7 +1429,10 @@ impl Database {
         Self::ensure_incremental_auto_vacuum_on_conn(&staging_conn)?;
         Self::create_tables_on_conn(&staging_conn)?;
         Self::apply_schema_migrations_on_conn(&staging_conn)?;
-        Self::validate_sqlite_integrity(&staging_conn)?;
+        // SEC-D：二进制备份同样进入「不可信读取区」——结构审计 + 归一化，
+        // 恢复进主库的是本版本程序自建 schema 的干净库（§9.2-2/4）。
+        let clean_conn = Self::normalize_imported_database(&staging_conn, temp_file.path())?;
+        Self::validate_sqlite_integrity(&clean_conn)?;
 
         // S4-1：策略在持锁前读好（§9-3），持锁块内只做 0 次 op 的合并。
         let policy = self.import_policy();
@@ -1233,8 +1450,8 @@ impl Database {
             // S4-1：`.db` 恢复是本机自己的备份，但**仍走同一套合并**——备份里
             // 的 `live_reapply_pending` 等本机标记不应复活，本机当前的 B 级键与
             // 引用/端点优先（§5.4 S4-1）。
-            let import_report = merge_for_import(&main_conn, &staging_conn, &policy)?;
-            let backup = Backup::new(&staging_conn, &mut main_conn)
+            let import_report = merge_for_import(&main_conn, &clean_conn, &policy)?;
+            let backup = Backup::new(&clean_conn, &mut main_conn)
                 .map_err(|e| AppError::Database(e.to_string()))?;
             Self::complete_backup(&backup, "恢复主数据库")?;
             (safety_backup, import_report)
@@ -1422,7 +1639,7 @@ mod tests {
     use crate::settings::{get_settings, update_settings, AppSettings};
     use rusqlite::Connection;
     use serial_test::serial;
-    use std::path::Path;
+    use std::path::{Path, PathBuf};
 
     struct TestHomeGuard {
         previous_test_home: Option<std::ffi::OsString>,
@@ -3549,6 +3766,194 @@ SELECT 1;"
             Some(r#"{"local":true}"#),
             "本机投递登记被远端覆盖会漏删（或误认）注册表变量（P0-5 / S4-1）"
         );
+        Ok(())
+    }
+
+    // ── SEC-D（§9.2/§9.3）：结构审计 + 干净 staging 归一化 ──
+
+    /// SEC-D 测试夹具：文件型暂存库（归一化需要真实路径供 ATTACH）。
+    struct SecDStaging {
+        _dir: tempfile::TempDir,
+        conn: Connection,
+        path: PathBuf,
+    }
+
+    impl SecDStaging {
+        fn new(tag: &str) -> Self {
+            let dir = tempfile::tempdir().expect("temp staging dir");
+            let path = dir.path().join(format!("staging-{tag}.db"));
+            let conn = Connection::open(&path).expect("open staging db");
+            Self {
+                _dir: dir,
+                conn,
+                path,
+            }
+        }
+
+        fn with_program_schema(&self) {
+            Database::create_tables_on_conn(&self.conn).expect("create tables");
+            Database::apply_schema_migrations_on_conn(&self.conn).expect("migrations");
+        }
+    }
+
+    fn sec_d_schema_shape(conn: &Connection) -> Result<Vec<(String, Vec<String>)>, AppError> {
+        let mut tables = Database::schema_object_names(conn, "table")?;
+        tables.sort();
+        tables
+            .iter()
+            .map(|t| Ok((t.clone(), Database::table_xinfo_columns(conn, t)?)))
+            .collect()
+    }
+
+    /// §9.3：程序自建 schema 的暂存库能通过审计与归一化，且干净库的
+    /// sqlite_schema 与程序模板完全一致，数据完整搬运。
+    #[test]
+    fn sec_d_normalization_accepts_program_schema_and_matches_template() -> Result<(), AppError> {
+        let staging = SecDStaging::new("normal");
+        staging.with_program_schema();
+        staging.conn.execute(
+            "INSERT INTO providers (id, app_type, name, settings_config, meta)
+             VALUES ('p1', 'claude', 'Provider One', '{}', '{}')",
+            [],
+        )?;
+
+        let clean = Database::normalize_imported_database(&staging.conn, &staging.path)?;
+
+        let reference = Database::build_reference_schema()?;
+        assert_eq!(
+            sec_d_schema_shape(&clean)?,
+            sec_d_schema_shape(&reference)?,
+            "干净库结构必须与程序模板一致"
+        );
+        let name: String =
+            clean.query_row("SELECT name FROM providers WHERE id = 'p1'", [], |row| {
+                row.get(0)
+            })?;
+        assert_eq!(name, "Provider One", "数据必须完整搬运");
+        Ok(())
+    }
+
+    /// §9.3：未知表被拒绝。
+    #[test]
+    fn sec_d_rejects_unknown_table() -> Result<(), AppError> {
+        let staging = SecDStaging::new("evil-table");
+        staging.with_program_schema();
+        staging
+            .conn
+            .execute("CREATE TABLE evil_export (x TEXT)", [])?;
+        staging
+            .conn
+            .execute("INSERT INTO evil_export VALUES ('v')", [])?;
+
+        let err = Database::normalize_imported_database(&staging.conn, &staging.path)
+            .expect_err("未知表必须被拒绝");
+        assert!(err.to_string().contains("未知表"), "实际错误: {err}");
+        Ok(())
+    }
+
+    /// §9.3：已知表上的未知列（缺列/多列冲突）被拒绝，不静默丢弃或补齐。
+    #[test]
+    fn sec_d_rejects_unknown_column() -> Result<(), AppError> {
+        let staging = SecDStaging::new("evil-column");
+        staging.with_program_schema();
+        staging
+            .conn
+            .execute("ALTER TABLE providers ADD COLUMN evil_col TEXT", [])?;
+
+        let err = Database::normalize_imported_database(&staging.conn, &staging.path)
+            .expect_err("未知列必须被拒绝");
+        assert!(err.to_string().contains("未知列"), "实际错误: {err}");
+        Ok(())
+    }
+
+    /// §9.3：程序不会创建的表达式索引被拒绝。
+    #[test]
+    fn sec_d_rejects_unknown_expression_index() -> Result<(), AppError> {
+        let staging = SecDStaging::new("evil-index");
+        staging.with_program_schema();
+        staging
+            .conn
+            .execute("CREATE INDEX evil_expr_idx ON providers (length(name))", [])?;
+
+        let err = Database::normalize_imported_database(&staging.conn, &staging.path)
+            .expect_err("未知索引必须被拒绝");
+        assert!(err.to_string().contains("未知索引"), "实际错误: {err}");
+        Ok(())
+    }
+
+    /// §9.2-7：user_version 是数据不是授权——伪版本（声称最新版但结构停留在
+    /// 旧版）因列集合不一致被拒绝，不会被迁移链“修好”。
+    #[test]
+    fn sec_d_rejects_pseudo_version_with_legacy_structure() -> Result<(), AppError> {
+        let staging = SecDStaging::new("pseudo-version");
+        staging
+            .conn
+            .execute_batch(crate::database::tests::V3_8_SCHEMA_V1_SQL)?;
+        Database::set_user_version(&staging.conn, crate::database::SCHEMA_VERSION)?;
+
+        let err = Database::normalize_imported_database(&staging.conn, &staging.path)
+            .expect_err("伪版本必须被拒绝");
+        assert!(
+            err.to_string().contains("缺少列"),
+            "伪版本应因缺列被拒绝，实际错误: {err}"
+        );
+        Ok(())
+    }
+
+    /// §9.3：端到端——真实导出导入后，主库 sqlite_schema 与程序模板一致；
+    /// 夹带未知表的导入被整体拒绝且主库保持不变。
+    #[test]
+    #[serial]
+    fn sec_d_imported_main_schema_matches_program_template() -> Result<(), AppError> {
+        let _test_home = TestHomeGuard::new();
+        let source = Database::memory()?;
+        {
+            let conn = crate::database::lock_conn!(source.conn);
+            conn.execute(
+                "INSERT INTO providers (id, app_type, name, settings_config, meta)
+                 VALUES ('p1', 'claude', 'Provider One', '{}', '{}')",
+                [],
+            )?;
+        }
+        let exported = source.export_sql_string()?;
+
+        let target = Database::memory()?;
+        target.import_sql_string(&exported)?;
+
+        let reference = Database::build_reference_schema()?;
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            assert_eq!(
+                sec_d_schema_shape(&conn)?,
+                sec_d_schema_shape(&reference)?,
+                "主库托管结构必须与应用自建模板一致（§9.3）"
+            );
+        }
+
+        // 夹带未知表的导出变体：整体拒绝，主库保持原样。
+        let smuggled = exported.replace(
+            "COMMIT;",
+            "CREATE TABLE evil_export (x TEXT);\nINSERT INTO evil_export VALUES ('v');\nCOMMIT;",
+        );
+        let err = target
+            .import_sql_string(&smuggled)
+            .expect_err("夹带未知表必须被拒绝");
+        assert!(err.to_string().contains("未知表"), "实际错误: {err}");
+        {
+            let conn = crate::database::lock_conn!(target.conn);
+            let count: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM providers WHERE id = 'p1'",
+                [],
+                |row| row.get(0),
+            )?;
+            assert_eq!(count, 1, "被拒绝的导入不得影响主库数据");
+            let evil_exists: bool = conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'evil_export')",
+                [],
+                |row| row.get(0),
+            )?;
+            assert!(!evil_exists, "未知表不得进入主库");
+        }
         Ok(())
     }
 }

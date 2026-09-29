@@ -249,6 +249,13 @@ pub enum VaultError {
     /// 已切换到 1Password 后端，但运行中的仍是旧后端实例（迁移后未重启）。
     /// 任何读写都必须失败，防止钥匙经凭据管理器回流（F1-6）。
     RestartRequired,
+    /// REL-B：等待其他 `op` 调用释放全局串行锁超时（排队预算独立于执行超时，
+    /// 不把「排队等解锁」误报成执行卡死）。
+    QueueTimeout,
+    /// REL-B：命令入口排队已满（并发的 `op` 任务数超过上限）。可重试。
+    QueueBusy,
+    /// REL-B：`op` 的 stdout/stderr 超过大小上限，子进程已被 kill 并回收。
+    OutputLimit,
     /// 其它错误（只带脱敏后的分类信息，绝不含值/原始 stdout）。
     Other(String),
 }
@@ -264,6 +271,9 @@ impl VaultError {
             Self::Timeout => "vault_timeout",
             Self::ItemConflict => "vault_item_conflict",
             Self::RestartRequired => "vault_restart_required",
+            Self::QueueTimeout => "vault_queue_timeout",
+            Self::QueueBusy => "vault_busy",
+            Self::OutputLimit => "vault_output_limit",
             Self::Other(_) => "vault_other",
         }
     }
@@ -297,6 +307,18 @@ impl VaultError {
             Self::RestartRequired => (
                 "已切换到 1Password，请重启 CC Switch".to_string(),
                 "Switched to 1Password; please restart CC Switch".to_string(),
+            ),
+            Self::QueueTimeout => (
+                "等待其他 1Password 操作完成超时，请稍后重试".to_string(),
+                "Timed out waiting for another 1Password operation; please retry".to_string(),
+            ),
+            Self::QueueBusy => (
+                "1Password 操作排队已满，请稍后重试".to_string(),
+                "Too many pending 1Password operations; please retry shortly".to_string(),
+            ),
+            Self::OutputLimit => (
+                "1Password 输出超过大小上限，操作已中止".to_string(),
+                "1Password output exceeded the size limit; aborted".to_string(),
             ),
             Self::Other(detail) => (
                 format!("1Password 调用失败：{detail}"),

@@ -1,6 +1,9 @@
 //! 1Password 后端设置命令（§8）：状态探测、账户/vault 列举、保存配置、测试取钥匙。
 //!
-//! 所有会调 `op` 的命令都是 async + `spawn_blocking`（`op` 是阻塞子进程，可能等解锁）。
+//! 所有会调 `op` 的命令都是 async + `run_op_task`（内部 `spawn_blocking`；
+//! `op` 是阻塞子进程，可能等解锁），入口共用有界排队 permit（REL-B §10.2-2）。
+
+use std::time::Duration;
 
 use serde_json::{json, Value};
 use tauri::{Emitter, State};
@@ -8,6 +11,53 @@ use tauri::{Emitter, State};
 use crate::secrets;
 use crate::secrets::SecretVault as _;
 use crate::store::AppState;
+
+/// REL-B（§10.2-2）：会触发 `op` 的命令入口共用的**有界排队** permit 池。
+///
+/// `op` 本体由全局串行锁（`OP_LOCK`）串行执行，但排队本身若无上限，慢任务
+/// （等解锁、等网络）会让后台任务无限堆积。入口先用有界 permit 限制待执行
+/// 数量：队列饱和后短暂宽限等待，仍拿不到即返回可重试 busy，任务不会进入
+/// `spawn_blocking`，更不会 spawn `op`。
+static OP_QUEUE_PERMITS: std::sync::OnceLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::OnceLock::new();
+/// 允许同时排队的 `op` 任务上限（含正在执行的那个）。
+const OP_QUEUE_MAX_TASKS: usize = 4;
+/// 队列饱和后的宽限等待；仍拿不到 permit 即 busy。
+const OP_QUEUE_BUSY_WAIT: Duration = Duration::from_secs(10);
+
+/// 取一个排队 permit；队列饱和时宽限等待 [`OP_QUEUE_BUSY_WAIT`]，仍失败返回 busy。
+async fn acquire_op_queue_permit() -> Result<tokio::sync::OwnedSemaphorePermit, String> {
+    let sem = OP_QUEUE_PERMITS
+        .get_or_init(|| std::sync::Arc::new(tokio::sync::Semaphore::new(OP_QUEUE_MAX_TASKS)));
+    if let Ok(permit) = sem.clone().try_acquire_owned() {
+        return Ok(permit);
+    }
+    let acquire = async {
+        sem.clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "1Password 排队队列已关闭".to_string())
+    };
+    tokio::time::timeout(OP_QUEUE_BUSY_WAIT, acquire)
+        .await
+        .map_err(|_| "1Password 操作排队已满，请稍后重试".to_string())?
+}
+
+/// REL-B：`op` 命令任务的统一入口——先取有界 permit，再进阻塞线程执行；
+/// permit 随任务持有到任务结束。
+async fn run_op_task<T, F>(task: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    let permit = acquire_op_queue_permit().await?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let _permit = permit;
+        task()
+    })
+    .await
+    .map_err(|e| format!("1Password 任务线程失败: {e}"))
+}
 
 /// F1-8：「导入到 1Password 并剥离」——把启动剥离检测到的 live 文件明文钥匙
 /// （`live_plaintext_pending`）收进 vault 后就地剥离。会触发 op（可能弹解锁），
@@ -17,12 +67,10 @@ pub async fn import_live_plaintext_to_onepassword(
     state: State<'_, AppState>,
 ) -> Result<usize, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::services::provider::import_live_plaintext_to_vault(&state)
-    })
-    .await
-    .map_err(|e| format!("导入 live 明文任务失败: {e}"))?
-    .map_err(|e| e.to_string())
+    run_op_task(move || crate::services::provider::import_live_plaintext_to_vault(&state))
+        .await
+        .map_err(|e| format!("导入 live 明文任务失败: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 /// S6-3（P1-8）：重试导入「明文导入待重试」清单里的供应商钥匙（1P 模式）。
@@ -37,19 +85,17 @@ pub async fn retry_secrets_import_pending(
     state: State<'_, AppState>,
 ) -> Result<Vec<String>, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::services::provider::scrub_imported_plaintext_via_vault(&state)
-    })
-    .await
-    .map_err(|e| format!("重试导入明文任务失败: {e}"))?
-    .map_err(|e| e.to_string())
+    run_op_task(move || crate::services::provider::scrub_imported_plaintext_via_vault(&state))
+        .await
+        .map_err(|e| format!("重试导入明文任务失败: {e}"))?
+        .map_err(|e| e.to_string())
 }
 
 /// 状态探测（不需解锁）：是否安装、op 版本、路径、是否已登录、签名校验结果，
 /// 外加当前后端与已配置的 account/vault。
 #[tauri::command]
 pub async fn onepassword_status(_state: State<'_, AppState>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let verify = crate::settings::onepassword_verify_signature();
         let configured = crate::settings::get_onepassword_op_path();
         let probe = secrets::onepassword_probe(configured.as_deref(), verify);
@@ -72,7 +118,7 @@ pub async fn onepassword_status(_state: State<'_, AppState>) -> Result<Value, St
 /// 列出账户（不需解锁）。
 #[tauri::command]
 pub async fn onepassword_list_accounts(_state: State<'_, AppState>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let verify = crate::settings::onepassword_verify_signature();
         let path = secrets::locate_op(crate::settings::get_onepassword_op_path().as_deref())
             .ok_or_else(|| crate::error::AppError::from(secrets::VaultError::NotInstalled))?;
@@ -94,7 +140,7 @@ pub async fn onepassword_list_vaults(
     _state: State<'_, AppState>,
     account: Option<String>,
 ) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let verify = crate::settings::onepassword_verify_signature();
         let path = secrets::locate_op(crate::settings::get_onepassword_op_path().as_deref())
             .ok_or_else(|| crate::error::AppError::from(secrets::VaultError::NotInstalled))?;
@@ -177,7 +223,7 @@ pub async fn onepassword_save_config(
 /// 成功即证明「解锁 + 账户 + vault」链路可用；失败返回分类错误码供前端提示。
 #[tauri::command]
 pub async fn onepassword_test_fetch(_state: State<'_, AppState>) -> Result<Value, String> {
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let verify = crate::settings::onepassword_verify_signature();
         let path = secrets::locate_op(crate::settings::get_onepassword_op_path().as_deref())
             .ok_or_else(|| crate::error::AppError::from(secrets::VaultError::NotInstalled))?;
@@ -215,7 +261,7 @@ pub async fn onepassword_migrate(
         .to_string());
     }
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let vault = crate::secrets::onepassword_from_settings(state.db.clone())
             .map_err(crate::error::AppError::from)?;
         // F2-1：每组完成即向前端上报进度（约 7 秒/个）。
@@ -245,7 +291,7 @@ pub async fn onepassword_cleanup_credential_residue(
     }
     #[cfg(target_os = "windows")]
     {
-        tauri::async_runtime::spawn_blocking(move || {
+        run_op_task(move || {
             if !crate::settings::is_onepassword_backend() {
                 return Err(crate::error::AppError::localized(
                     "onepassword.cleanup.not_1p",
@@ -297,7 +343,7 @@ pub async fn onepassword_rebuild_refs(
     only: Option<Vec<String>>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         if !crate::settings::is_onepassword_backend() {
             return Err(crate::error::AppError::localized(
                 "onepassword.rebuild_refs.not_1p",
@@ -460,7 +506,7 @@ pub async fn onepassword_retitle_items(state: State<'_, AppState>) -> Result<Val
         .to_string());
     }
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let vault = crate::secrets::onepassword_from_settings(state.db.clone())
             .map_err(crate::error::AppError::from)?;
         let (total, renamed) = vault.retitle_managed_items().map_err(|e| e.to_string())?;
@@ -671,7 +717,7 @@ pub async fn onepassword_endpoint_audit(
     state: State<'_, AppState>,
 ) -> Result<Value, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         if !crate::settings::is_onepassword_backend() {
             return Err(crate::error::AppError::localized(
                 "onepassword.endpoint_audit.not_1p",
@@ -705,7 +751,7 @@ pub async fn onepassword_endpoint_reconcile(
     use std::str::FromStr;
 
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         if !crate::settings::is_onepassword_backend() {
             return Err(crate::error::AppError::localized(
                 "onepassword.endpoint_reconcile.not_1p",
@@ -825,7 +871,7 @@ pub async fn onepassword_endpoint_reconcile(
     .map_err(|e| e.to_string())
 }
 
-/// F1-2：端点回填待办数量（0 次 op，只查本地表）。
+/// F1-2：端点回填待办数量（0 次 op，只查本地表，不占 op 排队 permit）。
 /// 大于 0 时前端在 1Password 区 / 主界面横幅提示「回填端点」。
 #[tauri::command]
 pub async fn secrets_endpoint_backfill_status(state: State<'_, AppState>) -> Result<Value, String> {
@@ -853,7 +899,7 @@ pub async fn secrets_backfill_endpoints(
     use std::str::FromStr;
 
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    run_op_task(move || {
         let pending = state
             .db
             .list_endpoint_backfill_pending(&crate::settings::get_endpoint_backfill_sensitive())?;

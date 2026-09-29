@@ -35,6 +35,21 @@ const GROUP_FIELD_LABEL: &str = "cc-switch-group";
 const OP_TAG: &str = "cc-switch";
 /// `op` 调用超时（给 Windows Hello 解锁弹窗留人手操作时间；网络本身约 6~9 秒）。
 const OP_TIMEOUT: Duration = Duration::from_secs(120);
+/// REL-B（§10.2-1）：`op` 全局串行锁的**排队**预算，独立于执行超时——
+/// 多个请求排队时，单个调用不会因前面有慢任务而无限等待，也不把
+/// 「排队等解锁」误报成执行卡死。
+const OP_QUEUE_TIMEOUT: Duration = Duration::from_secs(30);
+/// REL-B：排队等待的轮询间隔。
+const OP_QUEUE_POLL: Duration = Duration::from_millis(50);
+/// REL-B（§10.2-4）：stdout 大小上限。单条目读取与列表操作分开设置——
+/// `op item get` 返回单个条目 JSON，`item list`/`vault list` 随条目数增长。
+const OP_STDOUT_LIMIT_SINGLE: usize = 8 * 1024 * 1024;
+const OP_STDOUT_LIMIT_LIST: usize = 32 * 1024 * 1024;
+/// REL-B：stderr 只用于错误分类，小上限即可。
+const OP_STDERR_LIMIT: usize = 64 * 1024;
+/// REL-B（§10.2-6）：子进程退出后收拢管道读取线程的额外预算——
+/// 若后代进程继承了管道句柄导致 EOF 迟迟不来，函数仍要在预算内返回。
+const OP_JOIN_GRACE: Duration = Duration::from_secs(5);
 /// CreateProcess 的 CREATE_NO_WINDOW 标志，避免弹出控制台窗口。
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
@@ -835,13 +850,32 @@ fn exec_op(
     stdin: Option<&[u8]>,
     take_lock: bool,
 ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-    exec_op_with_timeout(op_path, args, stdin, take_lock, OP_TIMEOUT)
+    exec_op_with_limits(
+        op_path,
+        args,
+        stdin,
+        take_lock,
+        OP_TIMEOUT,
+        OP_QUEUE_TIMEOUT,
+        stdout_limit_for_args(args),
+    )
+}
+
+/// REL-B（§10.2-4）：按操作类型选 stdout 上限——列表操作随条目数增长，
+/// 给更大的预算；单条目读取用小预算。
+fn stdout_limit_for_args(args: &[&str]) -> usize {
+    if args.contains(&"list") {
+        OP_STDOUT_LIMIT_LIST
+    } else {
+        OP_STDOUT_LIMIT_SINGLE
+    }
 }
 
 /// §10.1（安全方案）：带统一超时的 `op` 执行。截止时间在 **spawn 之前**建立，
 /// 覆盖 stdin 写入、管道读取与等待全程；stdout/stderr 读取线程先于 stdin 写入
 /// 启动（子进程先写满 stdout 管道、我们又阻塞在写 stdin 时不再互等死锁）；
 /// stdin 写入错误明确传播，超时 kill 子进程并等待回收。
+#[cfg(test)]
 fn exec_op_with_timeout(
     op_path: &Path,
     args: &[&str],
@@ -849,7 +883,56 @@ fn exec_op_with_timeout(
     take_lock: bool,
     timeout: Duration,
 ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
-    let _guard = take_lock.then(|| OP_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
+    exec_op_with_limits(
+        op_path,
+        args,
+        stdin,
+        take_lock,
+        timeout,
+        OP_QUEUE_TIMEOUT,
+        stdout_limit_for_args(args),
+    )
+}
+
+/// REL-B（§10.2-1）：在排队预算内获取全局串行锁。锁被其他调用持有时
+/// 单独计时，超时返回 `QueueTimeout`，不冒充执行超时。
+fn wait_op_lock(queue_timeout: Duration) -> Result<std::sync::MutexGuard<'static, ()>, RunErr> {
+    let deadline = Instant::now() + queue_timeout;
+    loop {
+        match OP_LOCK.try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(std::sync::TryLockError::WouldBlock) => {
+                if Instant::now() >= deadline {
+                    return Err(RunErr::Vault(VaultError::QueueTimeout));
+                }
+                std::thread::sleep(OP_QUEUE_POLL);
+            }
+            // 中毒锁沿用既有语义：恢复锁继续用，不扩大失败面。
+            Err(std::sync::TryLockError::Poisoned(e)) => return Ok(e.into_inner()),
+        }
+    }
+}
+
+/// REL-B：带排队预算、输出上限与统一清理预算的 `op` 执行（§10.2）。
+///
+/// 覆盖：排队超时（`QueueTimeout`）、执行超时（`Timeout`）、输出超限
+/// （kill 并返回 `OutputLimit`）、wait/读写失败明确报错、管道收拢有截止预算
+/// （后代进程持有管道句柄时函数仍能返回，不会无限 join）。
+#[allow(clippy::too_many_arguments)]
+fn exec_op_with_limits(
+    op_path: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    take_lock: bool,
+    timeout: Duration,
+    queue_timeout: Duration,
+    stdout_limit: usize,
+) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+    let _guard = if take_lock {
+        Some(wait_op_lock(queue_timeout)?)
+    } else {
+        None
+    };
 
     let mut cmd = Command::new(op_path);
     cmd.args(args);
@@ -883,28 +966,67 @@ fn exec_op_with_timeout(
     })?;
 
     // 先启动读取线程，再写 stdin（§10.1：并发处理管道，防互等死锁）。
+    // REL-B：读取按上限逐块进行，读失败/超限记录结果而非被吞掉；结果经
+    // channel 传出，join 有截止预算（§10.2-6）。
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
-    let out_handle = std::thread::spawn(move || {
+    let (out_tx, out_rx) = std::sync::mpsc::channel();
+    let _out_handle = std::thread::spawn(move || {
         let mut buf = Vec::new();
+        let mut result: Result<(), std::io::ErrorKind> = Ok(());
         if let Some(pipe) = stdout_pipe.as_mut() {
-            let _ = pipe.read_to_end(&mut buf);
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.len() > stdout_limit {
+                            result = Err(std::io::ErrorKind::StorageFull);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        result = Err(e.kind());
+                        break;
+                    }
+                }
+            }
         }
-        buf
+        let _ = out_tx.send((buf, result));
     });
-    let err_handle = std::thread::spawn(move || {
-        let mut buf = String::new();
+    let (err_tx, err_rx) = std::sync::mpsc::channel();
+    let _err_handle = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let mut result: Result<(), std::io::ErrorKind> = Ok(());
         if let Some(pipe) = stderr_pipe.as_mut() {
-            let _ = pipe.read_to_string(&mut buf);
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => {
+                        buf.extend_from_slice(&chunk[..n]);
+                        if buf.len() > OP_STDERR_LIMIT {
+                            result = Err(std::io::ErrorKind::StorageFull);
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        result = Err(e.kind());
+                        break;
+                    }
+                }
+            }
         }
-        buf
+        let _ = err_tx.send((buf, result));
     });
 
     // stdin 写入放独立线程（§10.1）：子进程不读输入时不阻塞主等待循环；
     // 写入错误不再被 `let _ =` 吞掉——子进程正常退出但 stdin 没写完属异常，
     // 在等待结果后明确传播。超时 kill 后管道关闭，阻塞的写入以 BrokenPipe 结束。
+    // REL-B（§10.2-5）：stdin 含钥匙明文，副本用 `Zeroizing` 承载，尽早清零。
     let write_handle = stdin.map(|data| {
-        let data = data.to_vec();
+        let data = Zeroizing::new(data.to_vec());
         let mut pipe = child
             .stdin
             .take()
@@ -916,18 +1038,30 @@ fn exec_op_with_timeout(
         })
     });
 
+    // kill 并回收子进程；失败路径也要收拢，不留僵尸进程。
+    let kill_and_reap = |child: &mut std::process::Child| {
+        let _ = child.kill();
+        let _ = child.wait();
+    };
+
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                // REL-B：stdout 超限即刻中止，不等执行超时——读到超限时子进程
+                // 通常仍阻塞在写管道上。
+                if let Ok((_, Err(std::io::ErrorKind::StorageFull))) = out_rx.try_recv() {
+                    kill_and_reap(&mut child);
+                    return Err(RunErr::Vault(VaultError::OutputLimit));
+                }
                 if Instant::now() >= deadline {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    kill_and_reap(&mut child);
                     return Err(RunErr::Vault(VaultError::Timeout));
                 }
                 std::thread::sleep(Duration::from_millis(100));
             }
             Err(e) => {
+                kill_and_reap(&mut child);
                 return Err(RunErr::Vault(VaultError::Other(format!(
                     "wait op failed: {}",
                     e.kind()
@@ -936,12 +1070,41 @@ fn exec_op_with_timeout(
         }
     };
 
-    let stdout = out_handle.join().unwrap_or_default();
-    let stderr = err_handle.join().unwrap_or_default();
+    // REL-B（§10.2-6）：统一收拢读取线程——子进程已退出但管道写端可能被
+    // 后代进程持有，`join` 无限等；channel 接收有截止预算，超预算即中止。
+    let join_deadline = Instant::now() + OP_JOIN_GRACE;
+    let recv_before =
+        |rx: &std::sync::mpsc::Receiver<(Vec<u8>, Result<(), std::io::ErrorKind>)>| {
+            let now = Instant::now();
+            if now >= join_deadline {
+                None
+            } else {
+                rx.recv_timeout(join_deadline - now).ok()
+            }
+        };
+    let (stdout, out_result) = recv_before(&out_rx).ok_or(RunErr::Vault(VaultError::Other(
+        "op stdout collection did not finish in budget".to_string(),
+    )))?;
+    let (stderr, err_result) = recv_before(&err_rx).ok_or(RunErr::Vault(VaultError::Other(
+        "op stderr collection did not finish in budget".to_string(),
+    )))?;
     // 子进程已退出（或被 kill），stdin 写入线程必然已结束；join 不会无限等。
     let stdin_write_failed = write_handle
         .and_then(|h| h.join().ok())
         .and_then(|r| r.err());
+
+    // REL-B（§10.2-4）：读取失败不 `unwrap_or_default` 后假装成功。
+    for (what, err) in [("stdout", out_result), ("stderr", err_result)] {
+        if let Err(kind) = err {
+            // 超限是明确分类；其他读失败按 io 错误类别报错。
+            if kind == std::io::ErrorKind::StorageFull {
+                return Err(RunErr::Vault(VaultError::OutputLimit));
+            }
+            return Err(RunErr::Vault(VaultError::Other(format!(
+                "read op {what} failed: {kind}"
+            ))));
+        }
+    }
 
     if status.success() {
         // §10.1：子进程「成功」退出却没读完 stdin（写入失败）——输入不完整，
@@ -961,10 +1124,10 @@ fn exec_op_with_timeout(
         eprintln!(
             "[op-debug] args={}\n[op-debug] stderr={}",
             sanitize_for_debug(&format!("{args:?}")),
-            sanitize_for_debug(&stderr)
+            sanitize_for_debug(&String::from_utf8_lossy(&stderr))
         );
     }
-    Err(classify_stderr(&stderr))
+    Err(classify_stderr(&String::from_utf8_lossy(&stderr)))
 }
 
 /// SEC-04（安全方案 §5）：debug 构建专用的调试脱敏——
@@ -4027,6 +4190,76 @@ mod tests {
             start.elapsed() < Duration::from_secs(14),
             "不得死锁，实际 {:?}",
             start.elapsed()
+        );
+    }
+
+    /// REL-B（§10.2-4）：stdout 超过上限必须 kill 子进程并返回 `OutputLimit`，
+    /// 且在执行超时之前就中止，不能等满 deadline，也不能把截断输出当成功。
+    #[cfg(windows)]
+    #[test]
+    fn exec_op_output_limit_kills_flooding_child() {
+        let big_stdout_cmd = "for /L %i in (1,1,20000) do @echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let start = std::time::Instant::now();
+        let result = exec_op_with_limits(
+            std::path::Path::new("cmd"),
+            &["/C", big_stdout_cmd],
+            None,
+            false,
+            Duration::from_secs(30),
+            OP_QUEUE_TIMEOUT,
+            64 * 1024,
+        );
+        assert!(
+            matches!(result, Err(RunErr::Vault(VaultError::OutputLimit))),
+            "超限必须返回 OutputLimit，实际 {result:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "超限必须及时返回，实际 {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// REL-B（§10.2-1）：全局串行锁被占用时，排队预算独立计时——
+    /// 超过 queue_timeout 返回 `QueueTimeout`（而非执行 `Timeout`）。
+    #[test]
+    fn exec_op_queue_timeout_is_distinct_from_execution_timeout() {
+        let held = OP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let handle = std::thread::spawn(|| {
+            exec_op_with_limits(
+                std::path::Path::new("cmd"),
+                &["/C", "echo hi"],
+                None,
+                true,
+                Duration::from_secs(30),
+                Duration::from_millis(300),
+                OP_STDOUT_LIMIT_SINGLE,
+            )
+        });
+        let result = handle.join().expect("执行线程不应 panic");
+        drop(held);
+        assert!(
+            matches!(result, Err(RunErr::Vault(VaultError::QueueTimeout))),
+            "锁被占用且排队超时必须返回 QueueTimeout，实际 {result:?}"
+        );
+    }
+
+    /// REL-B（§10.2-1）：排队预算内拿到锁则正常执行，排队预算不影响正常路径。
+    #[test]
+    fn exec_op_queue_budget_does_not_block_normal_path() {
+        let result = exec_op_with_limits(
+            std::path::Path::new("cmd"),
+            &["/C", "echo hi"],
+            None,
+            false,
+            Duration::from_secs(15),
+            Duration::from_millis(300),
+            OP_STDOUT_LIMIT_SINGLE,
+        );
+        let out = result.expect("无锁竞争时应正常执行");
+        assert!(
+            String::from_utf8_lossy(&out).contains("hi"),
+            "应拿到子进程输出"
         );
     }
 }

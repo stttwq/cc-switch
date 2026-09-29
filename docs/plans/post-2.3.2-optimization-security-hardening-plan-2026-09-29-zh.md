@@ -1,6 +1,6 @@
 # CC Switch 2.3.2 后续优化与安全加固实施方案
 
-- **状态**：施工中。**S0、S1、S2、S3 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A、REL-A），全量检查通过；S4–S5（SEC-D、REL-B、OPT-A 后端预算、DOC-A）尚未施工。
+- **状态**：施工中。**S0、S1、S2、S3、S4 已于 2026-09-29 完成**（SEC-B、SEC-C、DEL-A、OPT-A Claude/Codex generation、SEC-A、REL-A、REL-B、OPT-A 后端、SEC-D），全量检查通过；S5（DOC-A、最终复核与交付材料）尚未施工。
 - **审查日期**：2026-09-29。
 - **代码基线**：`1password` 分支，`2a25d07118c7b087d6bd2618d4ca2877e3350320`，应用版本 `2.3.2`。
 - **适用对象**：接手施工的模型、复核模型与维护者。
@@ -535,3 +535,12 @@ git diff --check
 - **测试统计**：`cargo test` 全过（lib 860、集成套件合计 1002 通过 0 失败）、`clippy -D warnings`、`cargo fmt`、`vitest` 759 全过、`tsc`、`check-links`、`git diff --check` 通过；prettier 仅剩基线即有的 2 个失败文件（未动）。
 - **S2 遗留修正（S3 全量复核发现）**：S2 的 SEC-A 门禁使三处「直写 DB 种子再切换/启用 MCP」的集成测试夹具失效（`tests/profile_roundtrip.rs`、`tests/provider_commands.rs`、`tests/provider_service.rs`——绕过表单 upsert 的自动批准路径），当时全量验证漏检。修法与 S2 的 `mcp_commands.rs` 一致：夹具补记本机批准，测试意图（有效条目照常生效）不变。
 - **未动态验证**：磁盘满/文件占用类回滚失败（备份不完整路径已用清单校验覆盖，真实磁盘满未注入）；needs_attention 的专用前端横幅（当前以 error 日志 + 暂停自动同步 + 拒绝新同步操作呈现，UI 呈现留待 S5 交付复核决定）；真实 WebDAV/S3 远端上的中断演练（测试用本地载荷直调 `apply_snapshot`）。
+
+### 2026-09-29：S4 完成（REL-B 排队预算与资源清理、OPT-A 后端有限响应、SEC-D 导入归一化）
+
+- **REL-B（§10.2）**：`VaultError` 新增 `QueueTimeout`（`vault_queue_timeout`）、`QueueBusy`（`vault_busy`）、`OutputLimit`（`vault_output_limit`）三个变体，排队等待不再冒充执行超时（§10.2-1）。`commands/onepassword.rs` 全部会触发 `op` 的命令入口改走 `run_op_task`：有界 permit（4 个并发槽，`OnceLock<Arc<Semaphore>>`）饱和后宽限等待 10 秒，仍拿不到即返回可重试 busy，任务不进 `spawn_blocking`、不 spawn `op`（§10.2-2/3；0 op 的 `secrets_endpoint_backfill_status` 保持原路径不占槽）。`onepassword.rs` 执行层重写为 `exec_op_with_limits`：串行锁等待单独计时（`wait_op_lock`，30 秒排队预算）；stdout 按操作类型设上限（单条目 8 MiB / 含 `list` 32 MiB）、stderr 64 KiB，逐块限额读取，超限 kill 并回收后返回 `OutputLimit`（§10.2-4）；stdin 秘密副本改用 `Zeroizing`（§10.2-5）；读失败/线程失败不再 `unwrap_or_default` 假装成功；wait error 路径统一 kill/reap；子进程退出后管道收拢有 5 秒截止预算，后代进程持有管道时函数仍能返回（统一 guard，§10.2-6）。未实现 Job Object（§10.2-7：仅当测试证明需要时才加，当前 5 秒收拢预算已保证返回）。
+- **OPT-A 后端（§11.2）**：`model_fetch.rs` 响应改为**流式累计读取的真实字节上限**——成功响应 4 MiB、错误正文 64 KiB（`read_body_limited`，Content-Length 仅作提前拒绝，无长度/chunked 同样受限）；超限明确返回 `response_too_large`，不伪装空列表；模型条目 ≤10,000、单条 ID ≤1 KiB；一次「获取模型」总预算 20 秒跨候选累计，单候选取「剩余预算」与原 15 秒的较小值（§11.2-1/2/3/4）。常量集中本模块，未暴露用户设置；未加持久缓存（§11.2-8）。
+- **SEC-D（§9.2/§9.3）**：`backup.rs` 新增两层。**结构审计** `audit_imported_structure`：对象类型只允许 table/index；表必须为程序已知表且 `table_xinfo` 列集合与参照一致（缺列/多列均拒绝）；具名索引必须是程序会创建的索引（表达式索引不可能通过）；参照 schema 由本版本程序自己的 `create_tables_on_conn` + `apply_schema_migrations_on_conn` 在内存库现场构建，无手工维护的白名单清单。**归一化** `normalize_imported_database`：新建程序自建 schema 的干净库，ATTACH 暂存库后按白名单列 `INSERT OR REPLACE … SELECT` 逐表事务内复制数据——外部建表 SQL、约束与索引一律不进主库，主库 sqlite_schema 从此由程序模板决定（§9.2-3/4/10）。干净库重跑迁移链以得到完整当前形状，迁移预置的默认标记行由 OR REPLACE 让位于导入数据，与既有「暂存库整体替换」结果等价；user_version 由程序直接决定，伪版本（声称最新版而结构停留旧版）因列集合比对被拒绝（§9.2-7）。SQL 导入与二进制 `.db` 恢复两条路径统一接入（`merge_for_import`、commit marker、整库替换都发生在干净库上）；离线紧急恢复 `restore_main_db_file_from_backup`（主库损坏时的启动路径）维持既有 `reject_unsupported_schema_objects` 审查，未做归一化（见未验证项）。
+- **测试**：REL-B 新增 4 个（Windows 真实子进程：stdout 超限及时 kill 返回 OutputLimit、锁被占时排队超时返回 QueueTimeout、排队预算不影响正常路径，另 3 个既有 exec_op 测试回归通过）；OPT-A 后端新增 5 个回环假服务测试（无 Content-Length 巨体、Content-Length 超限提前拒绝、条目数超限、单 ID 超限、正常尺寸不受影响）；SEC-D 新增 6 个（程序 schema 归一化后与模板逐表一致、未知表/未知列/表达式索引/伪版本四类拒绝、端到端导入后主库结构与模板一致且夹带未知表被拒后主库不变）。`cargo test` 全过（lib 874、集成套件合计 1008 通过 0 失败），`onepassword_op_counts` 回归不退化（普通编辑 0 次）；`clippy -D warnings`、`cargo fmt`、`vitest` 759 全过、`tsc`、`check-links`、`git diff --check` 通过；prettier 仅剩基线即有的 2 个失败文件（未动）。
+- **兼容性**：v3.8.3 历史单行 INSERT 导出（`import_still_accepts_legacy_single_row_insert_exports`）、空业务表导出、当前二进制备份恢复、增量 vacuum 保留等既有测试全部通过；SEC-D 期间曾出现干净库迁移种子行与导入 settings 冲突（UNIQUE），已以 OR REPLACE 语义解决并保持既有导入结果不变。
+- **未动态验证**：大库（数十万行）复制的耗时与峰值内存未实测（复制为事务内逐表 `INSERT…SELECT`，无逐行建连接）；`restore_main_db_file_from_backup` 离线紧急路径未做归一化（仅结构审查，主库损坏场景下的兜底通道，行为与 2.3.2 一致）；20 秒总预算耗尽路径未做真实慢服务测试（单候选 15 秒超时与预算取 min 的逻辑为静态保证）；op 排队 permit 池在真实多窗口并发下的 UI 表现未验证。

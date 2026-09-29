@@ -66,6 +66,20 @@ const MAX_REQUEST_HEADERS: usize = 64;
 const MAX_HEADER_NAME_BYTES: usize = 256;
 const MAX_HEADER_VALUE_BYTES: usize = 16 * 1024;
 
+/// OPT-A（§11.2-2）：有限响应预算，常量集中在本模块，先不暴露为用户设置。
+/// 成功模型响应体上限——**流式累计读取的真实字节上限**，不是显示截断；
+/// 无 Content-Length / chunked 响应同样受限。
+const SUCCESS_BODY_MAX_BYTES: usize = 4 * 1024 * 1024;
+/// 错误正文读取上限（仅进本机 debug 日志，另按字符截断展示）。
+const ERROR_BODY_MAX_BYTES: usize = 64 * 1024;
+/// 模型条目数上限。
+const MAX_MODEL_ENTRIES: usize = 10_000;
+/// 单条模型 ID 字节上限。
+const MAX_MODEL_ID_BYTES: usize = 1024;
+/// OPT-A（§11.2-4）：一次「获取模型」的总预算（跨候选累计）；单个候选使用
+/// 「剩余总预算」与「原单次上限」的较小值，不再各自独立 15 秒无限累加。
+const FETCH_TOTAL_BUDGET_SECS: u64 = 20;
+
 /// 404/405 响应体截断长度：避免把几十 KB HTML 404 页整页保留到错误串里。
 const ERROR_BODY_MAX_CHARS: usize = 512;
 
@@ -148,7 +162,17 @@ pub async fn fetch_models_with_client(
         known_secrets.extend(request_headers.values().cloned());
     }
 
+    // OPT-A（§11.2-4）：一次「获取模型」的总预算，跨候选累计。
+    let total_deadline = std::time::Instant::now() + Duration::from_secs(FETCH_TOTAL_BUDGET_SECS);
+
     for url in &candidates {
+        // 剩余总预算耗尽：明确超时，不再尝试下一候选。
+        let remaining = total_deadline.saturating_duration_since(std::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(ModelFetchError::new("timeout", true));
+        }
+        // 单个候选使用「剩余总预算」与「原单次上限」的较小值。
+        let per_request = remaining.min(Duration::from_secs(FETCH_TIMEOUT_SECS));
         log::debug!(
             "[ModelFetch] Trying endpoint: {}",
             crate::url_for_log_with_secrets(url, &known_secrets)
@@ -156,7 +180,7 @@ pub async fn fetch_models_with_client(
         let request = client
             .get(url)
             .headers(headers.clone())
-            .timeout(Duration::from_secs(FETCH_TIMEOUT_SECS));
+            .timeout(per_request);
         let response = match request.send().await {
             Ok(r) => r,
             // SEC-C：按错误类别映射为稳定 code，不把原始 Display（含 URL）送出
@@ -192,20 +216,29 @@ pub async fn fetch_models_with_client(
         }
 
         if status.is_success() {
-            let resp: ModelsResponse = response.json().await.map_err(|e| {
+            // OPT-A（§11.2-1/2）：流式累计读取，真实字节受限；超限明确报
+            // response_too_large，不伪装空列表，也不把巨大响应整读进内存。
+            let body = read_body_limited(response, SUCCESS_BODY_MAX_BYTES).await?;
+            let resp: ModelsResponse = serde_json::from_slice(&body).map_err(|e| {
                 log::debug!("[ModelFetch] Failed to parse response: {e}");
                 ModelFetchError::new("parse_failed", false)
             })?;
 
-            let mut models: Vec<FetchedModel> = resp
-                .data
-                .unwrap_or_default()
+            let data = resp.data.unwrap_or_default();
+            // OPT-A（§11.2-2/3）：条目数与单条 ID 长度按预算拒绝。
+            if data.len() > MAX_MODEL_ENTRIES {
+                return Err(ModelFetchError::new("response_too_large", false));
+            }
+            let mut models: Vec<FetchedModel> = data
                 .into_iter()
                 .map(|m| FetchedModel {
                     id: m.id,
                     owned_by: m.owned_by,
                 })
                 .collect();
+            if models.iter().any(|m| m.id.len() > MAX_MODEL_ID_BYTES) {
+                return Err(ModelFetchError::new("response_too_large", false));
+            }
 
             models.sort_by(|a, b| a.id.cmp(&b.id));
             return Ok(models);
@@ -228,11 +261,47 @@ pub async fn fetch_models_with_client(
     Err(last_err.unwrap_or_else(|| ModelFetchError::new("all_candidates_failed", false)))
 }
 
+/// OPT-A（§11.2-1）：流式累计读取响应体，真实字节数受限。
+///
+/// Content-Length 仅作提前拒绝（不是唯一上限）；无长度、chunked 响应同样受限。
+/// 超限返回 `response_too_large`，读取失败返回 `read_failed`，均不伪装成功。
+async fn read_body_limited(
+    response: reqwest::Response,
+    limit: usize,
+) -> Result<Vec<u8>, ModelFetchError> {
+    if let Some(len) = response.content_length() {
+        if len as usize > limit {
+            return Err(ModelFetchError::new("response_too_large", false));
+        }
+    }
+    let mut body = Vec::new();
+    let mut response = response;
+    while let Some(chunk) = response.chunk().await.map_err(|e| {
+        log::debug!("[ModelFetch] Failed to read response body: {e}");
+        ModelFetchError::new("read_failed", true)
+    })? {
+        body.extend_from_slice(&chunk);
+        if body.len() > limit {
+            return Err(ModelFetchError::new("response_too_large", false));
+        }
+    }
+    Ok(body)
+}
+
 /// 读取并按 debug 级别记录（脱敏+截断后的）错误响应体
 ///
 /// 正文只进本机 debug 日志，不进入 IPC 错误载荷（SEC-C）。
+/// OPT-A（§11.2-1/2）：读取本身也按 [`ERROR_BODY_MAX_BYTES`] 流式限额，
+/// 不再 `.text()` 无上限全读——显示截断不是读取内存上限。
 async fn log_error_body(response: reqwest::Response, status: StatusCode, known_secrets: &[String]) {
-    let body = response.text().await.unwrap_or_default();
+    let body = match read_body_limited(response, ERROR_BODY_MAX_BYTES).await {
+        Ok(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        // 读不进来就记分类，不记原文。
+        Err(e) => {
+            log::debug!("[ModelFetch] HTTP {status} body unavailable: {}", e.code);
+            return;
+        }
+    };
     log::debug!(
         "[ModelFetch] HTTP {status} body: {}",
         redact_model_fetch_error_body(body, known_secrets)
@@ -817,6 +886,149 @@ mod tests {
         let json = serde_json::to_string(&err).unwrap();
         assert!(!json.contains("supersecret"), "载荷含 URL 材料: {json}");
         assert!(!json.contains("127.0.0.1"), "载荷含主机: {json}");
+    }
+
+    // —— OPT-A 后端（§11.2）：有限响应预算，本机回环假服务，不访问公网 ——
+
+    /// 无 Content-Length、连接关闭才结束的巨大响应体：流式读取必须按
+    /// SUCCESS_BODY_MAX_BYTES 上限拒绝（response_too_large），不能整读进内存。
+    #[tokio::test]
+    async fn oversized_body_without_content_length_is_rejected() {
+        let huge = "a".repeat(SUCCESS_BODY_MAX_BYTES + 1024);
+        let responder = Arc::new(move |_req: &RecordedRequest| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{huge}"
+            )
+        });
+        let (base, _requests) = spawn_fake_server(responder);
+
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "response_too_large");
+    }
+
+    /// Content-Length 超限时提前拒绝，服务器实现不变。
+    #[tokio::test]
+    async fn oversized_content_length_is_rejected_early() {
+        let (base, requests) = spawn_fake_server(Arc::new(|_req: &RecordedRequest| {
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 9999999999\r\nConnection: close\r\n\r\n"
+                .to_string()
+        }));
+
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "response_too_large");
+        assert_eq!(requests.lock().unwrap().len(), 1, "请求本身应已发出");
+    }
+
+    /// 模型条目数超过 10,000：按预算拒绝，不伪装空列表。
+    #[tokio::test]
+    async fn excessive_model_entry_count_is_rejected() {
+        let entries: Vec<String> = (0..=MAX_MODEL_ENTRIES)
+            .map(|i| format!(r#"{{"id":"m{}"}}"#, i))
+            .collect();
+        let body = format!(r#"{{"data":[{}]}}"#, entries.join(","));
+        assert!(
+            body.len() < SUCCESS_BODY_MAX_BYTES,
+            "预置条件：体量在字节上限内"
+        );
+        let responder = Arc::new(move |_req: &RecordedRequest| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        });
+        let (base, _requests) = spawn_fake_server(responder);
+
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "response_too_large");
+    }
+
+    /// 单条模型 ID 超过 1 KiB：按预算拒绝。
+    #[tokio::test]
+    async fn oversized_model_id_is_rejected() {
+        let long_id = "m".repeat(MAX_MODEL_ID_BYTES + 1);
+        let body = format!(r#"{{"data":[{{"id":"{long_id}"}}]}}"#);
+        let responder = Arc::new(move |_req: &RecordedRequest| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        });
+        let (base, _requests) = spawn_fake_server(responder);
+
+        let err = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap_err();
+
+        assert_eq!(err.code, "response_too_large");
+    }
+
+    /// 正常尺寸的响应不受预算影响（合法路径保持可用）。
+    #[tokio::test]
+    async fn normal_sized_models_response_still_succeeds() {
+        let entries: Vec<String> = (0..1000).map(|i| format!(r#"{{"id":"m{i}"}}"#)).collect();
+        let body = format!(r#"{{"data":[{}]}}"#, entries.join(","));
+        let responder = Arc::new(move |_req: &RecordedRequest| {
+            format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            )
+        });
+        let (base, _requests) = spawn_fake_server(responder);
+
+        let models = fetch_models_with_client(
+            no_redirect_client(),
+            &base,
+            "synthetic-key-abc",
+            false,
+            None,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(models.len(), 1000);
     }
 
     #[test]
