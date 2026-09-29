@@ -203,14 +203,23 @@ pub async fn update_provider(
     app: String,
     provider: Provider,
     #[allow(non_snake_case)] originalId: Option<String>,
+    #[allow(non_snake_case)] credentialPatch: Option<crate::provider::CredentialPatch>,
 ) -> Result<bool, String> {
+    // P4（安全方案 §7.1-5）：`credentialPatch` 是显式凭据意图（keep/set/clear），
+    // 缺省 = 全 keep，旧前端不带该参数时语义不变。
     let app_type = AppType::from_str(&app).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle
             .try_state::<AppState>()
             .ok_or_else(|| "应用状态不可用".to_string())?;
-        ProviderService::update(state.inner(), app_type, originalId.as_deref(), provider)
-            .map_err(|e| e.to_string())
+        ProviderService::update_with_credential_patch(
+            state.inner(),
+            app_type,
+            originalId.as_deref(),
+            provider,
+            credentialPatch.as_ref(),
+        )
+        .map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| format!("供应商更新任务执行失败: {e}"))?

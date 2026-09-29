@@ -89,6 +89,40 @@ pub struct SecretStatus {
     pub linked: Option<bool>,
 }
 
+/// P4（安全方案 §7.1）：显式凭据意图——`keep`（默认，保留 1P 现值）、
+/// `clear`（显式清除，独立按钮触发；空白输入框**不是** clear）、
+/// `set`（用户明确提交的新值）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(tag = "mode", rename_all = "snake_case")]
+pub enum CredentialIntent {
+    #[default]
+    Keep,
+    Clear,
+    Set {
+        value: String,
+    },
+}
+
+/// P4（安全方案 §7.1-5）：编辑提交的独立凭据补丁，与 providerConfig 并列、
+/// 不包装进 meta/settingsConfig。缺省字段一律 keep；后端以它 + 抽取结果
+/// 共同决定差异（§2-2 不靠前端 dirty 状态建立安全边界）。
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialPatch {
+    #[serde(default)]
+    pub api_key: CredentialIntent,
+    #[serde(default)]
+    pub base_url: CredentialIntent,
+}
+
+impl CredentialPatch {
+    /// 是否携带显式 set/clear 意图（纯 keep 可完全交给配置抽取分类）。
+    pub fn has_explicit_intent(&self) -> bool {
+        !matches!(self.api_key, CredentialIntent::Keep)
+            || !matches!(self.base_url, CredentialIntent::Keep)
+    }
+}
+
 impl Provider {
     /// Convert to frontend-safe representation by stripping settings_config
     pub fn to_frontend(&self) -> ProviderForFrontend {

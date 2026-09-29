@@ -82,4 +82,49 @@ describe("ApiKeyInput 展示与修改意图分离", () => {
 
     expect(providersApi.revealSecret).not.toHaveBeenCalled();
   });
+
+  it("P4：点击清除按钮发出显式 clear 意图，输入新值即撤销", async () => {
+    const user = userEvent.setup();
+    const onClearIntentChange = vi.fn();
+    render(
+      <ApiKeyInput
+        value=""
+        onChange={() => {}}
+        configuredStatus={{ present: true }}
+        revealTarget={{ app: "claude", providerId: "p1" }}
+        clearIntent={false}
+        onClearIntentChange={onClearIntentChange}
+      />,
+    );
+
+    await user.click(
+      screen.getByRole("button", { name: "providerForm.clearStoredKey" }),
+    );
+    expect(onClearIntentChange).toHaveBeenLastCalledWith(true);
+
+    const input = screen.getByLabelText(/API Key/);
+    await user.type(input, "n");
+    expect(onClearIntentChange).toHaveBeenLastCalledWith(false);
+  });
+
+  it("P4：clear 意图生效时显示撤销入口", async () => {
+    const user = userEvent.setup();
+    const onClearIntentChange = vi.fn();
+    render(
+      <ApiKeyInput
+        value=""
+        onChange={() => {}}
+        configuredStatus={{ present: true }}
+        revealTarget={{ app: "claude", providerId: "p1" }}
+        clearIntent={true}
+        onClearIntentChange={onClearIntentChange}
+      />,
+    );
+
+    expect(screen.getByText("providerForm.clearKeyHint")).toBeInTheDocument();
+    await user.click(
+      screen.getByRole("button", { name: "providerForm.clearKeyUndo" }),
+    );
+    expect(onClearIntentChange).toHaveBeenLastCalledWith(false);
+  });
 });

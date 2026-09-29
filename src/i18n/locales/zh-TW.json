@@ -1232,7 +1232,10 @@
     "fetchModelsTimeout": "請求逾時，請檢查網路連線",
     "requiredFields": "請填寫供應商名稱、API 位址、API Key 和模型",
     "apiKeyConfigured": "已配置，留空保持不變",
-    "apiKeyConfiguredHint": "已配置，留空保持不變，點擊右側眼睛檢視"
+    "apiKeyConfiguredHint": "已配置，留空保持不變，點擊右側眼睛檢視",
+    "clearStoredKey": "清除已儲存的 API Key",
+    "clearKeyHint": "儲存後將從 1Password 清除此 API Key。",
+    "clearKeyUndo": "撤銷清除"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",
@@ -1327,6 +1330,8 @@
       "vault_item_conflict": "1Password 中已存在同名條目，請清理重複條目後重試",
       "vault_restart_required": "已切換到 1Password，請重新啟動 CC Switch",
       "vault_other": "1Password 呼叫失敗，請重試或查看日誌",
+      "vault_saved_local_failed": "1Password 已更新，但本機儲存失敗。點「重試」將重新儲存本機設定（不會重複修改 1Password）",
+      "vault_saved_pending_live": "設定已儲存，但套用 live 設定失敗。點「重試」將僅重新套用本機設定（不會重複修改 1Password）",
       "retry": "重試"
     }
   },

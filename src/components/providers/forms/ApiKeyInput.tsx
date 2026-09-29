@@ -25,6 +25,13 @@ interface ApiKeyInputProps {
    * 缺省（新建供应商表单）时眼睛退化为纯遮罩开关。
    */
   revealTarget?: { app: AppId; providerId: string } | null;
+  /**
+   * P4（安全方案 §7.1-2）：显式清除意图（受控）。提供回调时显示「清除已保存
+   * 的 API Key」按钮——空白输入框不是 clear，清除已存钥匙必须走这个独立意图；
+   * 空白提交仍是 keep（后端零 vault 往返）。
+   */
+  clearIntent?: boolean;
+  onClearIntentChange?: (cleared: boolean) => void;
 }
 
 const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
@@ -37,6 +44,8 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
   id = "apiKey",
   configuredStatus = null,
   revealTarget = null,
+  clearIntent = false,
+  onClearIntentChange,
 }) => {
   const { t } = useTranslation();
   const [showKey, setShowKey] = useState(false);
@@ -138,6 +147,8 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
           onChange={(e) => {
             setUserEdited(true);
             setRevealError(null);
+            // 用户开始输入即撤销清除意图（set 覆盖 clear）。
+            onClearIntentChange?.(false);
             onChange(e.target.value);
           }}
           onBlur={() => {
@@ -171,7 +182,32 @@ const ApiKeyInput: React.FC<ApiKeyInputProps> = ({
           </button>
         )}
       </div>
-      {configured && (
+      {configured &&
+        !clearIntent &&
+        !userEdited &&
+        !value &&
+        onClearIntentChange && (
+          <button
+            type="button"
+            onClick={() => onClearIntentChange(true)}
+            className="text-xs text-red-500 hover:text-red-600 dark:text-red-400 dark:hover:text-red-300"
+          >
+            {t("providerForm.clearStoredKey")}
+          </button>
+        )}
+      {clearIntent && onClearIntentChange && (
+        <p className="text-xs text-red-500">
+          {t("providerForm.clearKeyHint")}{" "}
+          <button
+            type="button"
+            onClick={() => onClearIntentChange(false)}
+            className="underline hover:text-red-600 dark:hover:text-red-300"
+          >
+            {t("providerForm.clearKeyUndo")}
+          </button>
+        </p>
+      )}
+      {configured && !clearIntent && (
         <p className="text-xs text-muted-foreground">
           {t("providerForm.apiKeyConfiguredHint")}
         </p>

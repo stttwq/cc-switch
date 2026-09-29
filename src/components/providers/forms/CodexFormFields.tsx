@@ -65,6 +65,9 @@ interface CodexFormFieldsProps {
   partnerPromotionKey?: string;
   /** 后端凭据状态（secretStatus.apiKey，§5.2.2）：present=true 时不回显，只提示已配置 */
   apiKeyConfiguredStatus?: { present: boolean } | null;
+  /** P4（安全方案 §7.1-2）：显式清除已存钥匙的意图（受控） */
+  apiKeyClearIntent?: boolean;
+  onApiKeyClearIntentChange?: (cleared: boolean) => void;
   /** 计划 §1.4.1：点眼睛时按需回显的目标 */
   apiKeyRevealTarget?: { app: AppId; providerId: string } | null;
 
@@ -319,6 +322,8 @@ export function CodexFormFields({
   partnerPromotionKey,
   apiKeyConfiguredStatus,
   apiKeyRevealTarget,
+  apiKeyClearIntent,
+  onApiKeyClearIntentChange,
   isNonOfficialCategory,
   codexBaseUrl,
   onBaseUrlChange,
@@ -530,6 +535,8 @@ export function CodexFormFields({
         partnerPromotionKey={partnerPromotionKey}
         configuredStatus={apiKeyConfiguredStatus}
         revealTarget={apiKeyRevealTarget}
+        clearIntent={apiKeyClearIntent}
+        onClearIntentChange={onApiKeyClearIntentChange}
         placeholder={{
           official: t("providerForm.codexOfficialNoApiKey", {
             defaultValue: "官方供应商无需 API Key",

@@ -750,8 +750,20 @@ impl ProviderService {
         original_id: Option<&str>,
         provider: Provider,
     ) -> Result<bool, AppError> {
+        Self::update_with_credential_patch(state, app_type, original_id, provider, None)
+    }
+
+    /// P4（安全方案 §7.1-5）：带显式凭据意图的编辑入口。`credential_patch` 为
+    /// `None`（旧 IPC / 内部调用）时全部字段按 keep 处理，语义不变、不突然清钥匙。
+    pub fn update_with_credential_patch(
+        state: &AppState,
+        app_type: AppType,
+        original_id: Option<&str>,
+        provider: Provider,
+        credential_patch: Option<&crate::provider::CredentialPatch>,
+    ) -> Result<bool, AppError> {
         if app_type == AppType::Pi {
-            return pi::update(state, original_id, provider);
+            return pi::update(state, original_id, provider, credential_patch.cloned());
         }
 
         // 编辑当前供应商会改 live 与环境变量，与切换是同一类互斥操作：按 app 取锁，
@@ -852,49 +864,103 @@ impl ProviderService {
         )?;
         provider.settings_config = extracted.stripped;
 
-        let credentials_changed =
-            match classify_edit_secrets(state, &app_type, &provider.id, &extracted.secrets)? {
-                EditSecretClassification::ConfigOnly => {
-                    // §7.2-5：无凭据差异 → 只写 sanitized config；vault 的
-                    // fetch/put/delete/status 全为 0，不改引用和端点缓存。
-                    // 钥匙未变，也不重投环境变量（D-1 只针对密钥变化）。
-                    state.db.save_provider(app_type.as_str(), &provider)?;
-                    if is_current {
-                        // §7.4：投影上下文显式禁取凭据，缓存 miss 不偷偷 fetch。
-                        write_live_with_common_config_for_state_no_vault(
-                            state, &app_type, &provider,
-                        )?;
-                        if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
-                            log::warn!(
-                            "保存供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}"
-                        );
-                        }
-                    }
-                    return Ok(true);
-                }
-                EditSecretClassification::VaultRequired(secrets) => {
-                    store_provider_bundle(
+        // P4（§7.2-6）：名称变化的显式判定——在锁内基于已加载的旧行比较，
+        // 不靠前端 nameDirty；显示名不是 provider ID，不属身份迁移。
+        let name_changed = existing_provider
+            .as_ref()
+            .is_some_and(|old| old.name != provider.name);
+        // P4（§7.1）：显式凭据意图合并。无意图时与 P3 一致，由后端分类决定。
+        let has_explicit_intent = credential_patch
+            .as_ref()
+            .is_some_and(|p| p.has_explicit_intent());
+        let (merged_secrets, explicit_clear) = match credential_patch {
+            Some(patch) if patch.has_explicit_intent() => {
+                apply_credential_intents(extracted.secrets, patch)
+            }
+            _ => (extracted.secrets, Vec::new()),
+        };
+
+        let classification = if has_explicit_intent {
+            // 显式 set/clear 意图即凭据动作（同值 set 也在内：patch 内部判等，
+            // 1 get + 0 edit，§9.3）。
+            EditSecretClassification::VaultRequired(merged_secrets)
+        } else {
+            classify_edit_secrets(state, &app_type, &provider.id, &merged_secrets)?
+        };
+
+        let credentials_changed = match classification {
+            EditSecretClassification::ConfigOnly => {
+                // §7.2-5：无凭据差异 → 只写 sanitized config；vault 的
+                // fetch/put/delete/status 全为 0，不改引用和端点缓存。
+                // 钥匙未变，也不重投环境变量（D-1 只针对密钥变化）。
+                // §7.2-6（P4）：唯一例外是显示名有效变化——标题显式传入
+                // patch，不被空包/相同包吞掉；真实条目不存在则不创建（§6.2）。
+                let vault_committed = name_changed;
+                if name_changed {
+                    patch_provider_secrets(
                         state,
                         &app_type,
                         &provider.id,
-                        &secrets,
-                        true,
+                        &crate::secrets::ProviderSecrets::new(),
                         Some(&provider.name),
+                        &[],
                     )?;
-                    true
                 }
-            };
+                // P5（§7.5-5/6）：改名已提交 vault 后的本地失败必须报告阶段，
+                // 不能让用户以为 1Password 也没改成功。
+                if let Err(err) = state.db.save_provider(app_type.as_str(), &provider) {
+                    if vault_committed {
+                        return Err(phase_vault_saved_local_failed(&err));
+                    }
+                    return Err(err);
+                }
+                if is_current {
+                    // §7.4：投影上下文显式禁取凭据，缓存 miss 不偷偷 fetch。
+                    // P5（§7.5-6）：DB 已保存而 live 写入失败 → 阶段化「待重新应用」，
+                    // 重试走全 keep 即可恢复投影，不会重复改 1P。
+                    if let Err(err) = write_live_with_common_config_for_state_no_vault(
+                        state, &app_type, &provider,
+                    ) {
+                        return Err(phase_vault_saved_pending_live(&err));
+                    }
+                    if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
+                        log::warn!(
+                            "保存供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}"
+                        );
+                    }
+                }
+                return Ok(true);
+            }
+            EditSecretClassification::VaultRequired(secrets) => {
+                // P4（§7.3/§7.5）：多字段（名称/URL/key）同时变化合为一次请求，
+                // 基于同一份经过身份核验的条目 JSON 合并；未变字段全部保留。
+                patch_provider_secrets(
+                    state,
+                    &app_type,
+                    &provider.id,
+                    &secrets,
+                    Some(&provider.name),
+                    &explicit_clear,
+                )?;
+                true
+            }
+        };
 
         // 缺陷 D-1：编辑当前供应商的密钥后必须按新值重投环境变量，否则 live 里的
         // `$VAR` 引用与 Codex 的 env_key 仍解析到旧密钥。放在写 DB 之前：投递失败时
-        // DB 与 live 都未改动，用户看到的「保存失败」与实际状态一致。
+        // DB 与 live 都未改动。P5（§7.5-5）：此时 vault 已提交，失败必须报告阶段
+        // 「1P 已更新，本地未保存」，不能伪装成整体失败。
         // 零调用分支已在上方提前返回，只有凭据分支才会重投。
         if credentials_changed
             && is_current
             && Self::provider_has_stored_key(state, &app_type, &provider.id)?
         {
             let mut delivered = SwitchResult::default();
-            Self::deliver_env_credentials(state, &app_type, &provider, &mut delivered)?;
+            if let Err(err) =
+                Self::deliver_env_credentials(state, &app_type, &provider, &mut delivered)
+            {
+                return Err(phase_vault_saved_local_failed(&err));
+            }
             for warning in &delivered.warnings {
                 log::warn!("编辑当前供应商后重投环境变量的提醒: {warning}");
             }
@@ -903,10 +969,17 @@ impl ProviderService {
         // Save to database。F1-3（P0-3）：编辑路径不做凭据回滚——该条目本来就存在，
         // 删光等于把用户已有的全部钥匙丢掉。vault 里已是新值、DB 还是旧行，暂时
         // 不一致但没有丢失，用户重新保存即可恢复一致。（新增路径的归档回滚见 `add`。）
-        state.db.save_provider(app_type.as_str(), &provider)?;
+        // P5（§7.5-5）：vault 已提交，DB 失败 → 阶段化错误。
+        if let Err(err) = state.db.save_provider(app_type.as_str(), &provider) {
+            return Err(phase_vault_saved_local_failed(&err));
+        }
 
         if is_current {
-            write_live_with_common_config_for_state(state, &app_type, &provider)?;
+            // P5（§7.5-6）：DB 已保存而 live 写入失败 → 阶段化「待重新应用」；
+            // 重试走全 keep 即可恢复投影，不会重复改 1P。
+            if let Err(err) = write_live_with_common_config_for_state(state, &app_type, &provider) {
+                return Err(phase_vault_saved_pending_live(&err));
+            }
             if let Err(err) = McpService::sync_enabled_for_app(state, &app_type) {
                 log::warn!("保存供应商后重投影 {app_type:?} MCP 失败（将在下次同步时自愈）: {err}");
             }
@@ -1667,7 +1740,7 @@ impl ProviderService {
     /// §6.1：唯一调用 `state.vault.fetch` 的地方。一次往返拿整包。
     /// 条目不存在 => 返回空 `ProviderSecrets`（让后续“缺钥匙”逻辑照旧工作）；
     /// 锁定/断网等 => 原样上抛（`VaultError` 经 `From` 归一到本地化 `AppError`）。
-    pub(crate) fn fetch_provider_secrets(
+    pub fn fetch_provider_secrets(
         state: &AppState,
         app_type: &AppType,
         provider_id: &str,
@@ -2553,6 +2626,130 @@ fn classify_edit_secrets(
     Ok(EditSecretClassification::VaultRequired(secrets.clone()))
 }
 
+/// P4（安全方案 §7.1）：把显式凭据意图合并进抽取结果。
+/// `clear` 覆盖抽取（防止回灌/回显值被当成显式 set）；`set` 覆盖抽取值；
+/// `keep` 保留抽取结果（配置里没有 = keep 语义，空输入框不是 clear）。
+/// 返回合并后的秘密包与显式清除的托管字段清单。
+fn apply_credential_intents(
+    mut secrets: crate::secrets::ProviderSecrets,
+    patch: &crate::provider::CredentialPatch,
+) -> (crate::secrets::ProviderSecrets, Vec<&'static str>) {
+    use crate::provider::CredentialIntent;
+    let mut clear = Vec::new();
+    match &patch.api_key {
+        CredentialIntent::Keep => {}
+        CredentialIntent::Clear => {
+            secrets.api_key = None;
+            clear.push(crate::secrets::FIELD_API_KEY);
+        }
+        CredentialIntent::Set { value } => {
+            secrets.api_key = Some(Zeroizing::new(value.clone()));
+        }
+    }
+    match &patch.base_url {
+        CredentialIntent::Keep => {}
+        CredentialIntent::Clear => {
+            secrets.base_url = None;
+            clear.push(crate::secrets::FIELD_BASE_URL);
+        }
+        CredentialIntent::Set { value } => {
+            secrets.base_url = Some(Zeroizing::new(value.clone()));
+        }
+    }
+    (secrets, clear)
+}
+
+/// P5（安全方案 §7.5-5）：vault 已在本轮提交后，本地步骤（DB 保存 / 环境变量
+/// 投递 / live 节点写入）失败的阶段化错误。前端按 code 识别后重试会剥掉凭据
+/// 补丁（§9.2-6），只重做本地步骤，不会重复改 1Password。
+pub(crate) fn phase_vault_saved_local_failed(err: &AppError) -> AppError {
+    AppError::localized(
+        "vault_saved_local_failed",
+        format!("1Password 已更新，但本地保存失败：{err}；请重试或检查本地数据"),
+        format!(
+            "1Password was updated, but saving locally failed: {err}; please retry or check local data"
+        ),
+    )
+}
+
+/// P5（安全方案 §7.5-6）：本地已保存而 live 投影失败的阶段化错误——重试走全
+/// keep 即可恢复投影，不会重复改 1Password。
+pub(crate) fn phase_vault_saved_pending_live(err: &AppError) -> AppError {
+    AppError::localized(
+        "vault_saved_pending_live",
+        format!("配置已保存，但应用到 live 配置失败：{err}；请重试以重新应用"),
+        format!(
+            "Configuration saved, but applying it to the live config failed: {err}; please retry to re-apply"
+        ),
+    )
+}
+
+/// P4（安全方案 §7.3/§7.5）：编辑路径的凭据更新原语——在**同一次定位**取得的
+/// 条目上合并补丁并按需更新标题（1P 实现：1 次 get + 至多 1 次 edit；显式清除
+/// 的字段需要额外的 `[delete]` 调用，预算单独记录）。**vault 成功后**才写
+/// `secret_refs` 与端点缓存（§7.5-3）；端点被显式清除或新值敏感时删除旧缓存，
+/// 不保留过期的普通 URL。返回 vault 是否发生实际变更。
+fn patch_provider_secrets(
+    state: &AppState,
+    app_type: &AppType,
+    provider_id: &str,
+    secrets: &crate::secrets::ProviderSecrets,
+    display_name: Option<&str>,
+    clear_fields: &[&str],
+) -> Result<bool, AppError> {
+    use crate::secrets::VaultFieldPatch;
+    let group = crate::secrets::SecretGroup::provider(app_type.clone(), provider_id.to_string());
+    let set = crate::secrets::SecretBundle::from_provider_secrets(secrets);
+    if let Some(key) = secrets.api_key.as_ref() {
+        // §5.5：登记进「本次会话已知密钥」，导出护栏按字面量兜底。
+        crate::secrets::scan::note_session_secret(key.as_str());
+    }
+    let old_endpoint = state
+        .db
+        .get_provider_endpoint(app_type.as_str(), provider_id)?;
+    let field_patch = VaultFieldPatch {
+        set,
+        clear: clear_fields.iter().map(|s| (*s).to_string()).collect(),
+    };
+    let outcome = state.vault.patch(&group, &field_patch, display_name)?;
+    if let Some(vref) = outcome.vref.as_ref() {
+        // §4.3：写入后登记引用（只字段名，不含值），列表/校验/删除据此零 vault 往返。
+        state.db.upsert_secret_ref(
+            app_type.as_str(),
+            provider_id,
+            &vref.vault_id,
+            &vref.item_id,
+            &vref.fields,
+        )?;
+    }
+    // §7.5-3：端点缓存只在 vault 成功后维护。base_url 未提及（keep）时缓存不动。
+    match secrets.base_url.as_ref() {
+        Some(url) => {
+            if crate::secrets::is_credential_bearing_url(url.as_str()) {
+                // 普通→敏感：旧普通 URL 已失效，必须删除，不能留旧缓存。
+                if old_endpoint.is_some() {
+                    state
+                        .db
+                        .delete_provider_endpoint(app_type.as_str(), provider_id)?;
+                }
+            } else {
+                state
+                    .db
+                    .upsert_provider_endpoint(app_type.as_str(), provider_id, url.as_str())?;
+            }
+        }
+        None => {
+            // 显式清除：删除旧缓存；未提及（keep，如仅改名/仅换钥匙）则不动。
+            if clear_fields.contains(&crate::secrets::FIELD_BASE_URL) && old_endpoint.is_some() {
+                state
+                    .db
+                    .delete_provider_endpoint(app_type.as_str(), provider_id)?;
+            }
+        }
+    }
+    Ok(outcome.changed)
+}
+
 /// 把抽出的 `ProviderSecrets` 整包写入 vault（§6.6）。只在写入时登记会话脱敏名单。
 ///
 /// 2026-09-27（用户决策，D3-A → D3-B 演进）：`base_url` **保留在 vault 整包里**
@@ -2571,14 +2768,6 @@ pub(crate) fn store_provider_bundle(
     use crate::secrets::{SecretBundle, SecretGroup};
     let group = SecretGroup::provider(app_type.clone(), provider_id.to_string());
     let new_bundle = SecretBundle::from_provider_secrets(secrets);
-    // 端点表缓存：非敏感 URL 写入，读取路径不用碰 vault。
-    if let Some(url) = secrets.base_url.as_ref() {
-        if !crate::secrets::is_credential_bearing_url(url.as_str()) {
-            state
-                .db
-                .upsert_provider_endpoint(app_type.as_str(), provider_id, url.as_str())?;
-        }
-    }
     // §6.2：本次抽取无新密钥（如切换时回填、live 已剥钥）→ 无需写入，
     // 直接返回（既不 fetch 也不 put）。否则 1Password 模式下每次切换都会白白触发解锁。
     if new_bundle.is_empty() {
@@ -2588,6 +2777,11 @@ pub(crate) fn store_provider_bundle(
         // §5.5：登记进“本次会话已知密钥”，导出护栏按字面量兜底。
         crate::secrets::scan::note_session_secret(key.as_str());
     }
+    // §7.5-3：端点表缓存移到 vault 成功之后——1P 失败不得留下「新缓存、旧 vault」
+    // 的不一致状态。非敏感 URL 才落缓存。
+    let cache_worthy_url = secrets.base_url.as_ref().and_then(|url| {
+        (!crate::secrets::is_credential_bearing_url(url.as_str())).then_some(url.as_str())
+    });
     let old_bundle = if merge_existing {
         state.vault.fetch(&group)?.unwrap_or_default()
     } else {
@@ -2601,6 +2795,11 @@ pub(crate) fn store_provider_bundle(
     if bundle == old_bundle {
         // 整包没有任何变化（例如端点表缓存已含同一 URL、钥匙也没改）→ 不 put。
         // fetch 已经发生，但写侧零往返（避免每次切换白白触发解锁）。
+        if let Some(url) = cache_worthy_url {
+            state
+                .db
+                .upsert_provider_endpoint(app_type.as_str(), provider_id, url)?;
+        }
         return Ok(());
     }
     let vref = state.vault.put_titled(&group, &bundle, display_name)?;
@@ -2612,6 +2811,11 @@ pub(crate) fn store_provider_bundle(
         &vref.item_id,
         &vref.fields,
     )?;
+    if let Some(url) = cache_worthy_url {
+        state
+            .db
+            .upsert_provider_endpoint(app_type.as_str(), provider_id, url)?;
+    }
     Ok(())
 }
 

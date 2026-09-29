@@ -8,6 +8,21 @@ export interface ProviderSortUpdate {
   sortIndex: number;
 }
 
+/**
+ * P4（安全方案 §7.1）：显式凭据意图。`keep` 保留 1P 现值（缺省）、
+ * `clear` 显式清除（独立按钮触发，空白输入框不是 clear）、`set` 用户明确
+ * 提交的新值。与 providerConfig 并列提交，不包装进 meta/settingsConfig。
+ */
+export type CredentialIntentPayload =
+  | { mode: "keep" }
+  | { mode: "clear" }
+  | { mode: "set"; value: string };
+
+export interface CredentialPatchPayload {
+  apiKey?: CredentialIntentPayload;
+  baseUrl?: CredentialIntentPayload;
+}
+
 export interface ProviderSwitchEvent {
   appType: AppId;
   providerId: string;
@@ -60,11 +75,13 @@ export const providersApi = {
     provider: Provider,
     appId: AppId,
     originalId?: string,
+    credentialPatch?: CredentialPatchPayload,
   ): Promise<boolean> {
     return await invoke("update_provider", {
       provider,
       app: appId,
       originalId,
+      credentialPatch,
     });
   },
 

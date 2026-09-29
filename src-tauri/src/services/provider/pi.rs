@@ -183,6 +183,7 @@ pub(super) fn update(
     state: &AppState,
     original_id: Option<&str>,
     mut provider: Provider,
+    credential_patch: Option<crate::provider::CredentialPatch>,
 ) -> Result<bool, AppError> {
     let app_type = AppType::Pi;
     let _guard = futures::executor::block_on(state.switch_locks.lock_for_app(app_type.as_str()));
@@ -195,7 +196,7 @@ pub(super) fn update(
         ));
     }
 
-    state
+    let existing_provider = state
         .db
         .get_provider_by_id(&original_id, app_type.as_str())?
         .ok_or_else(|| AppError::InvalidInput(format!("Pi provider '{original_id}' not found")))?;
@@ -203,26 +204,60 @@ pub(super) fn update(
     ProviderService::validate_provider_settings(state, &app_type, &provider, None)?;
 
     let live_config = provider.settings_config.clone();
-    // P3（安全方案 §7.2）：Pi 编辑同样先纯提取再分类——普通配置编辑（模型、
-    // 备注等）零 vault 调用，且钥匙未变时不重投环境变量。
+    // P3/P4（安全方案 §7.2）：Pi 编辑先纯提取 → 显式意图合并 → 分类——普通配置
+    // 编辑（模型、备注等）零 vault 调用，且钥匙未变时不重投环境变量。
     let extracted =
         SecretExtractor::extract(&provider.id, &AppType::Pi, &provider.settings_config)?;
     provider.settings_config = extracted.stripped;
-    let credentials_changed =
-        match super::classify_edit_secrets(state, &app_type, &provider.id, &extracted.secrets)? {
-            super::EditSecretClassification::ConfigOnly => false,
-            super::EditSecretClassification::VaultRequired(secrets) => {
-                super::store_provider_bundle(
+    // P4（§7.2-6）：显示名有效变化（ID 不变）→ 标题显式传入 patch，不被空包吞掉。
+    let name_changed = existing_provider.name != provider.name;
+    let has_explicit_intent = credential_patch
+        .as_ref()
+        .is_some_and(|p| p.has_explicit_intent());
+    let (merged_secrets, explicit_clear) = match credential_patch {
+        Some(patch) if patch.has_explicit_intent() => {
+            super::apply_credential_intents(extracted.secrets, &patch)
+        }
+        _ => (extracted.secrets, Vec::new()),
+    };
+    let classification = if has_explicit_intent {
+        super::EditSecretClassification::VaultRequired(merged_secrets)
+    } else {
+        super::classify_edit_secrets(state, &app_type, &provider.id, &merged_secrets)?
+    };
+    // P5（§7.5-5）：vault 是否已在本轮提交（patch 成功）。之后的本地失败必须
+    // 报告阶段「1Password 已更新，本地未保存」，不能伪装成整体失败。
+    let (vault_committed, credentials_changed) = match classification {
+        super::EditSecretClassification::ConfigOnly => {
+            // 零调用分支：显示名变化时仅更新标题（条目不存在则不创建），
+            // 其余情况 vault 全 0。
+            if name_changed {
+                super::patch_provider_secrets(
                     state,
                     &app_type,
                     &provider.id,
-                    &secrets,
-                    true,
+                    &crate::secrets::ProviderSecrets::new(),
                     Some(&provider.name),
+                    &[],
                 )?;
-                true
+                (true, false)
+            } else {
+                (false, false)
             }
-        };
+        }
+        super::EditSecretClassification::VaultRequired(secrets) => {
+            // P4（§7.3/§7.5）：一次定位 + 至多一次 edit；vault 成功后才写引用/缓存。
+            super::patch_provider_secrets(
+                state,
+                &app_type,
+                &provider.id,
+                &secrets,
+                Some(&provider.name),
+                &explicit_clear,
+            )?;
+            (true, true)
+        }
+    };
 
     // 缺陷 D-1：live 节点只留 `$CC_SWITCH_PI_<ID>_API_KEY` 引用，编辑密钥后不重投该变量
     // 就会继续解析到旧 key。次序沿用 enable：②投变量 → ③写节点；节点本就不在 models.json
@@ -232,25 +267,51 @@ pub(super) fn update(
         && ProviderService::provider_has_stored_key(state, &app_type, &provider.id)?
     {
         let mut delivered = SwitchResult::default();
-        ProviderService::deliver_env_credentials_pub(state, &app_type, &provider, &mut delivered)?;
+        if let Err(err) = ProviderService::deliver_env_credentials_pub(
+            state,
+            &app_type,
+            &provider,
+            &mut delivered,
+        ) {
+            if vault_committed {
+                return Err(super::phase_vault_saved_local_failed(&err));
+            }
+            return Err(err);
+        }
         for warning in &delivered.warnings {
             log::warn!("编辑 Pi 供应商后重投环境变量的提醒: {warning}");
         }
     }
 
     let previous_native =
-        crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config)?;
+        crate::pi_config::replace_pi_provider_if_present(&original_id, &live_config).map_err(
+            |err| {
+                if vault_committed {
+                    super::phase_vault_saved_local_failed(&err)
+                } else {
+                    err
+                }
+            },
+        )?;
     if let Err(error) = state.db.save_provider(app_type.as_str(), &provider) {
-        if let Some(previous_native) = previous_native.as_ref() {
+        // P5（§9.2-5）：报告阶段，禁止「已经回滚」泛称——回滚结果如实并入消息。
+        let failure = if let Some(previous_native) = previous_native.as_ref() {
             if let Err(rollback) =
                 crate::pi_config::replace_pi_provider(&original_id, &live_config, previous_native)
             {
-                return Err(AppError::Config(format!(
-                    "failed to save Pi provider: {error}; native rollback failed: {rollback}"
-                )));
+                format!("{error}; native rollback failed: {rollback}")
+            } else {
+                format!("{error}（live 节点已回滚到原样）")
             }
+        } else {
+            format!("{error}")
+        };
+        if vault_committed {
+            return Err(super::phase_vault_saved_local_failed(&AppError::Config(
+                failure,
+            )));
         }
-        return Err(error);
+        return Err(AppError::Config(failure));
     }
     Ok(true)
 }

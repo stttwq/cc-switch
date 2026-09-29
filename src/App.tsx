@@ -24,6 +24,7 @@ import {
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { Provider, VisibleApps } from "@/types";
 import type { EnvConflict } from "@/types/env";
+import type { CredentialPatchPayload } from "@/lib/api/providers";
 import { useProvidersQuery, useSettingsQuery } from "@/lib/query";
 import {
   piApi,
@@ -539,11 +540,13 @@ function App() {
   const handleEditProvider = async ({
     provider,
     originalId,
+    credentialPatch,
   }: {
     provider: Provider;
     originalId?: string;
+    credentialPatch?: CredentialPatchPayload;
   }) => {
-    await updateProvider(provider, originalId);
+    await updateProvider(provider, originalId, credentialPatch);
     setEditingProvider(null);
   };
 

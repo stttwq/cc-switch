@@ -1232,7 +1232,10 @@
     "fetchModelsTimeout": "リクエストがタイムアウトしました。ネットワーク接続を確認してください",
     "requiredFields": "プロバイダー名、API エンドポイント、API Key、モデルを入力してください",
     "apiKeyConfigured": "設定済み、空白のままなら変更なし",
-    "apiKeyConfiguredHint": "設定済み、空白のままなら変更なし。右の目アイコンで表示できます"
+    "apiKeyConfiguredHint": "設定済み、空白のままなら変更なし。右の目アイコンで表示できます",
+    "clearStoredKey": "保存済みの API Key を削除",
+    "clearKeyHint": "保存すると 1Password からこの API Key が削除されます。",
+    "clearKeyUndo": "取り消す"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",
@@ -1327,6 +1330,8 @@
       "vault_item_conflict": "1Password に同名の項目が既に存在します。重複を整理してから再試行してください",
       "vault_restart_required": "1Password に切り替えました。CC Switch を再起動してください",
       "vault_other": "1Password の呼び出しに失敗しました。再試行するかログを確認してください",
+      "vault_saved_local_failed": "1Password は更新されましたが、ローカルへの保存に失敗しました。「再試行」でローカル設定を保存し直します（1Password は二重に変更されません）",
+      "vault_saved_pending_live": "設定は保存されましたが、live 設定への適用に失敗しました。「再試行」でローカル設定の再適用のみ行います（1Password は再変更されません）",
       "retry": "再試行"
     }
   },

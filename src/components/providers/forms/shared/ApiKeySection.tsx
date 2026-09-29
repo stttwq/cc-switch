@@ -22,6 +22,9 @@ interface ApiKeySectionProps {
   configuredStatus?: { present: boolean } | null;
   /** 计划 §1.4.1：点眼睛时按需回显的目标（缺省时眼睛只切遮罩） */
   revealTarget?: { app: AppId; providerId: string } | null;
+  /** P4（安全方案 §7.1-2）：显式清除意图（受控），透传给 ApiKeyInput */
+  clearIntent?: boolean;
+  onClearIntentChange?: (cleared: boolean) => void;
 }
 
 export function ApiKeySection({
@@ -37,6 +40,8 @@ export function ApiKeySection({
   partnerPromotionKey,
   configuredStatus,
   revealTarget,
+  clearIntent,
+  onClearIntentChange,
 }: ApiKeySectionProps) {
   const { t } = useTranslation();
 
@@ -66,6 +71,8 @@ export function ApiKeySection({
         disabled={disabled ?? category === "official"}
         configuredStatus={configuredStatus}
         revealTarget={revealTarget}
+        clearIntent={clearIntent}
+        onClearIntentChange={onClearIntentChange}
       />
       {/* API Key 获取链接 */}
       {shouldShowLink && websiteUrl && (

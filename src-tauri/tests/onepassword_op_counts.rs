@@ -552,3 +552,589 @@ fn onepassword_pi_model_only_edit_is_zero_op() {
     assert_eq!(counting.put_count(), 0, "Pi 仅改模型不得 put");
     assert_eq!(counting.delete_count(), 0, "Pi 仅改模型不得 delete");
 }
+
+// ─── P4（安全方案 §7.3 / §9.3 / §7.5）：正确更新三字段与写入顺序 ───
+
+use cc_switch_lib::{CredentialIntent, CredentialPatch};
+
+/// §9.3「仅名称变化」行：SecretVault 层恰 1 次 patch（1P 实现内部 1 get +
+/// 至多 1 edit，op 级预算由 onepassword.rs 的 FakeOpRunner 单测锁定）；
+/// DB 显示名更新。
+#[test]
+fn onepassword_codex_rename_only_edit_is_single_patch() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A2".to_string(),
+        json!({
+            "auth": {},
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Codex, Some("a"), updated).expect("rename update");
+
+    assert_eq!(
+        counting.patch_count(),
+        1,
+        "§9.3：仅名称变化恰 1 次 patch（1 get + ≤1 edit）"
+    );
+    assert_eq!(counting.fetch_count(), 0, "patch 不得额外 fetch");
+    assert_eq!(counting.put_count(), 0, "patch 不得额外 put");
+
+    let renamed = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    assert_eq!(renamed.name, "A2", "显示名必须更新");
+}
+
+/// §9.3「Base URL/API Key 真变化」行：恰 1 次 patch；patch 后 vault 里是
+/// 新钥匙（服务层不再重复取整包比较，§6.1「业务 fetch + put 不是一次 op」）。
+#[test]
+fn onepassword_codex_key_change_uses_single_patch() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-a-new" },
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Codex, Some("a"), updated).expect("key update");
+
+    assert_eq!(counting.patch_count(), 1, "真变化恰 1 次 patch");
+    assert_eq!(counting.fetch_count(), 0, "服务层不得重复 fetch 整包");
+    assert_eq!(counting.put_count(), 0, "真变化不得走整包 put");
+
+    // vault 真源已是新钥匙（1P 严格投递不写环境变量，读 vault 校验）。
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "a").expect("fetch back");
+    assert_eq!(
+        secrets.api_key.as_ref().map(|k| k.as_str()),
+        Some("key-a-new"),
+        "patch 后 vault 里必须是新钥匙"
+    );
+}
+
+/// §9.3「显式提交与旧值相同的 key」行：允许 1 次 patch 判等（内部 1 get +
+/// 0 edit），不得产生整包写。
+#[test]
+fn onepassword_codex_same_value_key_set_is_patch_without_write() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-a" },
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    ProviderService::update(&state, AppType::Codex, Some("a"), updated).expect("same key update");
+
+    assert_eq!(counting.patch_count(), 1, "同值 set 允许 1 次判等 patch");
+    assert_eq!(counting.put_count(), 0, "同值 set 不得 edit/put");
+    assert_eq!(counting.fetch_count(), 0);
+}
+
+/// §7.1-2 / §7.3-5：显式 clear 意图（credentialPatch）删除 vault 里的
+/// api_key 字段，base_url 等其他字段保留。
+#[test]
+fn onepassword_codex_clear_key_intent_removes_only_api_key() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": {},
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    let patch = CredentialPatch {
+        api_key: CredentialIntent::Clear,
+        base_url: CredentialIntent::Keep,
+    };
+    ProviderService::update_with_credential_patch(
+        &state,
+        AppType::Codex,
+        Some("a"),
+        updated,
+        Some(&patch),
+    )
+    .expect("clear update");
+
+    assert_eq!(counting.patch_count(), 1, "显式 clear 恰 1 次 patch");
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "a").expect("fetch back");
+    assert!(
+        secrets.api_key.is_none(),
+        "显式 clear 后 vault 里不得再有 api_key"
+    );
+    assert!(
+        secrets.base_url.is_some(),
+        "clear 只删目标字段，base_url 必须保留"
+    );
+}
+
+/// §7.5-3/§7.5-4：vault 失败时不得写新端点缓存/引用，DB 行不动——
+/// 缓存只允许在 vault 成功后提交。
+struct ErrorVault;
+
+impl SecretVault for ErrorVault {
+    fn fetch(&self, _g: &SecretGroup) -> Result<Option<SecretBundle>, VaultError> {
+        Err(VaultError::Locked)
+    }
+    fn put(&self, _g: &SecretGroup, _b: &SecretBundle) -> Result<VaultRef, VaultError> {
+        Err(VaultError::Locked)
+    }
+    fn delete(&self, _g: &SecretGroup) -> Result<(), VaultError> {
+        Err(VaultError::Locked)
+    }
+    fn patch(
+        &self,
+        _g: &SecretGroup,
+        _p: &cc_switch_lib::secrets::VaultFieldPatch,
+        _t: Option<&str>,
+    ) -> Result<cc_switch_lib::secrets::VaultPatchOutcome, VaultError> {
+        Err(VaultError::Locked)
+    }
+    fn status(&self) -> cc_switch_lib::secrets::VaultStatus {
+        cc_switch_lib::secrets::VaultStatus::Ready
+    }
+    fn vault_id(&self) -> String {
+        "err".to_string()
+    }
+    fn backend_name(&self) -> &'static str {
+        "err"
+    }
+}
+
+#[test]
+fn onepassword_vault_failure_leaves_cache_refs_and_db_unchanged() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (mut state, _counting) = codex_state_with_configured_current();
+    let old_endpoint = state
+        .db
+        .get_provider_endpoint("codex", "a")
+        .expect("read endpoint")
+        .expect("endpoint cached");
+    let old_ref = state
+        .db
+        .get_secret_ref_fields("codex", "a")
+        .expect("read refs")
+        .expect("refs exist");
+    let old_provider = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+
+    state.vault = Arc::new(ErrorVault);
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-a-new" },
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    let result = ProviderService::update(&state, AppType::Codex, Some("a"), updated);
+    assert!(result.is_err(), "vault 锁定必须让凭据更新失败");
+
+    let endpoint_after = state
+        .db
+        .get_provider_endpoint("codex", "a")
+        .expect("read endpoint");
+    assert_eq!(
+        endpoint_after.as_deref(),
+        Some(old_endpoint.as_str()),
+        "§7.5-3：vault 失败不得改端点缓存"
+    );
+    let ref_after = state
+        .db
+        .get_secret_ref_fields("codex", "a")
+        .expect("read refs");
+    assert_eq!(ref_after, Some(old_ref), "vault 失败不得改引用");
+    let provider_after = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    assert_eq!(
+        provider_after.settings_config, old_provider.settings_config,
+        "vault 失败不得保存新 DB 行"
+    );
+}
+
+// ─── P5（安全方案 §7.5 / §9.2-4/5/6/7）：结果分阶段、重试与并发 ───
+
+type AppErrorForTest = cc_switch_lib::AppError;
+
+/// P5 辅助：断言错误文本是 vault_* JSON-in-string 且 code 匹配（§7.5-4/5/6
+/// 阶段化报告的机器可读契约，前端 parseVaultErrorText 按此解析）。
+fn assert_phase_code(err: &AppErrorForTest, expected: &str) {
+    let text = err.to_string();
+    let parsed: serde_json::Value = serde_json::from_str(&text)
+        .unwrap_or_else(|e| panic!("阶段错误必须是 JSON-in-string，实际：{text}（{e}）"));
+    assert_eq!(
+        parsed["code"].as_str(),
+        Some(expected),
+        "阶段错误 code 不匹配，实际：{text}"
+    );
+    assert!(
+        parsed["message"].as_str().is_some_and(|m| !m.is_empty()),
+        "阶段错误必须带可读 message：{text}"
+    );
+}
+
+/// §7.5-5：vault patch 成功后 `save_provider` 失败（SQLite 触发器注入）——
+/// 必须返回阶段错误 `vault_saved_local_failed`；vault 已是新钥匙、DB 行与端点
+/// 缓存保持旧值，原条目不归档、不清空钥匙。
+#[test]
+fn onepassword_update_db_failure_after_patch_reports_vault_saved_local_failed() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+    let old_provider = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    let old_endpoint = state
+        .db
+        .get_provider_endpoint("codex", "a")
+        .expect("read endpoint")
+        .expect("endpoint cached");
+
+    state
+        .db
+        .execute_batch_for_tests(
+            "CREATE TRIGGER block_provider_update BEFORE UPDATE ON providers
+             BEGIN SELECT RAISE(ABORT, 'injected update failure'); END;",
+        )
+        .expect("install trigger");
+
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-a-new" },
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+    let err = ProviderService::update(&state, AppType::Codex, Some("a"), updated)
+        .expect_err("DB 失败必须让 update 报错");
+    assert_phase_code(&err, "vault_saved_local_failed");
+
+    // vault 已提交新钥匙（不回滚、不归档）。
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "a").expect("fetch back");
+    assert_eq!(
+        secrets.api_key.as_ref().map(|k| k.as_str()),
+        Some("key-a-new"),
+        "§7.5-5：vault 已更新，保留新钥匙"
+    );
+    // DB 行保持旧值（save_provider 被拦）。
+    let provider_after = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    assert_eq!(
+        provider_after.settings_config, old_provider.settings_config,
+        "§7.5-5：DB 保存失败时 DB 行不得变化"
+    );
+    // 端点缓存保持旧值。
+    let endpoint_after = state
+        .db
+        .get_provider_endpoint("codex", "a")
+        .expect("read endpoint");
+    assert_eq!(
+        endpoint_after.as_deref(),
+        Some(old_endpoint.as_str()),
+        "§7.5-5：端点缓存不得在 DB 失败时被改"
+    );
+    assert_eq!(counting.patch_count(), 1, "恰 1 次 patch");
+    assert_eq!(counting.put_count(), 0, "不得整包 put");
+}
+
+/// §7.5-6：DB 已保存但 live 写入失败（live 文件只读注入，T-7 同款机制）——
+/// 必须返回阶段错误 `vault_saved_pending_live`，DB 行已是新值；解除只读后用
+/// **全 keep**（不携带 credentialPatch）重试即可恢复 live，且重试不得整包改
+/// 1P（put = 0、delete = 0）。
+#[cfg(windows)]
+#[test]
+fn onepassword_update_live_failure_reports_saved_pending_live_and_retry_is_projection_only() {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        SetFileAttributesW, FILE_ATTRIBUTE_NORMAL, FILE_ATTRIBUTE_READONLY,
+    };
+
+    fn set_readonly(path: &std::path::Path, ro: bool) {
+        let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+        wide.push(0);
+        let attr = if ro {
+            FILE_ATTRIBUTE_READONLY
+        } else {
+            FILE_ATTRIBUTE_NORMAL
+        };
+        // SAFETY: `wide` 是以 NUL 结尾的 UTF-16 路径，调用期间保持存活。
+        let ok = unsafe { SetFileAttributesW(wide.as_ptr(), attr) };
+        assert_ne!(ok, 0, "SetFileAttributesW 失败: {}", path.display());
+    }
+
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+    let live_path = cc_switch_lib::get_codex_config_path();
+    assert!(live_path.exists(), "初始 switch 应已写出 config.toml");
+
+    // 提交：key 真变化 + 模型名变化（后者用于在 DB 配置文本里观察「已保存」）。
+    let updated = Provider::from_parts(
+        "a".to_string(),
+        "A".to_string(),
+        json!({
+            "auth": { "OPENAI_API_KEY": "key-a-new" },
+            "config": "model_provider = \"a\"\n\n[model_providers.a]\nname = \"A-p5\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n"
+        }),
+        None,
+    );
+
+    set_readonly(&live_path, true);
+    let err = ProviderService::update_with_credential_patch(
+        &state,
+        AppType::Codex,
+        Some("a"),
+        updated.clone(),
+        None,
+    )
+    .expect_err("live 只读必须让 update 报错");
+    assert_phase_code(&err, "vault_saved_pending_live");
+
+    // DB 已保存新配置；vault 已是新钥匙。
+    let saved = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    assert!(
+        saved.settings_config.to_string().contains("A-p5"),
+        "§7.5-6：DB 必须已保存新配置"
+    );
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "a").expect("fetch back");
+    assert_eq!(
+        secrets.api_key.as_ref().map(|k| k.as_str()),
+        Some("key-a-new"),
+        "§7.5-6：vault 已是新钥匙"
+    );
+    let live_text = std::fs::read_to_string(&live_path).expect("read live");
+    assert!(
+        !live_text.contains("A-p5"),
+        "live 写入失败时 live 不得含新模型名"
+    );
+
+    // 重试（全 keep，不携带 credentialPatch）：仅恢复投影，不得再改 1P。
+    set_readonly(&live_path, false);
+    counting.reset();
+    ProviderService::update_with_credential_patch(&state, AppType::Codex, Some("a"), updated, None)
+        .expect("retry update");
+    assert_eq!(
+        counting.put_count(),
+        0,
+        "§7.5-6：重试不得整包 put（不能重新改 1P）"
+    );
+    assert_eq!(counting.delete_count(), 0, "重试不得删除条目");
+    let live_text = std::fs::read_to_string(&live_path).expect("read live after retry");
+    assert!(
+        live_text.contains("A-p5"),
+        "重试后 live 必须投影已保存的新配置"
+    );
+}
+
+/// §9.2-5（Pi）：vault patch 成功后 `save_provider` 失败——阶段错误
+/// `vault_saved_local_failed`；vault 已是新钥匙；native live 节点按既有回滚
+/// 行为恢复原样。
+#[test]
+fn onepassword_pi_update_db_failure_reports_vault_saved_local_failed() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let seeded = Provider::from_parts(
+        "jun".to_string(),
+        "Jun".to_string(),
+        json!({
+            "name": "Jun",
+            "api": "openai-responses",
+            "baseUrl": "https://jun.example.com",
+            "apiKey": "jun-key-old",
+            "models": [{ "id": "m1" }]
+        }),
+        None,
+    );
+    let mut config = MultiAppConfig::default();
+    config.ensure_app(&AppType::Pi);
+    {
+        let manager = config.get_manager_mut(&AppType::Pi).expect("pi manager");
+        manager.providers.insert("jun".to_string(), seeded.clone());
+    }
+    let (mut state, counting) = onepassword_test_state(&config);
+    attach_test_env_sink(&mut state);
+    ProviderService::update(&state, AppType::Pi, Some("jun"), seeded).expect("initial persist");
+    counting.reset();
+
+    let old_provider = state
+        .db
+        .get_provider_by_id("jun", "pi")
+        .expect("read provider")
+        .expect("provider exists");
+
+    state
+        .db
+        .execute_batch_for_tests(
+            "CREATE TRIGGER block_provider_update BEFORE UPDATE ON providers
+             BEGIN SELECT RAISE(ABORT, 'injected update failure'); END;",
+        )
+        .expect("install trigger");
+
+    let updated = Provider::from_parts(
+        "jun".to_string(),
+        "Jun".to_string(),
+        json!({
+            "name": "Jun",
+            "api": "openai-responses",
+            "baseUrl": "https://jun.example.com",
+            "apiKey": "jun-key-new",
+            "models": [{ "id": "m1" }]
+        }),
+        None,
+    );
+    let err = ProviderService::update(&state, AppType::Pi, Some("jun"), updated)
+        .expect_err("DB 失败必须让 Pi update 报错");
+    assert_phase_code(&err, "vault_saved_local_failed");
+
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Pi, "jun").expect("fetch back");
+    assert_eq!(
+        secrets.api_key.as_ref().map(|k| k.as_str()),
+        Some("jun-key-new"),
+        "§7.5-5：Pi vault 已更新，保留新钥匙"
+    );
+    let provider_after = state
+        .db
+        .get_provider_by_id("jun", "pi")
+        .expect("read provider")
+        .expect("provider exists");
+    assert_eq!(
+        provider_after.settings_config, old_provider.settings_config,
+        "§7.5-5：Pi DB 行不得变化"
+    );
+    assert_eq!(counting.patch_count(), 1, "Pi 恰 1 次 patch");
+    assert_eq!(counting.put_count(), 0, "Pi 不得整包 put");
+}
+
+/// §9.2-7：同 provider 两窗口并发编辑——app 锁串行化，最终 DB 与 vault 必须来自
+/// 同一次提交（不存在「vault 是 key-w1、DB 配置是 w2」的交叉状态）。
+#[test]
+fn onepassword_concurrent_updates_serialize_on_app_lock() {
+    let _guard = test_mutex().lock().expect("acquire test mutex");
+    reset_test_fs();
+    ensure_test_home();
+    set_onepassword_backend();
+
+    let (state, counting) = codex_state_with_configured_current();
+    let state = Arc::new(state);
+
+    fn submission(marker: &str, key: &str) -> Provider {
+        Provider::from_parts(
+            "a".to_string(),
+            "A".to_string(),
+            json!({
+                "auth": { "OPENAI_API_KEY": key },
+                "config": format!("model_provider = \"a\"\n\n[model_providers.a]\nname = \"{marker}\"\nbase_url = \"https://a.example/v1\"\nwire_api = \"responses\"\n")
+            }),
+            None,
+        )
+    }
+
+    let s1 = state.clone();
+    let t1 = std::thread::spawn(move || {
+        ProviderService::update(&s1, AppType::Codex, Some("a"), submission("w1", "key-w1"))
+    });
+    let s2 = state.clone();
+    let t2 = std::thread::spawn(move || {
+        ProviderService::update(&s2, AppType::Codex, Some("a"), submission("w2", "key-w2"))
+    });
+    t1.join().expect("t1 join").expect("t1 update");
+    t2.join().expect("t2 join").expect("t2 update");
+
+    let secrets =
+        ProviderService::fetch_provider_secrets(&state, &AppType::Codex, "a").expect("fetch back");
+    let final_key = secrets
+        .api_key
+        .as_ref()
+        .map(|k| k.as_str().to_string())
+        .expect("vault 有钥匙");
+    assert!(
+        final_key == "key-w1" || final_key == "key-w2",
+        "最终钥匙必须来自其中一次提交，实际 {final_key}"
+    );
+    let winner_marker = if final_key == "key-w1" { "w1" } else { "w2" };
+    let final_provider = state
+        .db
+        .get_provider_by_id("a", "codex")
+        .expect("read provider")
+        .expect("provider exists");
+    assert!(
+        final_provider
+            .settings_config
+            .to_string()
+            .contains(winner_marker),
+        "DB 配置必须与 vault 钥匙来自同一次提交（{winner_marker}），实际：{}",
+        final_provider.settings_config
+    );
+    assert_eq!(counting.patch_count(), 2, "两次并发编辑共 2 次 patch");
+}

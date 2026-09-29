@@ -167,6 +167,15 @@ impl Database {
         Ok(db)
     }
 
+    /// P5（安全方案 §9.2）测试专用：集成测试注入 DB 失败（如 SQLite 触发器拦
+    /// UPDATE）。业务路径不得调用。
+    #[doc(hidden)]
+    pub fn execute_batch_for_tests(&self, batch: &str) -> Result<(), AppError> {
+        let conn = lock_conn!(self.conn);
+        conn.execute_batch(batch)
+            .map_err(|e| AppError::Database(e.to_string()))
+    }
+
     /// T-4（2.1 方案 4.2.4）：启动时对主库跑一次 `PRAGMA quick_check`。
     /// 失败时调用方应走数据库错误对话框并提供"从最近备份恢复"。
     pub fn startup_quick_check(&self) -> Result<(), AppError> {

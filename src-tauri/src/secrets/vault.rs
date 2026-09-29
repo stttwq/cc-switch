@@ -193,6 +193,31 @@ pub struct VaultRef {
     pub fields: Vec<String>,
 }
 
+/// P4（安全方案 §7.3）：字段级补丁。`set` 覆盖这些托管字段；`clear` 显式删除
+/// 这些托管字段（用户明确清除意图，§7.1-2）；未提及的托管字段、extra_env、
+/// 用户自建字段与条目元数据一律保留。
+#[derive(Debug, Clone, Default)]
+pub struct VaultFieldPatch {
+    pub set: SecretBundle,
+    pub clear: Vec<String>,
+}
+
+impl VaultFieldPatch {
+    pub fn is_noop(&self) -> bool {
+        self.set.is_empty() && self.clear.is_empty()
+    }
+}
+
+/// P4：patch 结果。`changed = false` 表示目标与条目现状完全一致（未发生 edit，
+/// §7.3-2「全相同时返回 unchanged」）；`vref` 是定位到的条目引用（字段清单为
+/// patch 后的集合）。条目不存在且没有可写入字段时 `vref` 为 `None`
+/// （不因纯改名创建空凭据条目，§6.2）。
+#[derive(Debug, Clone)]
+pub struct VaultPatchOutcome {
+    pub changed: bool,
+    pub vref: Option<VaultRef>,
+}
+
 /// 保险箱轻量状态（不取值、不强制解锁）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VaultStatus {
@@ -305,7 +330,6 @@ pub trait SecretVault: Send + Sync {
 
     /// 整包覆盖写（新建或编辑），返回条目引用。
     fn put(&self, group: &SecretGroup, bundle: &SecretBundle) -> Result<VaultRef, VaultError>;
-
     /// [`Self::put`] 的标题提示变体：`display_name` 是供应商当前显示名。
     /// 新建供应商写 vault 时数据库行尚不存在（写 vault 在入库之前），标题无法
     /// 从 DB 查到，只能由调用方传入。以条目标题定位的后端（1Password）用它
@@ -318,6 +342,57 @@ pub trait SecretVault: Send + Sync {
     ) -> Result<VaultRef, VaultError> {
         let _ = display_name;
         self.put(group, bundle)
+    }
+
+    /// P4（安全方案 §7.3）：字段级 read-modify-write——在**同一次定位**取得的
+    /// 条目上合并 [`VaultFieldPatch`] 并按需更新标题；目标与现状完全一致时不
+    /// 发送写操作（§7.3-2 unchanged）。默认实现供 Legacy Windows 等本地后端
+    /// 使用（fetch → 合并 → 全同则跳过，否则 put 整包）；1Password 实现**必须**
+    /// 覆盖：单次安全定位 + 至多一次 edit（§7.3-5），并把标题差异纳入判定。
+    fn patch(
+        &self,
+        group: &SecretGroup,
+        field_patch: &VaultFieldPatch,
+        new_title: Option<&str>,
+    ) -> Result<VaultPatchOutcome, VaultError> {
+        let Some(existing) = self.fetch(group)? else {
+            if field_patch.set.is_empty() {
+                // 没有条目也没有要写入的字段：不因纯改名创建空凭据条目（§6.2）。
+                return Ok(VaultPatchOutcome {
+                    changed: false,
+                    vref: None,
+                });
+            }
+            let vref = self.put_titled(group, &field_patch.set, new_title)?;
+            return Ok(VaultPatchOutcome {
+                changed: true,
+                vref: Some(vref),
+            });
+        };
+        let mut merged = existing.clone();
+        let mut changed = false;
+        for (label, value) in field_patch.set.iter() {
+            if merged.get(label) != Some(value) {
+                changed = true;
+            }
+            merged.insert(label.clone(), value.clone());
+        }
+        for label in &field_patch.clear {
+            if merged.remove(label).is_some() {
+                changed = true;
+            }
+        }
+        if !changed {
+            return Ok(VaultPatchOutcome {
+                changed: false,
+                vref: None,
+            });
+        }
+        let vref = self.put_titled(group, &merged, new_title)?;
+        Ok(VaultPatchOutcome {
+            changed: true,
+            vref: Some(vref),
+        })
     }
 
     /// 删除整个条目。
@@ -398,6 +473,7 @@ pub struct CountingVault {
     fetch_count: AtomicUsize,
     put_count: AtomicUsize,
     delete_count: AtomicUsize,
+    patch_count: AtomicUsize,
 }
 
 impl CountingVault {
@@ -407,7 +483,12 @@ impl CountingVault {
             fetch_count: AtomicUsize::new(0),
             put_count: AtomicUsize::new(0),
             delete_count: AtomicUsize::new(0),
+            patch_count: AtomicUsize::new(0),
         }
+    }
+
+    pub fn patch_count(&self) -> usize {
+        self.patch_count.load(Ordering::SeqCst)
     }
 
     pub fn fetch_count(&self) -> usize {
@@ -426,6 +507,7 @@ impl CountingVault {
         self.fetch_count.store(0, Ordering::SeqCst);
         self.put_count.store(0, Ordering::SeqCst);
         self.delete_count.store(0, Ordering::SeqCst);
+        self.patch_count.store(0, Ordering::SeqCst);
     }
 }
 
@@ -443,6 +525,16 @@ impl SecretVault for CountingVault {
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
         self.delete_count.fetch_add(1, Ordering::SeqCst);
         self.inner.delete(group)
+    }
+
+    fn patch(
+        &self,
+        group: &SecretGroup,
+        field_patch: &VaultFieldPatch,
+        new_title: Option<&str>,
+    ) -> Result<VaultPatchOutcome, VaultError> {
+        self.patch_count.fetch_add(1, Ordering::SeqCst);
+        self.inner.patch(group, field_patch, new_title)
     }
 
     fn status(&self) -> VaultStatus {

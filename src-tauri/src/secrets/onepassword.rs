@@ -18,8 +18,8 @@ use zeroize::Zeroizing;
 
 use crate::app_config::AppType;
 use crate::secrets::vault::{
-    SecretBundle, SecretGroup, SecretVault, VaultError, VaultRef, VaultStatus, FIELD_API_KEY,
-    FIELD_APP_PREFIX, FIELD_BASE_URL, FIELD_ENV_PREFIX,
+    SecretBundle, SecretGroup, SecretVault, VaultError, VaultFieldPatch, VaultPatchOutcome,
+    VaultRef, VaultStatus, FIELD_API_KEY, FIELD_APP_PREFIX, FIELD_BASE_URL, FIELD_ENV_PREFIX,
 };
 
 /// 条目类别：API Credential。
@@ -657,6 +657,21 @@ impl OnePasswordVault {
         bundle: &SecretBundle,
         title: String,
     ) -> Result<VaultRef, VaultError> {
+        let fetched = self.fetch_item_resolved(group)?;
+        self.put_inner_resolved(group, bundle, title, fetched)
+    }
+
+    /// 执行整包覆盖写：`fetched` 为 `None` 时新建，否则在其上就地编辑。
+    /// P4：从 [`Self::put_inner`] 拆出，供 [`Self::patch`] 复用已定位的条目，
+    /// 避免同一次写操作里第二次 `op item get`（§6.1 表「put_titled 内部还会再次
+    /// get 完整条目」）。
+    fn put_inner_resolved(
+        &self,
+        group: &SecretGroup,
+        bundle: &SecretBundle,
+        title: String,
+        fetched: Option<FetchedItem>,
+    ) -> Result<VaultRef, VaultError> {
         let group_value = group_field_value(group);
 
         // F1-1（P0-2）：覆盖写改为原子的「读取 → 就地编辑」，不再先归档删除再新建。
@@ -665,8 +680,6 @@ impl OnePasswordVault {
         // 每次都变。`op item edit` 支持管道 JSON（本机 op 2.39 实测），值走 stdin，
         // 不进命令行（§12.3）。写操作仍是 get + edit 两次 op。
         // F2-2：读取定位按「id 直达 → 标题兜底（新旧标题都试）→ 同名核对归属」。
-        let fetched = self.fetch_item_resolved(group)?;
-
         let item_id = match fetched {
             None => {
                 // 新建：create 以 `-` 作为位置参数，模板 JSON 走 stdin。
@@ -1232,6 +1245,15 @@ fn parse_item_id(bytes: &[u8]) -> Option<String> {
         .and_then(|i| i.id)
 }
 
+/// P4：从条目 JSON 提取当前标题（patch 的标题差异判定用，纯函数不增加 op）。
+fn parse_item_title(bytes: &[u8]) -> Option<String> {
+    serde_json::from_slice::<serde_json::Value>(bytes)
+        .ok()?
+        .get("title")?
+        .as_str()
+        .map(str::to_string)
+}
+
 // ─── op 条目模板 JSON（写，走 stdin） ────────────────────────
 
 #[derive(Serialize)]
@@ -1385,6 +1407,21 @@ fn managed_labels_of(item: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// P4（§7.3）：patch 的显式清除——把要删除的托管字段从编辑输入里剔除。op 的
+/// 管道编辑是合并语义、缺失字段不会被删，真正删除由 edit 后的 `[delete]` 定点
+/// 完成（见 [`OnePasswordVault::patch`]）；这里剔除只是为了编辑输入反映目标状态。
+fn remove_managed_fields_from_item(item: &mut serde_json::Value, labels: &[String]) {
+    let Some(fields) = item.get_mut("fields").and_then(|f| f.as_array_mut()) else {
+        return;
+    };
+    fields.retain(|f| {
+        f.get("label")
+            .and_then(|l| l.as_str())
+            .map(|l| !labels.iter().any(|target| target == l))
+            .unwrap_or(true)
+    });
+}
+
 /// F1-1：edit 之后校验「托管字段集合 == 目标集合」。op 的管道编辑若为合并语义，
 /// 目标里已删除的托管字段会残留——对每个残留字段发一次 `'<label>[delete]'`，
 /// 参数里只有字段名、没有值（§12.3），保证整包语义最终成立。
@@ -1526,6 +1563,158 @@ impl SecretVault for OnePasswordVault {
         display_name: Option<&str>,
     ) -> Result<VaultRef, VaultError> {
         self.put_inner(group, bundle, self.preferred_title(group, display_name))
+    }
+
+    /// P4（安全方案 §7.3）：字段级 read-modify-write——**一次**安全定位取得条目
+    /// JSON，在其上对新标题与目标字段逐项计算差异；全相同则返回 unchanged、不发送
+    /// edit（§7.3-2）。只改显式目标字段，extra_env、用户自建字段与条目元数据全部
+    /// 保留（§7.3-3）。目标预算：可靠 ref 命中 + 无冲突的正常路径 = 1 次 get +
+    /// 至多 1 次 edit；标题兜底 / 同名冲突的额外定位调用按 SEC-01 安全规则单列，
+    /// 不为凑数字跳过归属验证。显式清除的字段 op 管道编辑删不掉，由 edit 后的
+    /// `<label>[delete]` 定点删除（额外 op，§7.3-5，独立测试记录预算）。
+    fn patch(
+        &self,
+        group: &SecretGroup,
+        field_patch: &VaultFieldPatch,
+        new_title: Option<&str>,
+    ) -> Result<VaultPatchOutcome, VaultError> {
+        let group_value = group_field_value(group);
+        let fetched = self.fetch_item_resolved(group)?;
+        let Some(fetched) = fetched else {
+            if field_patch.set.is_empty() {
+                // §6.2：显示名改变但真实条目不存在 → 返回待关联，不因纯改名
+                // 创建空凭据条目，也不凭同名认领其他条目。
+                return Ok(VaultPatchOutcome {
+                    changed: false,
+                    vref: None,
+                });
+            }
+            // §7.2-8：仅真正新增且用户显式提供所需凭据才允许 create。
+            let title = self.preferred_title(group, new_title);
+            let vref = self.put_inner_resolved(group, &field_patch.set, title, None)?;
+            return Ok(VaultPatchOutcome {
+                changed: true,
+                vref: Some(vref),
+            });
+        };
+        let item_id = match fetched.item_id {
+            Some(id) => {
+                self.repair_ref(group, &id, &fetched.bundle);
+                id
+            }
+            None => self
+                .ref_item_id(group)
+                .ok_or_else(|| VaultError::Other("op 条目缺少 id，无法就地编辑".to_string()))?,
+        };
+        // SEC-01：写前对响应原文再核验一次身份（复用已取得的 JSON，不增加 op）。
+        if !self.verify_item_identity(&fetched.raw, group, Some(&item_id)) {
+            return Err(VaultError::Other(
+                "条目归属核验未通过，已拒绝就地编辑".to_string(),
+            ));
+        }
+
+        // §7.3-2：差异计算——新标题、set 字段、clear 字段任一不同才算变更。
+        let title_target = new_title.map(|t| self.preferred_title(group, Some(t)));
+        let current = &fetched.bundle;
+        let mut changed = false;
+        for (label, value) in field_patch.set.iter() {
+            if current.get(label) != Some(value) {
+                changed = true;
+            }
+        }
+        for label in &field_patch.clear {
+            if current.contains(label) {
+                changed = true;
+            }
+        }
+        // patch 后的托管字段集合（refs 与残留判定共用）：现有 ∪ set − clear。
+        let target_universe: std::collections::BTreeSet<String> = current
+            .iter()
+            .map(|(label, _)| label.clone())
+            .chain(field_patch.set.iter().map(|(label, _)| label.clone()))
+            .filter(|label| !field_patch.clear.contains(label))
+            .collect();
+
+        let title_differs = match &title_target {
+            Some(t) => parse_item_title(&fetched.raw).as_deref() != Some(t.as_str()),
+            None => false,
+        };
+        if !changed && !title_differs {
+            return Ok(VaultPatchOutcome {
+                changed: false,
+                vref: Some(VaultRef {
+                    vault_id: self.vault.clone(),
+                    item_id,
+                    fields: target_universe.into_iter().collect(),
+                }),
+            });
+        }
+
+        // 在条目 JSON 原文上就地修改：标题与 set 字段（其余托管字段、用户自建
+        // 字段、条目元数据不动），clear 字段从编辑输入剔除后由 [delete] 定点删。
+        let mut item: serde_json::Value = serde_json::from_slice(&fetched.raw)
+            .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+        if let Some(t) = &title_target {
+            item["title"] = serde_json::Value::String(t.clone());
+        }
+        apply_managed_fields_to_item(&mut item, &field_patch.set, &group_value);
+        remove_managed_fields_from_item(&mut item, &field_patch.clear);
+        let edited_input = Zeroizing::new(
+            serde_json::to_vec(&item)
+                .map_err(|e| VaultError::Other(format!("serialize op item failed: {e}")))?,
+        );
+        // edit 后立即 drop 反序列化用的 Value（内存卫生）。
+        drop(item);
+        let edit_args = [
+            "item",
+            "edit",
+            item_id.as_str(),
+            "--vault",
+            &self.vault,
+            "--account",
+            &self.account,
+            "--format",
+            "json",
+            "--no-color",
+            "-",
+        ];
+        let out = self
+            .run_op(&edit_args, Some(&edited_input))
+            .map_err(RunErr::into_vault)?;
+        // clear 的字段与任何超出目标集合的托管字段残留：op 管道编辑是合并语义，
+        // 缺失字段不会被删，逐个用 `'<label>[delete]'` 定点删（参数里只有字段名）。
+        let edited: serde_json::Value = serde_json::from_slice(&out)
+            .map_err(|e| VaultError::Other(format!("parse op item failed: {e}")))?;
+        for label in managed_labels_of(&edited) {
+            if label == SCHEMA_FIELD_LABEL || label == GROUP_FIELD_LABEL {
+                continue;
+            }
+            if target_universe.contains(&label) {
+                continue;
+            }
+            let delete_field_arg = format!("{label}[delete]");
+            let delete_args = [
+                "item",
+                "edit",
+                item_id.as_str(),
+                "--vault",
+                &self.vault,
+                "--account",
+                &self.account,
+                delete_field_arg.as_str(),
+                "--no-color",
+            ];
+            self.run_op(&delete_args, None)
+                .map_err(RunErr::into_vault)?;
+        }
+        Ok(VaultPatchOutcome {
+            changed: true,
+            vref: Some(VaultRef {
+                vault_id: self.vault.clone(),
+                item_id,
+                fields: target_universe.into_iter().collect(),
+            }),
+        })
     }
 
     fn delete(&self, group: &SecretGroup) -> Result<(), VaultError> {
@@ -3375,5 +3564,242 @@ mod tests {
                 "SEC-02：归属未证明的裸标题候选不得被删除/归档，实际: {args:?}"
             );
         }
+    }
+
+    // ─── P4（安全方案 §7.3 / §9.3）：patch 原子粒度与 op 调用预算 ───
+
+    /// P4 预算表前提的「合法已关联」状态：claude/a 的引用行指向自己的条目。
+    fn vault_with_own_ref(
+        script: Vec<Result<Vec<u8>, RunErr>>,
+    ) -> (
+        OnePasswordVault,
+        Arc<FakeOpRunner>,
+        Arc<crate::database::Database>,
+    ) {
+        let db = Arc::new(crate::database::Database::memory().expect("memory db"));
+        let provider = crate::provider::Provider::from_parts(
+            "a".to_string(),
+            "A".to_string(),
+            serde_json::json!({}),
+            None,
+        );
+        db.save_provider("claude", &provider)
+            .expect("save provider");
+        db.upsert_secret_ref(
+            "claude",
+            "a",
+            "vault-x",
+            "item-own",
+            &[FIELD_API_KEY.to_string(), FIELD_BASE_URL.to_string()],
+        )
+        .expect("write own ref");
+        let runner = Arc::new(FakeOpRunner::new(script));
+        let vault = OnePasswordVault::with_runner(runner.clone(), "acct", "vault-x", db.clone());
+        (vault, runner, db)
+    }
+
+    /// 自有条目：新格式标题、key + URL + extra_env + 用户自建字段（非托管，
+    /// patch 必须原样保留）。
+    fn own_item_json() -> String {
+        let fields = [
+            ("cc-switch-group", "STRING", "claude/a"),
+            (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+            ("api_key", "CONCEALED", "sk-old-secret-value"),
+            ("base_url", "STRING", "https://old.example/v1"),
+            ("env.FOO", "STRING", "foo-old-value"),
+            ("user-notes", "STRING", "user-custom-note"),
+        ];
+        item_json_with_title("item-own", "claude/A", &fields)
+    }
+
+    fn patch_set_key(value: &str) -> VaultFieldPatch {
+        let mut set = SecretBundle::new();
+        set.insert(FIELD_API_KEY, Zeroizing::new(value.to_string()));
+        VaultFieldPatch {
+            set,
+            clear: Vec::new(),
+        }
+    }
+
+    /// §9.3「仅名称变化」行：1 次 get + 1 次 edit；标题更新且未提及字段全部保留。
+    #[test]
+    fn p04_patch_rename_only_is_one_get_one_edit_and_preserves_fields() {
+        let (vault, runner, _db) = vault_with_own_ref(vec![
+            Ok(own_item_json().into_bytes()),
+            Ok(own_item_json()
+                .replace("claude/A\"", "claude/Renamed\"")
+                .into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let outcome = vault
+            .patch(&group, &VaultFieldPatch::default(), Some("Renamed"))
+            .expect("patch rename");
+
+        assert!(outcome.changed, "标题变化必须判为 changed");
+        assert_eq!(
+            runner.call_count(),
+            2,
+            "§9.3：仅名称变化 = 1 get + 1 edit，实际: {}",
+            runner.call_count()
+        );
+        let (get_args, _) = runner.call(0);
+        assert_eq!(get_args[1], "get");
+        let (edit_args, edit_stdin) = runner.call(1);
+        assert_eq!(edit_args[1], "edit");
+        assert!(edit_args.contains(&"item-own".to_string()));
+        let edit_stdin = edit_stdin.expect("edit stdin");
+        let stdin_text = String::from_utf8_lossy(&edit_stdin);
+        assert!(
+            stdin_text.contains("claude/Renamed"),
+            "edit stdin 必须带新标题，实际: {stdin_text}"
+        );
+        assert!(
+            stdin_text.contains("foo-old-value") && stdin_text.contains("user-custom-note"),
+            "§7.3-3：未提及的 extra_env 与用户自建字段必须保留，实际: {stdin_text}"
+        );
+        runner.assert_args_contain_none_of(&["sk-old-secret-value", "foo-old-value"]);
+    }
+
+    /// §9.3「显式提交与旧值相同的 key」行：1 次 get + 0 次 edit。
+    #[test]
+    fn p04_patch_same_value_key_is_one_get_zero_edit() {
+        let (vault, runner, _db) = vault_with_own_ref(vec![Ok(own_item_json().into_bytes())]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let outcome = vault
+            .patch(&group, &patch_set_key("sk-old-secret-value"), None)
+            .expect("patch same value");
+
+        assert!(!outcome.changed, "同值 patch 必须返回 unchanged");
+        assert_eq!(
+            runner.call_count(),
+            1,
+            "§9.3：同值 set 只允许 1 次 get（判等），不得 edit"
+        );
+        assert!(outcome.vref.is_some());
+    }
+
+    /// §7.3-3：真实换钥匙时只改目标字段；extra_env、base_url、用户自建字段保留。
+    #[test]
+    fn p04_patch_key_change_edits_once_keeping_other_fields() {
+        let (vault, runner, _db) = vault_with_own_ref(vec![
+            Ok(own_item_json().into_bytes()),
+            Ok(own_item_json()
+                .replace("sk-old-secret-value", "sk-new-secret-value")
+                .into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let outcome = vault
+            .patch(&group, &patch_set_key("sk-new-secret-value"), None)
+            .expect("patch key change");
+
+        assert!(outcome.changed);
+        assert_eq!(runner.call_count(), 2, "§9.3：真变化 = 1 get + 1 edit");
+        let (_, stdin) = runner.call(1);
+        let stdin = stdin.expect("edit stdin");
+        let stdin_text = String::from_utf8_lossy(&stdin);
+        assert!(stdin_text.contains("sk-new-secret-value"));
+        assert!(stdin_text.contains("https://old.example/v1"));
+        assert!(stdin_text.contains("user-custom-note"));
+        runner.assert_args_contain_none_of(&["sk-new-secret-value"]);
+    }
+
+    /// §7.3-5 清除路径：显式 clear 的字段 edit 输入里不再出现，并由
+    /// `api_key[delete]` 定点删除（额外 1 次 op，预算独立记录）。
+    #[test]
+    fn p04_patch_clear_api_key_uses_targeted_field_delete() {
+        let (vault, runner, _db) = vault_with_own_ref(vec![
+            Ok(own_item_json().into_bytes()),
+            Ok(own_item_json().into_bytes()),
+            Ok(own_item_json().into_bytes()),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let field_patch = VaultFieldPatch {
+            set: SecretBundle::new(),
+            clear: vec![FIELD_API_KEY.to_string()],
+        };
+        let outcome = vault
+            .patch(&group, &field_patch, None)
+            .expect("patch clear");
+
+        assert!(outcome.changed);
+        assert_eq!(runner.call_count(), 3, "1 get + 1 edit + 1 [delete]");
+        let (_, edit_stdin) = runner.call(1);
+        let edit_stdin = edit_stdin.expect("edit stdin");
+        let stdin_text = String::from_utf8_lossy(&edit_stdin);
+        assert!(
+            !stdin_text.contains("sk-old-secret-value"),
+            "显式清除的字段不得再出现在编辑输入里"
+        );
+        let (delete_args, _) = runner.call(2);
+        assert!(
+            delete_args
+                .iter()
+                .any(|a| a == &format!("{FIELD_API_KEY}[delete]")),
+            "清除必须用 <label>[delete] 定点删，实际: {delete_args:?}"
+        );
+        let out = outcome.vref.expect("vref");
+        assert!(
+            !out.fields.iter().any(|f| f == FIELD_API_KEY),
+            "patch 后引用字段清单不再含被清除字段"
+        );
+    }
+
+    /// §6.2「显示名改变但真实条目不存在」行：不因纯改名创建空凭据条目。
+    #[test]
+    fn p04_patch_missing_item_with_empty_set_creates_nothing() {
+        let (vault, runner) = vault_with(vec![
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+            Err(RunErr::NotFound),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let outcome = vault
+            .patch(&group, &VaultFieldPatch::default(), Some("Renamed"))
+            .expect("patch on missing item");
+
+        assert!(!outcome.changed);
+        assert!(outcome.vref.is_none(), "不得为纯改名创建条目");
+        for i in 0..runner.call_count() {
+            let (args, _) = runner.call(i);
+            assert_eq!(args[1], "get", "只允许定位 get，实际: {args:?}");
+        }
+    }
+
+    /// §7.2-8：条目不存在且用户显式提供凭据 → 允许 create，标题用新显示名。
+    #[test]
+    fn p04_patch_missing_item_with_set_creates_with_new_title() {
+        let (vault, runner) = vault_with(vec![
+            Err(RunErr::NotFound),
+            Ok({
+                let fields = [
+                    ("cc-switch-group", "STRING", "claude/a"),
+                    (SCHEMA_FIELD_LABEL, "STRING", SCHEMA_FIELD_VALUE),
+                    ("api_key", "CONCEALED", "sk-fixture-create-0001"),
+                ];
+                item_json_with_title("item-new", "claude/New Name", &fields).into_bytes()
+            }),
+        ]);
+        let group = SecretGroup::provider(AppType::Claude, "a");
+        let outcome = vault
+            .patch(
+                &group,
+                &patch_set_key("sk-fixture-create-0001"),
+                Some("New Name"),
+            )
+            .expect("patch create");
+
+        assert!(outcome.changed);
+        let create_call = (0..runner.call_count())
+            .map(|i| runner.call(i))
+            .find(|(args, _)| args.contains(&"create".to_string()))
+            .expect("必须发生 create");
+        let create_stdin = create_call.1.expect("create stdin");
+        let stdin_text = String::from_utf8_lossy(&create_stdin);
+        assert!(
+            stdin_text.contains("claude/New Name"),
+            "create 标题必须用新显示名，实际: {stdin_text}"
+        );
     }
 }

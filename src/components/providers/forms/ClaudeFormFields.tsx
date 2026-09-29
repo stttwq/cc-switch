@@ -61,6 +61,9 @@ interface ClaudeFormFieldsProps {
   apiKeyConfiguredStatus?: { present: boolean } | null;
   /** 计划 §1.4.1：点眼睛时按需回显的目标 */
   apiKeyRevealTarget?: { app: AppId; providerId: string } | null;
+  /** P4（安全方案 §7.1-2）：显式清除已存钥匙的意图（受控） */
+  apiKeyClearIntent?: boolean;
+  onApiKeyClearIntentChange?: (cleared: boolean) => void;
 
   // Template Values
   templateValueEntries: Array<[string, TemplateValueConfig]>;
@@ -112,6 +115,8 @@ export function ClaudeFormFields({
   partnerPromotionKey,
   apiKeyConfiguredStatus,
   apiKeyRevealTarget,
+  apiKeyClearIntent,
+  onApiKeyClearIntentChange,
   templateValueEntries,
   templateValues,
   templatePresetName,
@@ -329,6 +334,8 @@ export function ClaudeFormFields({
           partnerPromotionKey={partnerPromotionKey}
           configuredStatus={apiKeyConfiguredStatus}
           revealTarget={apiKeyRevealTarget}
+          clearIntent={apiKeyClearIntent}
+          onClearIntentChange={onApiKeyClearIntentChange}
         />
       )}
 

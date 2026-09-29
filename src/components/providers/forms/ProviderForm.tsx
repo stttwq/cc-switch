@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Form, FormField, FormItem, FormMessage } from "@/components/ui/form";
 import { providerSchema, type ProviderFormData } from "@/lib/schemas/provider";
 import { settingsApi, type AppId } from "@/lib/api";
+import type { CredentialPatchPayload } from "@/lib/api/providers";
 import type {
   ProviderCategory,
   ProviderMeta,
@@ -277,6 +278,8 @@ function ProviderFormFull({
 
   // 软校验：收集"业务约束"类问题（空值/缺项），由用户决定是否仍要保存
   const [softIssues, setSoftIssues] = useState<string[] | null>(null);
+  // P4（安全方案 §7.1-2）：「清除已保存 API Key」的显式意图；输入新值或撤销即复位。
+  const [apiKeyCleared, setApiKeyCleared] = useState(false);
   const [pendingFormValues, setPendingFormValues] =
     useState<ProviderFormData | null>(null);
   // 确认框走的提交路径绕过了 react-hook-form 的 isSubmitting，单独追踪
@@ -656,6 +659,18 @@ function ProviderFormFull({
       settingsConfig,
     };
 
+    // P4（安全方案 §7.1-2）：显式凭据意图——清除按钮触发 clear；用户输入了
+    // 新值触发 set；空白 = keep（不携带，缺省即 keep）。Base URL 本阶段只
+    // 有 keep/set，且 set 已由配置抽取覆盖，这里不重复携带。
+    const typedKey = (appId === "codex" ? codexApiKey : apiKey).trim();
+    if (apiKeyCleared) {
+      payload.credentialPatch = { apiKey: { mode: "clear" } };
+    } else if (typedKey) {
+      payload.credentialPatch = {
+        apiKey: { mode: "set", value: typedKey },
+      };
+    }
+
     if (isCodexOfficialProvider) {
       payload.presetCategory = "official";
     }
@@ -863,6 +878,8 @@ function ProviderFormFull({
               partnerPromotionKey={claudePartnerPromotionKey}
               apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
               apiKeyRevealTarget={apiKeyRevealTarget}
+              apiKeyClearIntent={apiKeyCleared}
+              onApiKeyClearIntentChange={setApiKeyCleared}
               templateValueEntries={templateValueEntries}
               templateValues={templateValues}
               templatePresetName={templatePreset?.name || ""}
@@ -903,6 +920,8 @@ function ProviderFormFull({
               partnerPromotionKey={codexPartnerPromotionKey}
               apiKeyConfiguredStatus={initialData?.secretStatus?.apiKey}
               apiKeyRevealTarget={apiKeyRevealTarget}
+              apiKeyClearIntent={apiKeyCleared}
+              onApiKeyClearIntentChange={setApiKeyCleared}
               isNonOfficialCategory={isNonOfficialCategory}
               codexBaseUrl={codexBaseUrl}
               onBaseUrlChange={handleCodexBaseUrlChange}
@@ -1044,4 +1063,6 @@ export type ProviderFormValues = ProviderFormData & {
   isPartner?: boolean;
   meta?: ProviderMeta;
   providerKey?: string; // Pi: user-defined provider key
+  /** P4（安全方案 §7.1-5）：显式凭据意图（缺省 = 全 keep） */
+  credentialPatch?: CredentialPatchPayload;
 };

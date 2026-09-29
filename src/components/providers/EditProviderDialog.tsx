@@ -9,6 +9,7 @@ import {
   type ProviderFormValues,
 } from "@/components/providers/forms/ProviderForm";
 import { providersApi, vscodeApi, type AppId } from "@/lib/api";
+import type { CredentialPatchPayload } from "@/lib/api/providers";
 import {
   applyBaseUrlForApp,
   extractCodexExperimentalBearerToken,
@@ -21,6 +22,8 @@ interface EditProviderDialogProps {
   onSubmit: (payload: {
     provider: Provider;
     originalId?: string;
+    /** P4（安全方案 §7.1-5）：显式凭据意图（缺省 = 全 keep） */
+    credentialPatch?: CredentialPatchPayload;
   }) => Promise<void> | void;
   appId: AppId;
 }
@@ -290,6 +293,7 @@ export function EditProviderDialog({
       await onSubmit({
         provider: updatedProvider,
         originalId: provider.id,
+        credentialPatch: values.credentialPatch,
       });
       closeDialog();
     },

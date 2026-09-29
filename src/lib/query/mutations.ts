@@ -2,6 +2,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { providersApi, sessionsApi, settingsApi, type AppId } from "@/lib/api";
+import type { CredentialPatchPayload } from "@/lib/api/providers";
 // 【存在性说明】publishEnvConflictPrompt / clearEnvConflictPrompt / EnvConflictPrompt
 // 均由既有模块 @/lib/api/env.ts 导出（本会话已通过 Edit 工具写入并经工具回显验证），
 // 不是未定义引用。订阅桥放在 env.ts 内，与 parseEnvConflictError 同模块，
@@ -17,6 +18,7 @@ import type { SwitchResult } from "@/lib/api/providers";
 import type { Provider, SessionMeta, Settings } from "@/types";
 import {
   extractErrorMessage,
+  isPhaseAfterVaultCommitError,
   toastVaultError,
   translatePiProviderMutationError,
 } from "@/utils/errorUtils";
@@ -113,11 +115,17 @@ export const useUpdateProviderMutation = (appId: AppId) => {
   type UpdateProviderInput = {
     provider: Provider;
     originalId?: string;
+    /** P4（安全方案 §7.1-5）：显式凭据意图（缺省 = 全 keep） */
+    credentialPatch?: CredentialPatchPayload;
   };
 
   const mutation = useMutation({
-    mutationFn: async ({ provider, originalId }: UpdateProviderInput) => {
-      await providersApi.update(provider, appId, originalId);
+    mutationFn: async ({
+      provider,
+      originalId,
+      credentialPatch,
+    }: UpdateProviderInput) => {
+      await providersApi.update(provider, appId, originalId, credentialPatch);
       return provider;
     },
     onSuccess: async () => {
@@ -133,7 +141,19 @@ export const useUpdateProviderMutation = (appId: AppId) => {
     },
     onError: (error: Error, variables: UpdateProviderInput) => {
       // F5-3：vault_* 错误（如 1Password 锁定）走统一 toast 并带「重试」。
-      if (toastVaultError(error, () => mutation.mutate(variables))) {
+      // P5（安全方案 §9.2-6）：vault 已提交后的阶段错误重试时不得原样重提交
+      // credentialPatch——过期的 set/clear 意图可能覆盖远端新状态；剥掉补丁后
+      // 由后端重新分类（同值至多 1 get + 0 edit），重试只做必要的本地保存/投影。
+      const isPhaseAfterVaultCommit = isPhaseAfterVaultCommitError(error);
+      if (
+        toastVaultError(error, () =>
+          mutation.mutate(
+            isPhaseAfterVaultCommit
+              ? { ...variables, credentialPatch: undefined }
+              : variables,
+          ),
+        )
+      ) {
         return;
       }
       const rawDetail = extractErrorMessage(error);

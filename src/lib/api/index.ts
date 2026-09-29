@@ -10,6 +10,10 @@ export { skillsApi } from "./skills";
 export { vscodeApi } from "./vscode";
 export { sessionsApi } from "./sessions";
 export * as configApi from "./config";
-export type { ProviderSwitchEvent } from "./providers";
+export type {
+  CredentialIntentPayload,
+  CredentialPatchPayload,
+  ProviderSwitchEvent,
+} from "./providers";
 export type { Prompt } from "./prompts";
 export type { Profile, ProfilePayload, ProfilesResponse } from "./profiles";

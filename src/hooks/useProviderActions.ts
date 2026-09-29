@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { providersApi, settingsApi, type AppId } from "@/lib/api";
+import type { CredentialPatchPayload } from "@/lib/api/providers";
 import type { Provider } from "@/types";
 import {
   useAddProviderMutation,
@@ -65,10 +66,15 @@ export function useProviderActions(activeApp: AppId) {
 
   // 更新供应商
   const updateProvider = useCallback(
-    async (provider: Provider, originalId?: string) => {
+    async (
+      provider: Provider,
+      originalId?: string,
+      credentialPatch?: CredentialPatchPayload,
+    ) => {
       await updateProviderMutation.mutateAsync({
         provider,
         originalId,
+        credentialPatch,
       });
 
       // 更新托盘菜单（失败不影响主操作）

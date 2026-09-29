@@ -51,7 +51,7 @@ pub use mcp::{
     sync_single_server_to_codex,
 };
 pub use prompt::Prompt;
-pub use provider::{Provider, ProviderMeta};
+pub use provider::{CredentialIntent, CredentialPatch, Provider, ProviderMeta};
 pub use services::{
     profile::{ProfilePayload, ProfileScope, ProfileService},
     provider::{

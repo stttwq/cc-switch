@@ -141,6 +141,19 @@ const extractRawErrorMessage = (error: unknown): string => {
 };
 
 /**
+ * P5（安全方案 §9.2-6）：vault 已提交后的阶段错误——「1Password 已更新，本地
+ * 保存失败」（vault_saved_local_failed）与「已保存，live 待重新应用」
+ * （vault_saved_pending_live）。这类错误的重试不得原样重提交 credentialPatch
+ * （过期的 set/clear 意图可能覆盖远端新状态），只能重做本地保存/投影。
+ */
+export const isPhaseAfterVaultCommitError = (error: unknown): boolean => {
+  const code = parseVaultError(error)?.code;
+  return (
+    code === "vault_saved_local_failed" || code === "vault_saved_pending_live"
+  );
+};
+
+/**
  * vault_* 错误的统一 toast：本地化文案 + 可选「重试」按钮（F5-3）。
  * 命中时返回 true，调用方应跳过原有错误 toast，避免重复弹。
  */

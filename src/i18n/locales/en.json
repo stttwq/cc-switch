@@ -1232,7 +1232,10 @@
     "fetchModelsTimeout": "Request timed out, please check network connection",
     "requiredFields": "Please fill in provider name, API endpoint, API Key and model",
     "apiKeyConfigured": "Configured; leave blank to keep unchanged",
-    "apiKeyConfiguredHint": "Configured; leave blank to keep unchanged, click the eye icon to reveal"
+    "apiKeyConfiguredHint": "Configured; leave blank to keep unchanged, click the eye icon to reveal",
+    "clearStoredKey": "Clear saved API Key",
+    "clearKeyHint": "Saving will remove this API Key from 1Password.",
+    "clearKeyUndo": "Undo"
   },
   "codexConfig": {
     "authJson": "auth.json (JSON) *",
@@ -1327,6 +1330,8 @@
       "vault_item_conflict": "An item with the same name already exists in 1Password; clean up duplicates and retry",
       "vault_restart_required": "Switched to 1Password; please restart CC Switch",
       "vault_other": "1Password call failed; retry or check the logs",
+      "vault_saved_local_failed": "1Password was updated, but saving locally failed. Retry saves the local config again (1Password is not modified a second time)",
+      "vault_saved_pending_live": "Configuration saved, but applying the live config failed. Retry only re-applies the local config (1Password is not modified again)",
       "retry": "Retry"
     }
   },
