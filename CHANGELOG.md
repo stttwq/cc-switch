@@ -5,6 +5,48 @@ All notable changes to CC Switch will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.2] - 2026-09-29
+
+### Security
+
+- **1Password 条目归属核验**（SEC-01/02）：按 item ID 的读取、改名、删除与删除的
+  标题兜底统一走安全定位器并核验 `cc-switch-group` 归属——被构造的导入引用指向
+  同保险箱其它条目时，不再可能读出、改写、改名或归档他组条目；标题兜底不再凭裸
+  显示名认领其它应用的同名条目。
+- **孤儿清理改按真实引用判定**（SEC-03）：在用条目识别与显示标题解耦，改用本机
+  `secret_refs` 的真实 item ID 集合；"无本地引用"不再自动等于孤儿，提交清理时
+  后端重新核验在用状态，新标题在用条目不会被误归档。
+- **SQL / 备份导入 schema 审查**（SEC-05）：外部 SQL 与二进制备份中的触发器、
+  未经声明的 view 等可执行 schema 对象一律拒绝——不再可能借导入在暂存库回填
+  本机引用/设备设置阶段篡改数据；正常历史导出不受影响。
+- **`op` 调试输出脱敏**（SEC-04）：废弃 `CC_SWITCH_OP_DEBUG` 环境变量开关（存在
+  即透出原始 args/stderr）；调试输出改编译期限定并脱敏（会话秘密、URL userinfo、
+  疑似令牌），发布构建绝不打印。
+- **依赖升级**：`smol-toml` 1.4.2 → 1.9.0（GHSA-7w5x-hrqm-74c2，high，前端解析
+  Codex TOML 可达）；pnpm 生产依赖 high+ 审计升级为 CI 交付门禁，CI 覆盖
+  `1password` 分支。
+
+### Changed
+
+- **编辑供应商按需访问 1Password**：仅修改模型、推理等级、备注、图标、排序等
+  非凭据字段时全链路 0 次 `op` 调用（1Password 锁定状态也可正常保存）；名称、
+  Base URL、API Key 的有效变化才进入凭据更新——API Key 改为显式 keep / set /
+  clear 意图（空白输入框是保留、清除走独立按钮），多字段变化合并为一次条目
+  更新（1 次 get + 至多 1 次 edit），未变字段全部保留。
+- **保存失败分阶段报告**：1Password 已更新但本地保存失败、配置已保存但 live
+  应用失败等部分成功场景如实报告阶段；「重试」只重做必要的本地保存/投影，
+  不会用过期凭据意图覆盖远端新状态，也不会重复修改 1Password 条目。
+- 端点缓存改在 1Password 写入成功之后维护：普通 → 敏感 URL 切换时删除旧缓存，
+  显式清除端点同步清缓存，不再留下「新缓存、旧保险箱」的不一致状态。
+
+### Fixed
+
+- `op` 子进程超时覆盖盲区：截止时间提前到进程启动之前，stdout/stderr 读取先于
+  stdin 写入并发进行——子进程不读输入、向 stdout 灌大输出时不再可能互等死锁；
+  stdin 未写完且子进程「成功」退出时显式报错而非假装成功。
+- 修复先写端点缓存再访问 vault 的写入顺序缺陷：1Password 失败不再留下新缓存、
+  旧保险箱的不一致状态。
+
 ## [2.3.1] - 2026-09-28
 
 ### Fixed

@@ -2,13 +2,13 @@
 
 ## Supported Versions / 支持的版本
 
-CC Switch 是本机上运行的 Windows 专版分支（基于上游 3.20.3）。仅当前 `2.0.x` 最新正式版收到安全更新；上游 3.x 与更早版本由上游仓库负责，不在本分支支持范围。
+CC Switch 是本机上运行的 Windows 专版分支（基于上游 3.20.3）。仅当前 `2.3.x` 最新正式版收到安全更新；上游 3.x（分支基线之外的新上游版本）与更早版本由上游仓库负责，不在本分支支持范围。
 
-This is a Windows-only fork of the upstream project. Only the latest `2.0.x` stable release of this branch receives security updates; upstream 3.x and earlier are maintained (if at all) by the upstream repository and are out of scope here.
+This is a Windows-only fork of the upstream project. Only the latest `2.3.x` stable release of this branch receives security updates; upstream 3.x (newer upstream lines beyond this branch's baseline) and earlier are maintained (if at all) by the upstream repository and are out of scope here.
 
 | Version / 版本 | Supported / 是否支持 |
 |----------------|---------------------|
-| Latest 2.0.x   | ✅ Yes / 是          |
+| Latest 2.3.x   | ✅ Yes / 是          |
 | Other / 其它   | ❌ No / 否           |
 
 ## Threat Model / 威胁模型
@@ -25,9 +25,9 @@ Credentials (API keys and Base URLs) are stored only in **Windows Credential Man
 
 **前端默认零密钥。** 批量读取（列表、卡片、托盘）永不携带密钥值。密钥值只在用户**显式点击单个供应商单个字段的"显示"**时，经专用命令 `reveal_provider_secret` 按需回传一次；前端不得把它放进 TanStack Query 缓存、`localStorage`、表单初始值快照或任何日志，对话框关闭即丢弃。作为有意例外，`get_providers` 会为卡片显示回传每个供应商的 **Base URL**——Base URL 敏感度远低于密钥，且用户明确希望看到当前指向哪个端点；它仅为此一个非密钥字段读取凭据管理器。
 
-**Credential persistence scope and portability / 凭据持久化范围与可移植性.** Entries are written through `keyring` with `CRED_PERSIST_ENTERPRISE`, so on a domain-joined machine they roam with the Windows user profile to every machine that user signs into; domain users who want machine-local persistence can change the entry's scope in the Credential Manager control panel. Secret values live outside the database and are **never** part of SQL export, WebDAV / S3 sync payloads or backups — after restoring a config on another machine every provider needs its key typed in again. That is by design, not a defect.
+**Credential persistence scope and portability / 凭据持久化范围与可移植性.** Entries are written through `keyring` with `CRED_PERSIST_ENTERPRISE`, so on a domain-joined machine they roam with the Windows user profile to every machine that user signs into; domain users who want machine-local persistence can change the entry's scope in the Credential Manager control panel. Secret values live outside the database and are **never** part of SQL export, WebDAV / S3 sync payloads or backups. With the **legacy (Credential Manager) backend**, restoring a config on another machine therefore means every provider needs its key typed in again — by design, not a defect. With the **1Password backend** this does not apply: keys and endpoints live in the vault, and a new machine recovers everything by re-linking the vault and rebuilding refs (see the 1Password section below).
 
-凭据条目经 `keyring` 以 `CRED_PERSIST_ENTERPRISE` 写入，因而在域环境下会随 Windows 用户配置文件漫游到该用户登录的每一台机器；希望只保留在本机的域环境用户，可在凭据管理器控制面板中改该条目的持久化范围。密钥存放在数据库之外，**不进入** SQL 导出、WebDAV / S3 同步载荷与备份——因此在另一台机器还原配置后，每个供应商都要重新输入密钥。这是设计，不是缺陷。
+凭据条目经 `keyring` 以 `CRED_PERSIST_ENTERPRISE` 写入，因而在域环境下会随 Windows 用户配置文件漫游到该用户登录的每一台机器；希望只保留在本机的域环境用户，可在凭据管理器控制面板中改该条目的持久化范围。密钥存放在数据库之外，**不进入** SQL 导出、WebDAV / S3 同步载荷与备份。**旧凭据管理器后端**下，在另一台机器还原配置后每个供应商都要重新输入密钥——这是设计，不是缺陷。**1Password 后端不适用此说明**：钥匙与端点都在保险箱里，新机器重新关联保险箱并重建引用即可整体恢复（见下文 1Password 专节）。
 
 **Rolling back to a pre-migration version / 回滚到迁移前的旧版本.** The v18→v19 upgrade keeps one dated backup `~/.cc-switch/backups/pre-secrets-migration-*.db` that still contains the old plaintext schema; it is intentionally NOT auto-deleted. Overwriting `cc-switch.db` with it lets an older build read it normally. Extra `cc-switch/`-prefixed entries left in Windows Credential Manager are then harmless and can be removed manually from the Credential Manager control panel.
 
@@ -143,11 +143,11 @@ When end-to-end sync encryption is enabled, the WebDAV / S3 server — and anyon
 - **Construction / 构造**: passphrase → **Argon2id** (m=64 MiB, t=3, p=1, 16-byte random salt) → KEK; a fresh random 32-byte DEK per upload encrypts `db.sql.enc` and `skills.zip.enc` with **XChaCha20-Poly1305**; the DEK is wrapped by the KEK and stored in the manifest. Each artifact's AAD binds `format‖version‖snapshotId‖artifactName‖seq`, and the device name / timestamps live inside an encrypted inner manifest — so a blob cannot be swapped between snapshots and the plaintext outer `manifest.json` carries no user data. 口令经 Argon2id 派生 KEK；每次上传随机生成 DEK 以 XChaCha20-Poly1305 加密两个 blob，DEK 由 KEK 封装。AAD 绑定快照与序号，设备名/时间在加密的内层 manifest 内，明文外层不含任何用户数据。
 - **The passphrase never leaves the device / 口令永不出本机**: it is stored only in the Windows Credential Manager (`cc-switch/v1/app/sync/passphrase`) and is **never uploaded**. It is what makes zero trust against the server hold. 口令只存于 Windows 凭据管理器，**绝不上上传**。
 - **Forgetting the passphrase is unrecoverable / 忘记口令不可恢复**: there is no backdoor and no server-side reset. Losing the passphrase means the encrypted remote snapshot cannot be decrypted by anyone, including the maintainer. 无后门、无服务端重置。忘记口令意味着远端加密快照对任何人（含维护者）都不可解密。
-- **API keys are NOT part of the encrypted payload / API Key 不随加密载荷同步**: consistent with the no-key-on-the-server model, keys stay in each device's Credential Manager; a restored device shows every provider as "needs key". 密钥仍各机各存，还原后的设备每个供应商都提示"需要密钥"。
+- **API keys are NOT part of the encrypted payload / API Key 不随加密载荷同步**: consistent with the no-key-on-the-server model, keys stay on each device — in Credential Manager with the legacy backend (a restored device shows every provider as "needs key"), or in the 1Password vault with the 1P backend (a new device re-links the vault and rebuilds refs). 密钥仍各机各存——旧后端在凭据管理器（还原后的设备每个供应商都提示"需要密钥"），1P 后端在 1Password 保险箱（新机器重新关联保险箱并重建引用）。
 - **Integrity, tamper and rollback / 完整性、防篡改与防回滚**: a wrong passphrase and a tampered byte produce the *same* error (indistinguishable by design). Monotonic `seq` makes a server that replays an older snapshot detectable and blocked by default. 口令错与改一字节产生同一错误（刻意不区分）；`seq` 单调递增使服务器重放旧快照可被检测并默认拦截。
 - **Transport / 传输**: `http://` endpoints are rejected by default; plaintext http is allowed only for `localhost` / loopback / RFC1918 private hosts **and** an explicit "allow insecure connection" opt-in. HTTPS is always required for public endpoints. 公网 http 一律拒绝；仅本机/回环/RFC1918 私网且显式勾选"允许不安全连接"才放行 http。
 - **Conditional write is best effort / 条件写尽力而为**: WebDAV uses `If-Match`/`If-None-Match` (412 → conflict). Some servers ignore these headers, degrading to an unconditional PUT — data is never lost, but concurrent-overwrite protection is not guaranteed on such servers. S3 falls back to a pre-upload HEAD ETag comparison, which is not atomic. WebDAV 用 If-Match/If-None-Match（412→冲突）；部分服务器忽略该头则退化为无条件 PUT（不丢数据，但并发保护不保证）。S3 降级为上传前 HEAD 比较，非原子。
-- **Local DB is intentionally NOT encrypted / 本地数据库刻意不加密**: the SQLite file already contains no keys; encrypting it would require the Credential Manager to be available on every launch for marginal benefit. BitLocker + DPAPI cover the device-loss case. 库内已无密钥；加密它收益极低且会让凭据管理器不可用时应用瘫痪。设备丢失场景由 BitLocker + DPAPI 覆盖。
+- **Local DB is intentionally NOT encrypted / 本地数据库刻意不加密**: the SQLite file contains no keys **on the managed paths** — after the v18→v19 migration completed and secrets were correctly extracted into the backend (Credential Manager or 1Password), and in 1Password mode by construction. Known exceptions where plaintext can still exist: the pre-migration backup DB (see above), live config files maintained by third-party CLIs or manual edits, the environment block of already-launched terminal processes, and any path where extraction was skipped or failed and is still pending. Encrypting the DB would require the backend to be available on every launch for marginal benefit; BitLocker + DPAPI cover the device-loss case. 库内无密钥的前提是**托管路径**——v18→v19 迁移已完成且秘密被正确提取进后端（凭据管理器或 1Password）；1P 模式下则是构造性保证。明文仍可能存在的已知例外：迁移前备份库（见上）、第三方 CLI 维护或手工编辑的 live 文件、已启动终端进程的环境块、以及提取被跳过/失败且仍在待办中的路径。加密数据库收益极低且会让后端不可用时应用瘫痪；设备丢失场景由 BitLocker + DPAPI 覆盖。
 
 ## Distribution and Signature / 分发与签名
 

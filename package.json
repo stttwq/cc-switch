@@ -1,6 +1,6 @@
 {
   "name": "cc-switch",
-  "version": "2.3.1",
+  "version": "2.3.2",
   "description": "The All-in-One Manager for Claude Code, Codex & Pi",
   "type": "module",
   "scripts": {
@@ -83,7 +83,7 @@
     "react-dom": "^18.2.0",
     "react-hook-form": "^7.65.0",
     "react-i18next": "^16.0.0",
-    "smol-toml": "^1.4.2",
+    "smol-toml": "^1.9.0",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.3.1",
     "zod": "^4.1.12"

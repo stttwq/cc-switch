@@ -391,3 +391,40 @@ git diff --check
 
 **最终完成定义**：非凭据编辑在 1P 锁定状态下完成，完整链路 0 op；三字段真实更新正确落条目且其他秘密不变；跨组/在用条目不可被误改误归档；外部 SQL 不能通过触发器篡改本机保留值；全部承诺有对应自动化测试，例外和部分失败在 UI/文档中可见。
 
+
+---
+
+## 12. P6 施工记录（2026-09-29，分支 1password，基线 46ff28d）
+
+### 12.1 SEC-04 已修复（调试输出脱敏）
+
+- `onepassword.rs`：废弃 `CC_SWITCH_OP_DEBUG` 环境变量开关（存在即透出原始 args/stderr，值为 0 也生效）。改为 `#[cfg(debug_assertions)]` 编译期限定 + `sanitize_for_debug` 脱敏（会话已登记秘密字面量、URL userinfo 凭据段、≥24 字符疑似令牌）。
+- 错误 IPC 路径复核确认：`classify_stderr` 兜底只报「unclassified op error」固定文案，不携带 stderr 原文；新增单测用假 token / 假 userinfo 样本验证脱敏输出，且条目名/主机/路径不被误伤。
+
+### 12.2 §10.1 已修复（op 超时盲区）
+
+- `exec_op_with_timeout`：截止时间提前到 spawn 之前；stdout/stderr 读取线程先于 stdin 写入启动（消除「子进程写满 stdout 管道 + 本进程阻塞在写 stdin」的互等死锁，旧实现的 deadline 在写 stdin 之后建立，覆盖不到该阶段）；stdin 写入错误明确传播（子进程退出码 0 但 stdin 未写完 → 显式报错，不再假装成功）；超时 kill 并 wait 回收子进程。
+- 3 个真实子进程测试（Windows）：`ping` 模拟永不退出 → 短超时内返回 Timeout；`findstr` 验证 stdin 管道往返；`cmd for` 循环灌 1.2MB stdout + 1MB stdin（旧实现必死锁的形态）→ 快速返回。
+
+### 12.3 G-1 已处理（CI 覆盖与依赖门禁）
+
+- `ci.yml`：push 触发加入 `1password` 分支；`audit.yml`：push 触发加入 `main`/`1password`，pnpm 生产依赖 high+ 审计取消 `continue-on-error`（升级为门禁）。
+- 本地审计基线（2026-09-29，Windows）：`pnpm audit --prod --audit-level=high` 初次发现 `smol-toml@1.4.2` 1 high（GHSA-7w5x-hrqm-74c2）+ 1 moderate，属直接生产依赖、前端解析 Codex TOML 配置可达 → 定点升级 `^1.9.0` 后复跑「No known vulnerabilities found」。未一键升级其它依赖。
+- `cargo deny check advisories` 未在本机运行（cargo-deny 未安装）；RustSec 检查由 CI 的 cargo-deny 作业承担（本次起 1password 分支 push 也会跑）。
+- 注意：`main` 分支在移植 smol-toml 升级前，audit.yml 的 pnpm-audit 门禁会真实标红（不再静默放行），按分支策略由用户决定是否另行处理 main。
+
+### 12.4 G-2 已处理（SECURITY.md）
+
+- 支持版本 2.0.x → 2.3.x；「跨机重输钥匙」明确限定为旧凭据管理器后端，1P 后端另有保险箱重关联 + 重建引用恢复机制；「本地 DB 无钥匙」限定到迁移完成且秘密正确提取的托管路径，列明迁移前备份、第三方 live 文件、活动终端环境块、待提取路径四类例外。
+
+### 12.5 §10.3 导入执行范围复核结论
+
+**已满足**：全部外部导入（SQL、二进制备份、WebDAV/S3 还原）有确认步骤；CCS 后端自身不 spawn 导入的可执行内容（MCP 只写 CLI 配置文件，由 CLI 自行执行）；本机 MCP 导入刻意不回写 live。
+
+**确认缺口（知情同意不足，P7 候选）**：SQL 导入 / 云同步还原会把 `mcp_servers` 整表（含 command/args/env，enabled 原样保留）与供应商 `settings_config`（可能含 hooks）立即投影写入 CLI 配置文件，而确认 UI 仅显示元信息（device/时间/计数，`ImportExportSection.tsx:114-186`、`WebdavSyncSection.tsx:1722-1860`、`BackupListSection.tsx` 仅文件名），用户从未审阅将要生效的命令正文。触发前提：导入被篡改的 SQL / 非端到端同步载荷 + 用户启动对应 CLI。证据：`database/backup.rs:762`、`services/mcp.rs:157-188`、`services/provider/live.rs:588,1022-1045`、`commands/sync_support.rs:34-77`。修复方向按 §10.3 原则：导入确认时展示新增/变更集成的完整 command/args/env/脚本正文，启用状态默认降级待用户显式开启。本轮不实施（超出 P6 范围，按 §8.1 记录不动手）。
+
+**待验证残留**：Windows 特殊文件名 / 重解析点竞争、TLS 全组合动态测试（维持 §10.2 列表不变）。
+
+### 12.6 P6 验证结果
+
+`cargo test` 20 套件全绿（lib 833）、`cargo clippy -D warnings` 通过、`cargo fmt --check` 通过、`pnpm test:unit` 744 通过、`pnpm typecheck` 通过。真实 1Password 保险箱人工验收（§9.5）仍待用户授权执行。

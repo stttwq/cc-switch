@@ -41,6 +41,7 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 /// `op` 调用的内部错误：把「条目不存在」与其它分类错误分开，
 /// 让 `fetch` 能把不存在翻译成 `Ok(None)`。
+#[derive(Debug)]
 pub(crate) enum RunErr {
     /// 条目不存在（退出码非零 + not-found 关键字，§12.12）。
     NotFound,
@@ -834,6 +835,20 @@ fn exec_op(
     stdin: Option<&[u8]>,
     take_lock: bool,
 ) -> Result<Zeroizing<Vec<u8>>, RunErr> {
+    exec_op_with_timeout(op_path, args, stdin, take_lock, OP_TIMEOUT)
+}
+
+/// §10.1（安全方案）：带统一超时的 `op` 执行。截止时间在 **spawn 之前**建立，
+/// 覆盖 stdin 写入、管道读取与等待全程；stdout/stderr 读取线程先于 stdin 写入
+/// 启动（子进程先写满 stdout 管道、我们又阻塞在写 stdin 时不再互等死锁）；
+/// stdin 写入错误明确传播，超时 kill 子进程并等待回收。
+fn exec_op_with_timeout(
+    op_path: &Path,
+    args: &[&str],
+    stdin: Option<&[u8]>,
+    take_lock: bool,
+    timeout: Duration,
+) -> Result<Zeroizing<Vec<u8>>, RunErr> {
     let _guard = take_lock.then(|| OP_LOCK.lock().unwrap_or_else(|e| e.into_inner()));
 
     let mut cmd = Command::new(op_path);
@@ -856,6 +871,9 @@ fn exec_op(
         cmd.creation_flags(CREATE_NO_WINDOW);
     }
 
+    // §10.1：截止时间从 spawn 前起算，stdin 写入阶段也被覆盖。
+    let deadline = Instant::now() + timeout;
+
     let mut child = cmd.spawn().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
             RunErr::Vault(VaultError::NotInstalled)
@@ -864,13 +882,7 @@ fn exec_op(
         }
     })?;
 
-    if let Some(data) = stdin {
-        if let Some(mut pipe) = child.stdin.take() {
-            let _ = pipe.write_all(data);
-            // pipe 在此 drop，关闭 stdin。
-        }
-    }
-
+    // 先启动读取线程，再写 stdin（§10.1：并发处理管道，防互等死锁）。
     let mut stdout_pipe = child.stdout.take();
     let mut stderr_pipe = child.stderr.take();
     let out_handle = std::thread::spawn(move || {
@@ -888,7 +900,22 @@ fn exec_op(
         buf
     });
 
-    let deadline = Instant::now() + OP_TIMEOUT;
+    // stdin 写入放独立线程（§10.1）：子进程不读输入时不阻塞主等待循环；
+    // 写入错误不再被 `let _ =` 吞掉——子进程正常退出但 stdin 没写完属异常，
+    // 在等待结果后明确传播。超时 kill 后管道关闭，阻塞的写入以 BrokenPipe 结束。
+    let write_handle = stdin.map(|data| {
+        let data = data.to_vec();
+        let mut pipe = child
+            .stdin
+            .take()
+            .expect("stdin 已配置为 piped，take 必然成功");
+        std::thread::spawn(move || {
+            let result = pipe.write_all(&data);
+            // pipe 在此 drop，关闭 stdin。
+            result.map_err(|e| e.kind())
+        })
+    });
+
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
@@ -911,16 +938,115 @@ fn exec_op(
 
     let stdout = out_handle.join().unwrap_or_default();
     let stderr = err_handle.join().unwrap_or_default();
+    // 子进程已退出（或被 kill），stdin 写入线程必然已结束；join 不会无限等。
+    let stdin_write_failed = write_handle
+        .and_then(|h| h.join().ok())
+        .and_then(|r| r.err());
 
     if status.success() {
+        // §10.1：子进程「成功」退出却没读完 stdin（写入失败）——输入不完整，
+        // stdout 不可信，明确报错而不是假装成功。
+        if let Some(kind) = stdin_write_failed {
+            return Err(RunErr::Vault(VaultError::Other(format!(
+                "op stdin write failed: {kind}"
+            ))));
+        }
         return Ok(Zeroizing::new(stdout));
     }
-    // 调试开关（默认关）：设 CC_SWITCH_OP_DEBUG=1 时把原始 stderr 透出，便于本机排障。
-    // 正常运行不会走这里（§12.4：stderr 不入日志）。
+    // SEC-04（安全方案 §5）：调试输出仅存在于 debug 构建，且 stderr 必须脱敏；
+    // 发布构建绝不打印（原 CC_SWITCH_OP_DEBUG 环境变量开关即使值为 0 也会把
+    // 原始 stderr 透出，属条件性泄露面，已废弃）。
+    #[cfg(debug_assertions)]
     if std::env::var("CC_SWITCH_OP_DEBUG").is_ok() {
-        eprintln!("[op-debug] args={args:?}\n[op-debug] stderr={stderr}");
+        eprintln!(
+            "[op-debug] args={}\n[op-debug] stderr={}",
+            sanitize_for_debug(&format!("{args:?}")),
+            sanitize_for_debug(&stderr)
+        );
     }
     Err(classify_stderr(&stderr))
+}
+
+/// SEC-04（安全方案 §5）：debug 构建专用的调试脱敏——
+/// 1. 本会话已登记的秘密字面量整体替换；
+/// 2. URL userinfo（`scheme://user:pass@host`）的凭据段打码；
+/// 3. 疑似令牌的长随机串（≥24 个连续 token 字符）打码。
+///
+/// 仅用于人读排障输出；正常错误路径（`classify_stderr`）本就不携带原文。
+#[cfg(debug_assertions)]
+fn sanitize_for_debug(text: &str) -> String {
+    let mut out = text.to_string();
+    for secret in crate::secrets::scan::session_secret_snapshot() {
+        if !secret.is_empty() && out.contains(&secret) {
+            out = out.replace(&secret, "[redacted-session-secret]");
+        }
+    }
+    out = mask_url_userinfo(&out);
+    mask_token_like_runs(&out)
+}
+
+/// 把 `scheme://user:password@host` 中的 `user:password` 打码（保留 scheme/host）。
+#[cfg(debug_assertions)]
+fn mask_url_userinfo(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let bytes = text.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(b"://") {
+            out.push_str("://");
+            i += 3;
+            // userinfo 段：到第一个 '/'、'?'、'#' 或结尾为止；其中含 '@' 才算凭据。
+            let mut j = i;
+            while j < bytes.len() && !matches!(bytes[j], b'/' | b'?' | b'#') {
+                j += 1;
+            }
+            let authority = &text[i..j];
+            if let Some(at) = authority.rfind('@') {
+                out.push_str("[redacted-userinfo]");
+                out.push_str(&authority[at..]);
+                i = j;
+                continue;
+            }
+            out.push_str(authority);
+            i = j;
+        } else {
+            out.push(text[i..].chars().next().expect("非空切片必有字符"));
+            i += text[i..]
+                .chars()
+                .next()
+                .expect("非空切片必有字符")
+                .len_utf8();
+        }
+    }
+    out
+}
+
+/// 打码疑似令牌：≥24 个连续的 base64-ish 字符（字母/数字/`_-./+=`）。
+/// 阈值远长于常规单词/条目名，只为兜底漏网的随机凭据。
+#[cfg(debug_assertions)]
+fn mask_token_like_runs(text: &str) -> String {
+    const THRESHOLD: usize = 24;
+    let mut out = String::with_capacity(text.len());
+    let mut run = String::new();
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '/' | '+' | '=') {
+            run.push(ch);
+        } else {
+            if run.chars().count() >= THRESHOLD {
+                out.push_str("[redacted-token]");
+            } else {
+                out.push_str(&run);
+            }
+            run.clear();
+            out.push(ch);
+        }
+    }
+    if run.chars().count() >= THRESHOLD {
+        out.push_str("[redacted-token]");
+    } else {
+        out.push_str(&run);
+    }
+    out
 }
 
 /// 1Password 账户（`op account list` 行）。前端面向结构：`account_uuid` 已解析。
@@ -3800,6 +3926,107 @@ mod tests {
         assert!(
             stdin_text.contains("claude/New Name"),
             "create 标题必须用新显示名，实际: {stdin_text}"
+        );
+    }
+
+    // ─── P6（安全方案 §5 SEC-04 / §10.1）：调试脱敏与超时覆盖 ───
+
+    #[test]
+    fn debug_sanitize_masks_session_secret_userinfo_and_token() {
+        let fake_session = "FAKE-SESSION-SECRET-9f8e7d6c5b4a";
+        crate::secrets::scan::note_session_secret(fake_session);
+        let fake_token = "sk-fake-0123456789abcdefABCDEF-ghijkl";
+        let input = format!(
+            "echo failed for item X with {fake_token} at https://user:fakepass123@example.com/v1 and session {fake_session} done"
+        );
+        let out = sanitize_for_debug(&input);
+        assert!(!out.contains(fake_session), "会话秘密必须打码: {out}");
+        assert!(!out.contains("fakepass123"), "URL userinfo 必须打码: {out}");
+        assert!(
+            !out.contains("0123456789abcdefABCDEF"),
+            "疑似令牌必须打码: {out}"
+        );
+        // 非敏感内容保留（条目名、主机、路径不得被误伤）。
+        assert!(out.contains("item X"), "普通文本不得打码: {out}");
+        assert!(out.contains("example.com/v1"), "主机与路径不得打码: {out}");
+    }
+
+    #[test]
+    fn debug_sanitize_keeps_short_words_and_paths() {
+        let input = "ERROR] the item \"Claude/My-Provider.v2\" isn't an item in vault Private";
+        let out = sanitize_for_debug(input);
+        assert_eq!(out, input, "常规条目名/路径不得被打码误伤");
+    }
+
+    /// §10.1：截止时间从 spawn 前覆盖全程——永退出的子进程在短超时内被 kill，
+    /// 返回 Timeout 而不是挂满 120 秒。
+    #[cfg(windows)]
+    #[test]
+    fn exec_op_timeout_kills_runaway_child() {
+        let start = std::time::Instant::now();
+        let result = exec_op_with_timeout(
+            std::path::Path::new("ping"),
+            &["-n", "30", "127.0.0.1"],
+            None,
+            false,
+            Duration::from_millis(500),
+        );
+        assert!(
+            matches!(result, Err(RunErr::Vault(VaultError::Timeout))),
+            "必须返回 Timeout，实际 {result:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(10),
+            "超时必须及时返回，实际 {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// §10.1：stdin 管道往返正常（子进程读 stdin、回 stdout）。
+    #[cfg(windows)]
+    #[test]
+    fn exec_op_stdin_plumbing_roundtrip() {
+        let out = exec_op_with_timeout(
+            std::path::Path::new("findstr"),
+            &["x"],
+            Some(
+                b"x
+",
+            ),
+            false,
+            Duration::from_secs(10),
+        )
+        .expect("findstr 匹配应成功");
+        assert!(
+            String::from_utf8_lossy(&out).contains('x'),
+            "findstr 应回显匹配行"
+        );
+    }
+
+    /// §10.1 回归：子进程不读 stdin 且向 stdout 灌大输出（超过管道缓冲）——
+    /// 旧实现先同步写 stdin 再起读取线程，会永久互等死锁（且 deadline 尚未
+    /// 建立）；新实现读取先行 + 截止时间全程覆盖，必须快速返回。
+    #[cfg(windows)]
+    #[test]
+    fn exec_op_no_deadlock_when_child_floods_stdout_and_ignores_stdin() {
+        let big_stdout_cmd = "for /L %i in (1,1,20000) do @echo aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+        let start = std::time::Instant::now();
+        let result = exec_op_with_timeout(
+            std::path::Path::new("cmd"),
+            &["/C", big_stdout_cmd],
+            Some(&vec![b'a'; 1024 * 1024]),
+            false,
+            Duration::from_secs(15),
+        );
+        // 子进程退出码 0 但没读完 stdin：stdin 写入失败必须明确传播，不得假装成功。
+        assert!(
+            matches!(result, Err(RunErr::Vault(VaultError::Other(_)))),
+            "stdin 未写完必须明确报错，实际 {result:?}"
+        );
+        assert!(
+            start.elapsed() < Duration::from_secs(14),
+            "不得死锁，实际 {:?}",
+            start.elapsed()
         );
     }
 }

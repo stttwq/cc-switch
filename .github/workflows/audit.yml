@@ -1,11 +1,15 @@
 name: Dependency & Secret Audit
 
-# 供应链与密钥扫描。每周一定时 + 手动触发。默认只报告、不阻塞主干 CI。
-# 首次跑绿后，可把 advisories 提升为 ci.yml 后端作业的必过项（方案 D3）。
+# 供应链与密钥扫描。每周一定时 + 手动触发 + push 触发。
+# G-1（安全方案 §4）：自用分支 1password 长期驻留，定时任务只跑默认分支不等于
+# 分支验证通过，push 也必须检查；生产依赖 high+ 为交付门禁——pnpm-audit 不再
+# continue-on-error（main 在移植 smol-toml 定点升级前会在此项标红，属真实发现）。
 
 on:
   schedule:
     - cron: "0 6 * * 1" # 每周一 06:00 UTC
+  push:
+    branches: [main, 1password]
   workflow_dispatch:
 
 permissions:
@@ -42,8 +46,7 @@ jobs:
           node-version: "20"
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
-      - name: Production dependencies only, high+
-        continue-on-error: true
+      - name: Production dependencies only, high+ (G-1 交付门禁，不再静默放行)
         run: pnpm audit --audit-level=high --prod
 
   gitleaks:
